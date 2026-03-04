@@ -7,10 +7,10 @@ pipeline {
         APP_PORT    = '3000'
         NODE_ENV    = 'production'
         // 从 Jenkins Credentials 注入（ID 需与凭据页面一致）
-        SUPABASE_URL              = credentials('SUPABASE_URL')
-        SUPABASE_ANON_KEY         = credentials('SUPABASE_ANON_KEY')
-        SUPABASE_SERVICE_ROLE_KEY = credentials('SUPABASE_SERVICE_ROLE_KEY')
-        JWT_SECRET                = credentials('JWT_SECRET')
+        SUPABASE_URL              = credentials('agent01_SUPABASE_URL')
+        SUPABASE_ANON_KEY         = credentials('agent01_SUPABASE_ANON_KEY')
+        SUPABASE_SERVICE_ROLE_KEY = credentials('agent01_SUPABASE_SERVICE_ROLE_KEY')
+        JWT_SECRET                = credentials('agent01_JWT_SECRET')
     }
 
     // NodeJS 名称需与 Jenkins → Global Tool Configuration 中配置的名称一致
