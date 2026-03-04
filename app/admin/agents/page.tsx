@@ -16,7 +16,9 @@ type Agent = {
   category_id: string | null;
   api_key_masked?: string;
   api_endpoint?: string;
+  model_params?: Record<string, unknown>;
   categories?: { name: string };
+  tenant_codes?: string[];
 };
 type Category = { id: string; name: string };
 type Tenant = { id: string; code: string; name: string };
@@ -59,8 +61,8 @@ export default function AgentsAdminPage() {
 
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryId: a.category_id ?? "", platform: a.platform }); setFormError(""); setShowAgentModal(true); }
-  function openApi(a: Agent) { setShowApiModal(a); setApiForm({ endpoint: a.api_endpoint ?? "", apiKey: "", modelParams: '{"temperature": 0.7, "max_tokens": 2000}' }); }
-  function openAssign(a: Agent) { setShowAssignModal(a); setSelectedTenants([]); }
+  function openApi(a: Agent) { setShowApiModal(a); setApiForm({ endpoint: a.api_endpoint ?? "", apiKey: "", modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}' }); }
+  function openAssign(a: Agent) { setShowAssignModal(a); setSelectedTenants(a.tenant_codes ?? []); }
 
   async function handleSaveAgent() {
     setFormError("");
@@ -92,7 +94,7 @@ export default function AgentsAdminPage() {
     if (!showAssignModal) return;
     setSaving(true);
     await fetch(`/api/admin/agents/${showAssignModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tenantCodes: selectedTenants }) });
-    setSaving(false); setShowAssignModal(null);
+    setSaving(false); setShowAssignModal(null); load();
   }
 
   async function addCategory() {

@@ -66,11 +66,15 @@ async function* cozeStream(
     throw new Error(`Coze API error: ${res.status} ${await res.text()}`);
   }
 
-  yield* parseSSEStream(res, (data) => {
+  yield* parseSSEStream(res, (data, event) => {
     try {
       const obj = JSON.parse(data);
-      if (obj.event === "conversation.message.delta" && obj.data?.content) {
-        return obj.data.content;
+      const isMessageDelta =
+        event === "conversation.message.delta" ||
+        obj.event === "conversation.message.delta";
+      if (isMessageDelta) {
+        // v3: content 直接在 obj，或嵌套在 obj.data
+        return obj.content ?? obj.data?.content ?? null;
       }
     } catch {}
     return null;
@@ -116,6 +120,7 @@ async function* difyStream(
     try {
       const obj = JSON.parse(data);
       if (obj.event === "message" && obj.answer) return obj.answer;
+      if (obj.answer) return obj.answer; // some Dify versions omit event field
     } catch {}
     return null;
   });
@@ -164,6 +169,7 @@ async function* zhipuStream(
 
 // ─── OpenAI-compatible (fallback) ────────────────────────────────────────────
 
+
 async function* openaiCompatibleStream(
   messages: ChatMessage[],
   config: AdapterConfig
@@ -202,14 +208,16 @@ async function* openaiCompatibleStream(
 
 // ─── SSE parser utility ──────────────────────────────────────────────────────
 
+
 async function* parseSSEStream(
   res: Response,
-  extract: (data: string) => string | null
+  extract: (data: string, event: string) => string | null
 ): AsyncGenerator<string> {
   if (!res.body) return;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let currentEvent = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -218,10 +226,13 @@ async function* parseSSEStream(
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
     for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        const data = line.slice(6).trim();
-        const text = extract(data);
+      if (line.startsWith("event:")) {
+        currentEvent = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        const data = line.slice(5).trim();
+        const text = extract(data, currentEvent);
         if (text) yield text;
+        currentEvent = "";
       }
     }
   }

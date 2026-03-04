@@ -7,6 +7,7 @@ const JWT_SECRET = new TextEncoder().encode(
 );
 
 const COOKIE_NAME = "ai_portal_token";
+const ADMIN_COOKIE_NAME = "ai_portal_admin_token";
 const TOKEN_TTL = "7d";
 
 // ─── Token payload types ────────────────────────────────────────────────────
@@ -62,7 +63,7 @@ export async function getCurrentUser(): Promise<UserPayload | null> {
 
 export async function getCurrentAdmin(): Promise<AdminPayload | null> {
   const cookieStore = await cookies();
-  const token = cookieStore.get(COOKIE_NAME)?.value;
+  const token = cookieStore.get(ADMIN_COOKIE_NAME)?.value;
   if (!token) return null;
   const payload = await verifyToken(token);
   if (!payload || payload.type !== "admin") return null;
@@ -82,7 +83,7 @@ export async function getPayloadFromRequest(
 // ─── Set/clear cookie helpers ────────────────────────────────────────────────
 
 export function buildSetCookieHeader(token: string): string {
-  const maxAge = 7 * 24 * 60 * 60; // 7 days in seconds
+  const maxAge = 7 * 24 * 60 * 60;
   return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
@@ -90,4 +91,13 @@ export function buildClearCookieHeader(): string {
   return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
-export { COOKIE_NAME };
+export function buildAdminSetCookieHeader(token: string): string {
+  const maxAge = 7 * 24 * 60 * 60;
+  return `${ADMIN_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+export function buildAdminClearCookieHeader(): string {
+  return `${ADMIN_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+export { COOKIE_NAME, ADMIN_COOKIE_NAME };

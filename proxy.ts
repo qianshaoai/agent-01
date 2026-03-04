@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPayloadFromRequest } from "@/lib/auth";
+import { getPayloadFromRequest, ADMIN_COOKIE_NAME, verifyToken } from "@/lib/auth";
 
 // 需要登录才能访问的用户路由
 const USER_PROTECTED = ["/", "/agents", "/settings"];
@@ -18,7 +18,8 @@ export async function proxy(req: NextRequest) {
 
   // ── 管理端路由保护 ────────────────────────────────────────────
   if (ADMIN_PROTECTED.some((p) => pathname.startsWith(p))) {
-    const payload = await getPayloadFromRequest(req);
+    const token = req.cookies.get(ADMIN_COOKIE_NAME)?.value;
+    const payload = token ? await verifyToken(token) : null;
     if (!payload || payload.type !== "admin") {
       return NextResponse.redirect(new URL("/admin", req.url));
     }

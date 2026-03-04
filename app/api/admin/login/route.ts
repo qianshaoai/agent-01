@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
-import { signToken, buildSetCookieHeader } from "@/lib/auth";
+import { signToken, buildAdminSetCookieHeader } from "@/lib/auth";
 
 // Create /app/api/admin/login directory
 export async function POST(req: NextRequest) {
@@ -33,6 +33,6 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json(
     { ok: true },
-    { headers: { "Set-Cookie": buildSetCookieHeader(token) } }
+    { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
   );
 }

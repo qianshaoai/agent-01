@@ -7,7 +7,7 @@ export async function GET() {
 
   const { data } = await db
     .from("agents")
-    .select("id, agent_code, name, description, platform, enabled, category_id, categories(name), api_endpoint, api_key_enc")
+    .select("id, agent_code, name, description, platform, enabled, category_id, categories(name), api_endpoint, api_key_enc, model_params, tenant_agents(tenant_code)")
     .order("created_at", { ascending: false });
 
   // 脱敏 API Key（只显示末4位）
@@ -17,6 +17,8 @@ export async function GET() {
       ? "••••••••••••" + a.api_key_enc.slice(-4)
       : "",
     api_key_enc: undefined, // 不返回原始 key
+    tenant_codes: (a.tenant_agents ?? []).map((ta: { tenant_code: string }) => ta.tenant_code),
+    tenant_agents: undefined,
   }));
 
   return NextResponse.json(masked);
