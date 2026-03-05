@@ -323,11 +323,17 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         }
       };
 
-      mr.start();
+      mr.start(250); // 每 250ms 生成一个数据块，确保 webm 格式结构完整
       mediaRecorderRef.current = mr;
       setRecording(true);
-    } catch {
-      setError("无法访问麦克风，请检查权限");
+    } catch (e) {
+      if (!navigator.mediaDevices) {
+        setError("语音输入需要 HTTPS，请联系管理员开启 SSL");
+      } else if (e instanceof DOMException && e.name === "NotAllowedError") {
+        setError("麦克风权限被拒绝，请在浏览器设置中允许访问麦克风");
+      } else {
+        setError("无法访问麦克风，请检查设备和权限");
+      }
     }
   }
 

@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
 
     // 2. 提交 ASR 任务
     const requestId = uuidv4();
+    console.log("[speech submit] mimeType:", audioFile.type, "size:", audioFile.size);
     const { format, codec, rate } = getAudioFormat(audioFile.type || "audio/webm");
 
     const submitRes = await fetch(SUBMIT_URL, {
@@ -134,7 +135,7 @@ export async function GET(req: NextRequest) {
 
     const result = await queryRes.json();
 
-    console.log("[speech query] response:", JSON.stringify(result));
+    console.log("[speech query] audioType:", req.nextUrl.searchParams.get("audioPath"), "response:", JSON.stringify(result));
 
     if (result?.result?.text !== undefined) {
       // 识别完成，清理临时音频文件
