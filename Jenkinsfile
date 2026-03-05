@@ -11,6 +11,7 @@ pipeline {
         SUPABASE_ANON_KEY         = credentials('agent01_SUPABASE_ANON_KEY')
         SUPABASE_SERVICE_ROLE_KEY = credentials('agent01_SUPABASE_SERVICE_ROLE_KEY')
         JWT_SECRET                = credentials('agent01_JWT_SECRET')
+        VOLCENGINE_API_KEY        = credentials('agent01_VOLCENGINE_API_KEY')
     }
 
     // NodeJS 名称需与 Jenkins → Global Tool Configuration 中配置的名称一致
@@ -73,6 +74,7 @@ pipeline {
 NEXT_PUBLIC_SUPABASE_ANON_KEY=${env.SUPABASE_ANON_KEY}
 SUPABASE_SERVICE_ROLE_KEY=${env.SUPABASE_SERVICE_ROLE_KEY}
 JWT_SECRET=${env.JWT_SECRET}
+VOLCENGINE_API_KEY=${env.VOLCENGINE_API_KEY}
 """
             }
         }

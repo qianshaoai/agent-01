@@ -44,15 +44,27 @@ export async function POST(req: NextRequest) {
 
     // 上传到 Supabase Storage
     const bucket = process.env.SUPABASE_STORAGE_BUCKET ?? "uploads";
-    const path = `${user.tenantCode}/${Date.now()}-${file.name}`;
+    const folder = user.tenantCode || "personal";
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `${folder}/${Date.now()}-${safeName}`;
 
-    const { data: uploadData, error: uploadError } = await db.storage
-      .from(bucket)
-      .upload(path, buffer, { contentType: file.type, upsert: false });
+    let uploadData: { path: string } | null = null;
+    let uploadError: Error | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const result = await db.storage
+        .from(bucket)
+        .upload(path, buffer, { contentType: file.type, upsert: false });
+      if (!result.error) {
+        uploadData = result.data;
+        break;
+      }
+      uploadError = result.error;
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 800 * attempt));
+    }
 
-    if (uploadError) {
+    if (!uploadData) {
       console.error("[upload] storage error:", uploadError);
-      return NextResponse.json({ error: "文件上传失败" }, { status: 500 });
+      return NextResponse.json({ error: "文件上传失败，请重试" }, { status: 500 });
     }
 
     // 提取文本
@@ -60,14 +72,40 @@ export async function POST(req: NextRequest) {
     if (fileType === "txt" || fileType === "csv") {
       extractedText = buffer.toString("utf-8").slice(0, 50000);
     } else if (fileType === "pdf") {
-      // MVP: 暂用占位提示，生产环境可接入 pdf-parse
-      extractedText = `[PDF 文件: ${file.name}，文本提取需服务端 pdf-parse 支持]`;
-    } else if (fileType === "docx" || fileType === "doc") {
-      extractedText = `[Word 文件: ${file.name}，文本提取需服务端 mammoth 支持]`;
+      try {
+        const { PDFParse } = await import("pdf-parse");
+        const parser = new PDFParse({ data: buffer });
+        const result = await parser.getText();
+        extractedText = result.text.trim().slice(0, 50000);
+      } catch {
+        extractedText = `[PDF 文件: ${file.name}，文本提取失败，请确认文件未加密]`;
+      }
+    } else if (fileType === "docx") {
+      try {
+        const mammoth = await import("mammoth");
+        const result = await mammoth.extractRawText({ buffer });
+        extractedText = result.value.trim().slice(0, 50000);
+      } catch {
+        extractedText = `[Word 文件: ${file.name}，文本提取失败]`;
+      }
+    } else if (fileType === "doc") {
+      extractedText = `[旧版 Word(.doc) 文件: ${file.name}，请另存为 .docx 格式后重新上传]`;
     } else if (fileType === "xlsx") {
-      extractedText = `[Excel 文件: ${file.name}，文本提取需服务端 xlsx 支持]`;
+      try {
+        const XLSX = await import("xlsx");
+        const workbook = XLSX.read(buffer, { type: "buffer" });
+        const sheets = workbook.SheetNames.map((name) => {
+          const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[name]);
+          return `[Sheet: ${name}]\n${csv}`;
+        });
+        extractedText = sheets.join("\n\n").slice(0, 50000);
+      } catch {
+        extractedText = `[Excel 文件: ${file.name}，文本提取失败]`;
+      }
     } else {
-      extractedText = `[图片: ${file.name}，可由多模态模型直接处理]`;
+      // 图片：返回公开 URL 供多模态模型处理
+      const { data: imgUrl } = db.storage.from(bucket).getPublicUrl(uploadData.path);
+      extractedText = `[图片: ${file.name}，URL: ${imgUrl.publicUrl}]`;
     }
 
     // 保存到数据库（如果有 conversationId）

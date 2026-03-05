@@ -52,6 +52,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [quota, setQuota] = useState<{ left: number; expiresAt: string } | null>(null);
@@ -261,31 +262,67 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   async function handleVoice() {
     if (recording) {
       mediaRecorderRef.current?.stop();
-      setRecording(false);
       return;
     }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/mp4")
+        ? "audio/mp4"
+        : "audio/ogg";
+
+      const mr = new MediaRecorder(stream, { mimeType });
       const chunks: BlobPart[] = [];
-      mr.ondataavailable = (e) => chunks.push(e.data);
+
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
       mr.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunks, { type: "audio/webm" });
-        const formData = new FormData();
-        formData.append("audio", blob, "recording.webm");
+        setRecording(false);
+        setTranscribing(true);
+
         try {
-          const res = await fetch("/api/speech", { method: "POST", body: formData });
-          const data = await res.json();
-          if (res.ok && data.text) {
-            setInput((prev) => prev + data.text);
-          } else {
-            setError(data.error ?? "语音识别失败");
+          // 1. 提交任务
+          const blob = new Blob(chunks, { type: mimeType });
+          const formData = new FormData();
+          formData.append("audio", blob, "recording");
+          const submitRes = await fetch("/api/speech", { method: "POST", body: formData });
+          const submitData = await submitRes.json();
+
+          if (!submitRes.ok || !submitData.requestId) {
+            setError(submitData.error ?? "提交语音任务失败");
+            return;
           }
+
+          // 2. 前端轮询结果（每 2 秒一次，最多 5 分钟）
+          const { requestId, audioPath } = submitData;
+          const queryBase = `/api/speech?requestId=${requestId}&audioPath=${encodeURIComponent(audioPath ?? "")}`;
+          for (let i = 0; i < 150; i++) {
+            await new Promise((r) => setTimeout(r, 2000));
+            const queryRes = await fetch(queryBase);
+            const queryData = await queryRes.json();
+
+            if (queryData.done) {
+              if (queryData.text) {
+                setInput((prev) => prev + queryData.text);
+              } else {
+                setError(queryData.error ?? "未识别到内容");
+              }
+              return;
+            }
+          }
+          setError("语音识别超时，请重试");
         } catch {
-          setError("语音识别失败");
+          setError("语音识别失败，请重试");
+        } finally {
+          setTranscribing(false);
         }
       };
+
       mr.start();
       mediaRecorderRef.current = mr;
       setRecording(true);
@@ -437,7 +474,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                     <button onClick={() => fileInputRef.current?.click()} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="上传文件">
                       <Paperclip size={16} />
                     </button>
-                    <button onClick={handleVoice} className={`p-1.5 rounded-[8px] transition-colors ${recording ? "bg-red-100 text-red-500 hover:bg-red-200" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={recording ? "停止录音" : "语音输入"}>
+                    <button onClick={handleVoice} disabled={transcribing} className={`p-1.5 rounded-[8px] transition-colors ${recording ? "bg-red-100 text-red-500 hover:bg-red-200" : transcribing ? "text-yellow-500 animate-pulse cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={recording ? "停止录音" : transcribing ? "识别中…" : "语音输入"}>
                       {recording ? <MicOff size={16} /> : <Mic size={16} />}
                     </button>
                     {recording && <span className="text-xs text-red-500 animate-pulse">录音中…</span>}
