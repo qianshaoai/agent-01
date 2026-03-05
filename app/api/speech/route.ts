@@ -38,7 +38,9 @@ export async function POST(req: NextRequest) {
     const bytes = await audioFile.arrayBuffer();
     const buffer = Buffer.from(bytes);
     const bucket = process.env.SUPABASE_STORAGE_BUCKET ?? "uploads";
-    const audioPath = `speech-temp/${uuidv4()}`;
+    console.log("[speech submit] mimeType:", audioFile.type, "size:", audioFile.size);
+    const { format, codec, rate } = getAudioFormat(audioFile.type || "audio/webm");
+    const audioPath = `speech-temp/${uuidv4()}.${format}`;
 
     const { data: uploadData, error: uploadError } = await db.storage
       .from(bucket)
@@ -53,8 +55,6 @@ export async function POST(req: NextRequest) {
 
     // 2. 提交 ASR 任务
     const requestId = uuidv4();
-    console.log("[speech submit] mimeType:", audioFile.type, "size:", audioFile.size);
-    const { format, codec, rate } = getAudioFormat(audioFile.type || "audio/webm");
 
     const submitRes = await fetch(SUBMIT_URL, {
       method: "POST",
@@ -130,6 +130,7 @@ export async function GET(req: NextRequest) {
     });
 
     if (!queryRes.ok) {
+      console.log("[speech query] non-200:", queryRes.status, await queryRes.text());
       return NextResponse.json({ done: false });
     }
 
