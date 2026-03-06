@@ -14,6 +14,10 @@ export type AdapterConfig = {
   apiKey: string;
   modelParams: Record<string, unknown>;
   agentCode: string;
+  /** 平台侧会话 ID（部分平台用于维护多轮上下文） */
+  platformConvId?: string | null;
+  /** 适配器回调：当获取到平台侧新会话 ID 时通知调用方保存 */
+  onPlatformConvId?: (id: string) => void;
 };
 
 export async function* streamChat(
@@ -29,6 +33,12 @@ export async function* streamChat(
       break;
     case "zhipu":
       yield* zhipuStream(messages, config);
+      break;
+    case "yuanqi":
+      yield* yuanqiStream(messages, config);
+      break;
+    case "qingyan":
+      yield* qingyanStream(messages, config);
       break;
     default:
       yield* openaiCompatibleStream(messages, config);
@@ -167,6 +177,51 @@ async function* zhipuStream(
   });
 }
 
+// ─── 腾讯元器 (Yuanqi) ───────────────────────────────────────────────────────
+
+async function* yuanqiStream(
+  messages: ChatMessage[],
+  config: AdapterConfig
+): AsyncGenerator<string> {
+  const body = {
+    assistant_id: config.modelParams["assistant_id"] ?? config.agentCode,
+    user_id: "portal_user",
+    stream: true,
+    chat_type: "published",
+    messages: messages.map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: [{ type: "text", text: m.content }],
+    })),
+  };
+
+  const res = await fetch(
+    config.apiEndpoint ||
+      "https://open.hunyuan.tencent.com/openapi/v1/agent/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+        "X-Source": "openapi",
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Yuanqi API error: ${res.status} ${await res.text()}`);
+  }
+
+  yield* parseSSEStream(res, (data) => {
+    if (data === "[DONE]") return null;
+    try {
+      const obj = JSON.parse(data);
+      return obj.choices?.[0]?.delta?.content ?? null;
+    } catch {}
+    return null;
+  });
+}
+
 // ─── OpenAI-compatible (fallback) ────────────────────────────────────────────
 
 
@@ -201,6 +256,88 @@ async function* openaiCompatibleStream(
     try {
       const obj = JSON.parse(data);
       return obj.choices?.[0]?.delta?.content ?? null;
+    } catch {}
+    return null;
+  });
+}
+
+// ─── 智谱清言智能体 (Qingyan) ─────────────────────────────────────────────────
+
+// Token cache: cacheKey -> { token, expiresAt }
+const qingyanTokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+async function getQingyanToken(apiKey: string, apiSecret: string, baseUrl: string): Promise<string> {
+  const cacheKey = `${apiKey}:${apiSecret}`;
+  const cached = qingyanTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
+
+  const res = await fetch(`${baseUrl}/get_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey, api_secret: apiSecret }),
+  });
+  if (!res.ok) throw new Error(`Qingyan auth error: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  if (data.status !== 0) throw new Error(`Qingyan auth failed: ${data.message}`);
+
+  const { access_token, expires_in } = data.result;
+  qingyanTokenCache.set(cacheKey, { token: access_token, expiresAt: Date.now() + expires_in * 1000 });
+  return access_token;
+}
+
+async function* qingyanStream(
+  messages: ChatMessage[],
+  config: AdapterConfig
+): AsyncGenerator<string> {
+  const apiSecret = config.modelParams["api_secret"] as string;
+  if (!apiSecret) throw new Error("Qingyan adapter: api_secret is required in model_params");
+
+  const assistantId = (config.modelParams["assistant_id"] as string) ?? config.agentCode;
+  const baseUrl = config.apiEndpoint?.replace(/\/stream$/, "") ||
+    "https://chatglm.cn/chatglm/assistant-api/v1";
+
+  const token = await getQingyanToken(config.apiKey, apiSecret, baseUrl);
+
+  // Qingyan uses a single prompt; pass only the last user message
+  const prompt = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+
+  const res = await fetch(`${baseUrl}/stream`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      assistant_id: assistantId,
+      prompt,
+      ...(config.platformConvId ? { conversation_id: config.platformConvId } : {}),
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Qingyan API error: ${res.status} ${await res.text()}`);
+
+  // Qingyan SSE returns full accumulated text each event, so we track prev length
+  let prevLength = 0;
+  yield* parseSSEStream(res, (data) => {
+    try {
+      const obj = JSON.parse(data);
+      // Capture platform conversation_id and notify caller
+      if (obj.conversation_id && config.onPlatformConvId) {
+        config.onPlatformConvId(obj.conversation_id);
+      }
+      const content = obj.message?.content;
+      if (!content) return null;
+      const parts: Array<{ type: string; text?: string }> = Array.isArray(content)
+        ? content
+        : [content];
+      const fullText = parts
+        .filter((c) => c.type === "text" && c.text)
+        .map((c) => c.text as string)
+        .join("");
+      if (!fullText) return null;
+      const delta = fullText.slice(prevLength);
+      prevLength = fullText.length;
+      return delta || null;
     } catch {}
     return null;
   });

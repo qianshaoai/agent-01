@@ -56,6 +56,7 @@ export async function POST(
 
     // ── 3. 会话管理 ────────────────────────────────────────────
     let convId = conversationId;
+    let platformConvId: string | null = null;
 
     // 查询用户 id
     const { data: dbUser } = await db
@@ -79,11 +80,14 @@ export async function POST(
         .single();
       convId = conv?.id;
     } else {
-      // 更新会话时间
-      await db
+      // 更新会话时间，同时读取平台侧会话 ID
+      const { data: conv } = await db
         .from("conversations")
         .update({ updated_at: new Date().toISOString() })
-        .eq("id", convId);
+        .eq("id", convId)
+        .select("platform_conv_id")
+        .single();
+      platformConvId = conv?.platform_conv_id ?? null;
     }
 
     // ── 4. 加载上下文消息 ──────────────────────────────────────
@@ -120,6 +124,7 @@ export async function POST(
     // ── 6. 流式调用 AI ────────────────────────────────────────
     const encoder = new TextEncoder();
     let fullResponse = "";
+    let newPlatformConvId: string | null = null;
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -130,6 +135,8 @@ export async function POST(
             apiKey: agent.api_key_enc,
             modelParams: (agent.model_params ?? {}) as Record<string, unknown>,
             agentCode: agent.agent_code,
+            platformConvId,
+            onPlatformConvId: (id) => { newPlatformConvId = id; },
           });
 
           for await (const chunk of gen) {
@@ -144,6 +151,10 @@ export async function POST(
               role: "assistant",
               content: fullResponse,
             }),
+            // 保存平台侧会话 ID（如清言 conversation_id）
+            newPlatformConvId
+              ? db.from("conversations").update({ platform_conv_id: newPlatformConvId }).eq("id", convId)
+              : Promise.resolve(),
             user.isPersonal
               ? Promise.resolve()
               : db.rpc("increment_quota_used", { p_code: user.tenantCode }),

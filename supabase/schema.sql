@@ -71,12 +71,13 @@ CREATE TABLE IF NOT EXISTS tenant_agents (
 
 -- ── 会话表 ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS conversations (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  agent_id     UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-  title        TEXT NOT NULL DEFAULT '新对话',
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  agent_id         UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL DEFAULT '新对话',
+  platform_conv_id TEXT,                               -- 平台侧会话ID（如清言 conversation_id）
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ── 消息表 ───────────────────────────────────────────────────
