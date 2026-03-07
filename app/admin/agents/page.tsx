@@ -23,7 +23,7 @@ type Agent = {
 type Category = { id: string; name: string };
 type Tenant = { id: string; code: string; name: string };
 
-const PLATFORMS = ["coze", "dify", "zhipu", "qingyan", "yuanqi", "openai", "other"];
+const PLATFORMS = ["coze", "dify", "qingyan", "yuanqi", "openai", "other"];
 const EMPTY_AGENT = { id: "", name: "", description: "", categoryId: "", platform: "coze" };
 const EMPTY_API = { endpoint: "", apiKey: "", modelParams: '{"temperature": 0.7, "max_tokens": 2000}' };
 

@@ -31,9 +31,6 @@ export async function* streamChat(
     case "dify":
       yield* difyStream(messages, config);
       break;
-    case "zhipu":
-      yield* zhipuStream(messages, config);
-      break;
     case "yuanqi":
       yield* yuanqiStream(messages, config);
       break;
@@ -136,47 +133,6 @@ async function* difyStream(
   });
 }
 
-// ─── 智谱清言 (GLM) ──────────────────────────────────────────────────────────
-
-async function* zhipuStream(
-  messages: ChatMessage[],
-  config: AdapterConfig
-): AsyncGenerator<string> {
-  const model = (config.modelParams["model"] as string) ?? "glm-4-flash";
-  const body = {
-    model,
-    messages,
-    stream: true,
-    temperature: config.modelParams["temperature"] ?? 0.7,
-    max_tokens: config.modelParams["max_tokens"] ?? 2000,
-  };
-
-  const res = await fetch(
-    config.apiEndpoint || "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    }
-  );
-
-  if (!res.ok) {
-    throw new Error(`Zhipu API error: ${res.status} ${await res.text()}`);
-  }
-
-  yield* parseSSEStream(res, (data) => {
-    if (data === "[DONE]") return null;
-    try {
-      const obj = JSON.parse(data);
-      return obj.choices?.[0]?.delta?.content ?? null;
-    } catch {}
-    return null;
-  });
-}
-
 // ─── 腾讯元器 (Yuanqi) ───────────────────────────────────────────────────────
 
 async function* yuanqiStream(
@@ -196,7 +152,7 @@ async function* yuanqiStream(
 
   const res = await fetch(
     config.apiEndpoint ||
-      "https://open.hunyuan.tencent.com/openapi/v1/agent/chat/completions",
+      "https://yuanqi.tencent.com/openapi/v1/agent/chat/completions",
     {
       method: "POST",
       headers: {
