@@ -1,10 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FirstLoginModal } from "@/components/ui/first-login-modal";
-import { Eye, EyeOff, Phone, Lock, Building2 } from "lucide-react";
+import { Eye, EyeOff, Phone, Lock, Building2, ChevronDown, ChevronUp } from "lucide-react";
+
+const LS_LOGIN_KEY = "login_remember_v1";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,6 +15,18 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showFirstLogin, setShowFirstLogin] = useState(false);
+  const [showTips, setShowTips] = useState(false);
+
+  // 读取上次登录信息
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LS_LOGIN_KEY);
+      if (saved) {
+        const { phone, tenantCode } = JSON.parse(saved);
+        setForm((f) => ({ ...f, phone: phone ?? "", tenantCode: tenantCode ?? "" }));
+      }
+    } catch {}
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -37,6 +51,10 @@ export default function LoginPage() {
         setError(data.error ?? "登录失败");
         return;
       }
+      // 登录成功，记住手机号和企业码（不记住密码）
+      try {
+        localStorage.setItem(LS_LOGIN_KEY, JSON.stringify({ phone: form.phone, tenantCode: form.tenantCode }));
+      } catch {}
       if (data.firstLogin) {
         setShowFirstLogin(true);
       } else {
@@ -72,15 +90,26 @@ export default function LoginPage() {
               <p className="text-sm text-gray-500">欢迎使用 AI 智能体平台</p>
             </div>
 
-            <div className="mb-6 p-4 bg-[#f0f4ff] rounded-[12px] space-y-1.5">
-              <p className="text-xs text-[#002FA7] font-medium">使用说明</p>
-              <p className="text-xs text-gray-600">
-                🏢 <strong>企业用户：</strong>输入手机号 + 企业初始密码 + 企业码（由管理员提供）
-              </p>
-              <p className="text-xs text-gray-600">
-                👤 <strong>个人用户：</strong>输入手机号，密码默认{" "}
-                <code className="bg-white px-1 rounded">000000</code>，不填企业码，登录后建议修改密码
-              </p>
+            <div className="mb-6 rounded-[12px] overflow-hidden border border-[#002FA7]/10">
+              <button
+                type="button"
+                onClick={() => setShowTips(!showTips)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-[#f0f4ff] text-left"
+              >
+                <span className="text-xs text-[#002FA7] font-medium">使用说明</span>
+                {showTips ? <ChevronUp size={14} className="text-[#002FA7]" /> : <ChevronDown size={14} className="text-[#002FA7]" />}
+              </button>
+              {showTips && (
+                <div className="px-4 py-3 bg-[#f0f4ff]/60 space-y-1.5">
+                  <p className="text-xs text-gray-600">
+                    🏢 <strong>企业用户：</strong>输入手机号 + 企业初始密码 + 企业码（由管理员提供）
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    👤 <strong>个人用户：</strong>输入手机号，密码默认{" "}
+                    <code className="bg-white px-1 rounded">000000</code>，不填企业码，登录后建议修改密码
+                  </p>
+                </div>
+              )}
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -129,6 +158,10 @@ export default function LoginPage() {
               <Button type="submit" size="lg" className="w-full mt-2" loading={loading}>
                 登录
               </Button>
+
+              <p className="text-center text-xs text-gray-400 pt-2">
+                如遇问题请联系 <span className="text-gray-500 font-medium">4008189928</span>
+              </p>
             </form>
           </div>
 

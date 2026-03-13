@@ -8,7 +8,7 @@ const JWT_SECRET = new TextEncoder().encode(
 
 const COOKIE_NAME = "ai_portal_token";
 const ADMIN_COOKIE_NAME = "ai_portal_admin_token";
-const TOKEN_TTL = "7d";
+const TOKEN_TTL = "30d";
 
 // ─── Token payload types ────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ export async function getPayloadFromRequest(
 // ─── Set/clear cookie helpers ────────────────────────────────────────────────
 
 export function buildSetCookieHeader(token: string): string {
-  const maxAge = 7 * 24 * 60 * 60;
+  const maxAge = 30 * 24 * 60 * 60;
   return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
@@ -92,7 +92,7 @@ export function buildClearCookieHeader(): string {
 }
 
 export function buildAdminSetCookieHeader(token: string): string {
-  const maxAge = 7 * 24 * 60 * 60;
+  const maxAge = 30 * 24 * 60 * 60;
   return `${ADMIN_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 }
 

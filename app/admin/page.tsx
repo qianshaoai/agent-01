@@ -69,7 +69,6 @@ export default function AdminLoginPage() {
             {error && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{error}</div>}
             <Button type="submit" size="lg" className="w-full" loading={loading}>登录管理后台</Button>
           </form>
-          <p className="text-center text-xs text-gray-400 mt-4">默认账号：admin / admin</p>
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-6">© 2024 前哨科技（QianShao.AI）</p>
