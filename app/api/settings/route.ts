@@ -16,7 +16,7 @@ export async function GET() {
 
     return NextResponse.json({
       logo_url: map.logo_url ?? "",
-      platform_name: map.platform_name ?? "AI 智能体平台",
+      platform_name: map.platform_name ?? "前哨AI人机协同工作舱",
     });
   } catch {
     // 表不存在时（迁移未执行）返回默认值，避免前台报错

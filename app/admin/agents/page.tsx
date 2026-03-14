@@ -4,7 +4,7 @@ import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X } from "lucide-react";
 
 type Agent = {
   id: string;
@@ -55,18 +55,25 @@ export default function AgentsAdminPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [newCatName, setNewCatName] = useState("");
+  const [editingCatId, setEditingCatId] = useState<string | null>(null);
+  const [editingCatName, setEditingCatName] = useState("");
 
   async function load() {
     setLoading(true);
-    const [ar, cr, tr] = await Promise.all([
-      fetch("/api/admin/agents").then((r) => r.json()),
-      fetch("/api/admin/categories").then((r) => r.json()),
-      fetch("/api/admin/tenants").then((r) => r.json()),
-    ]);
-    setAgents(Array.isArray(ar) ? ar : []);
-    setCategories(Array.isArray(cr) ? cr : []);
-    setTenants(Array.isArray(tr) ? tr : []);
-    setLoading(false);
+    try {
+      const [ar, cr, tr] = await Promise.all([
+        fetch("/api/admin/agents").then((r) => r.json()),
+        fetch("/api/admin/categories").then((r) => r.json()),
+        fetch("/api/admin/tenants").then((r) => r.json()),
+      ]);
+      setAgents(Array.isArray(ar) ? ar : []);
+      setCategories(Array.isArray(cr) ? cr : []);
+      setTenants(Array.isArray(tr) ? tr : []);
+    } catch {
+      setAgents([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, []);
@@ -132,6 +139,17 @@ export default function AgentsAdminPage() {
     if (!newCatName.trim()) return;
     await fetch("/api/admin/categories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newCatName.trim() }) });
     setNewCatName(""); load();
+  }
+
+  async function saveEditCat(id: string) {
+    const newName = editingCatName.trim();
+    if (!newName) return;
+    const res = await fetch(`/api/admin/categories/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newName }) });
+    if (res.ok) {
+      setCategories((prev) => prev.map((c) => c.id === id ? { ...c, name: newName } : c));
+    }
+    setEditingCatId(null);
+    setEditingCatName("");
   }
 
   const platformColor: Record<string, string> = { coze: "bg-blue-100 text-blue-700", dify: "bg-purple-100 text-purple-700", zhipu: "bg-green-100 text-green-700", openai: "bg-gray-100 text-gray-600", other: "bg-gray-100 text-gray-600" };
@@ -219,8 +237,29 @@ export default function AgentsAdminPage() {
             </div>
             <div className="space-y-2">
               {categories.length === 0 ? <p className="text-sm text-gray-400 text-center py-6">暂无分类</p> : categories.map((cat) => (
-                <div key={cat.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-[12px]">
-                  <div className="flex items-center gap-2"><Tag size={15} className="text-[#002FA7]" /><span className="font-medium text-gray-800">{cat.name}</span></div>
+                <div key={cat.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-[12px]">
+                  {editingCatId === cat.id ? (
+                    <div className="flex items-center gap-2 flex-1">
+                      <Tag size={15} className="text-[#002FA7] shrink-0" />
+                      <input
+                        autoFocus
+                        className="flex-1 h-9 border border-[#002FA7]/40 rounded-[8px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
+                        value={editingCatName}
+                        onChange={(e) => setEditingCatName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveEditCat(cat.id);
+                          if (e.key === "Escape") { setEditingCatId(null); setEditingCatName(""); }
+                        }}
+                      />
+                      <button onClick={() => saveEditCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认"><Check size={13} /></button>
+                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消"><X size={13} /></button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2"><Tag size={15} className="text-[#002FA7]" /><span className="font-medium text-gray-800">{cat.name}</span></div>
+                      <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
+                    </>
+                  )}
                 </div>
               ))}
             </div>

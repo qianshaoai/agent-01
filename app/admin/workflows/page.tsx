@@ -30,7 +30,6 @@ type WorkflowStep = {
   agent_id: string | null;
   button_text: string;
   enabled: boolean;
-  agents?: Agent | null;
 };
 
 type Workflow = {
@@ -69,15 +68,20 @@ export default function WorkflowsAdminPage() {
 
   async function load() {
     setLoading(true);
-    const [wr, ar, cr] = await Promise.all([
-      fetch("/api/admin/workflows").then((r) => r.json()),
-      fetch("/api/admin/agents").then((r) => r.json()),
-      fetch("/api/admin/categories").then((r) => r.json()),
-    ]);
-    setWorkflows(Array.isArray(wr) ? wr : []);
-    setAgents(Array.isArray(ar) ? ar : []);
-    setCategories(Array.isArray(cr) ? cr : []);
-    setLoading(false);
+    try {
+      const [wr, ar, cr] = await Promise.all([
+        fetch("/api/admin/workflows").then((r) => r.json()),
+        fetch("/api/admin/agents").then((r) => r.json()),
+        fetch("/api/admin/categories").then((r) => r.json()),
+      ]);
+      setWorkflows(Array.isArray(wr) ? wr : []);
+      setAgents(Array.isArray(ar) ? ar : []);
+      setCategories(Array.isArray(cr) ? cr : []);
+    } catch {
+      setWorkflows([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, []);
@@ -160,9 +164,9 @@ export default function WorkflowsAdminPage() {
     load();
   }
 
-  const getAgentName = (agentId: string | null) => {
+  const getAgent = (agentId: string | null): Agent | null => {
     if (!agentId) return null;
-    return agents.find((a) => a.id === agentId)?.name ?? null;
+    return agents.find((a) => a.id === agentId) ?? null;
   };
 
   return (
@@ -239,8 +243,8 @@ export default function WorkflowsAdminPage() {
                                 {step.description && <p className="text-xs text-gray-400 mt-0.5">{step.description}</p>}
                                 {step.exec_type === "agent" && step.agent_id && (
                                   <p className="text-xs text-[#002FA7] mt-1 flex items-center gap-1">
-                                    {step.agents?.agent_type === "external" ? <ExternalLink size={10} /> : <Bot size={10} />}
-                                    绑定：{step.agents?.name ?? getAgentName(step.agent_id) ?? step.agent_id}
+                                    {getAgent(step.agent_id)?.agent_type === "external" ? <ExternalLink size={10} /> : <Bot size={10} />}
+                                    绑定：{getAgent(step.agent_id)?.name ?? step.agent_id}
                                   </p>
                                 )}
                               </div>

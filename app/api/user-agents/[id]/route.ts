@@ -2,13 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 
-async function getOwnedAgent(agentId: string, phone: string, tenantCode: string) {
-  const { data: dbUser } = await db
-    .from("users").select("id").eq("phone", phone).eq("tenant_code", tenantCode).single();
-  if (!dbUser) return null;
-
+async function getOwnedAgent(agentId: string, userId: string) {
   const { data } = await db
-    .from("user_agents").select("*").eq("id", agentId).eq("user_id", dbUser.id).single();
+    .from("user_agents").select("*").eq("id", agentId).eq("user_id", userId).single();
   return data ?? null;
 }
 
@@ -17,7 +13,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
   const { id } = await params;
-  const agent = await getOwnedAgent(id, user.phone, user.tenantCode);
+  const agent = await getOwnedAgent(id, user.userId);
   if (!agent) return NextResponse.json({ error: "不存在或无权访问" }, { status: 404 });
 
   // 不返回原始 key
@@ -30,7 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
   const { id } = await params;
-  const agent = await getOwnedAgent(id, user.phone, user.tenantCode);
+  const agent = await getOwnedAgent(id, user.userId);
   if (!agent) return NextResponse.json({ error: "不存在或无权访问" }, { status: 404 });
 
   const body = await req.json();
@@ -52,7 +48,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
   const { id } = await params;
-  const agent = await getOwnedAgent(id, user.phone, user.tenantCode);
+  const agent = await getOwnedAgent(id, user.userId);
   if (!agent) return NextResponse.json({ error: "不存在或无权访问" }, { status: 404 });
 
   await db.from("user_agents").update({ enabled: false }).eq("id", id);

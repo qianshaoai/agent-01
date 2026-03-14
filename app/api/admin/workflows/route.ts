@@ -11,8 +11,7 @@ export async function GET() {
       id, name, description, category, sort_order, enabled, visible_to, created_at,
       workflow_categories ( category_id ),
       workflow_steps (
-        id, step_order, title, description, exec_type, agent_id, button_text, enabled,
-        agents ( id, agent_code, name, agent_type, external_url )
+        id, step_order, title, description, exec_type, agent_id, button_text, enabled
       )
     `)
     .order("sort_order", { ascending: true });

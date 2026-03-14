@@ -14,7 +14,7 @@ export async function GET() {
 
   return NextResponse.json({
     logo_url: map.logo_url ?? "",
-    platform_name: map.platform_name ?? "AI 智能体平台",
+    platform_name: map.platform_name ?? "前哨AI人机协同工作舱",
   });
 }
 

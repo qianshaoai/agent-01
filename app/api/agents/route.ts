@@ -9,24 +9,20 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const categoryId = searchParams.get("categoryId");
 
-  // ── 1. 当前用户可访问的智能体 ID 集合 ────────────────────────────
-  let accessibleIds: string[] = [];
-  if (user.isPersonal) {
-    const { data } = await db.from("agents").select("id").eq("enabled", true);
-    accessibleIds = (data ?? []).map((a) => a.id);
-  } else {
-    const { data } = await db
-      .from("tenant_agents")
-      .select("agent_id")
-      .eq("tenant_code", user.tenantCode);
-    accessibleIds = (data ?? []).map((r) => r.agent_id);
-  }
+  // ── 1+2. 并行：可访问 ID 集合 + 分类列表 ───────────────────────
+  const [accessibleQuery, categoriesQuery] = await Promise.all([
+    user.isPersonal
+      ? db.from("agents").select("id").eq("enabled", true)
+      : db.from("tenant_agents").select("agent_id").eq("tenant_code", user.tenantCode),
+    db.from("categories").select("id, name").order("sort_order"),
+  ]);
 
-  // ── 2. 分类列表（始终返回）────────────────────────────────────────
-  const { data: categories } = await db
-    .from("categories")
-    .select("id, name")
-    .order("sort_order");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const accessibleIds: string[] = user.isPersonal
+    ? (accessibleQuery.data ?? []).map((a: any) => a.id as string)
+    : (accessibleQuery.data ?? []).map((r: any) => r.agent_id as string);
+
+  const categories = categoriesQuery.data;
 
   // ── 3. 无 categoryId → 保持原有行为（全部可访问智能体）────────────
   if (!categoryId || categoryId === "__all__") {

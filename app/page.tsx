@@ -25,6 +25,7 @@ import {
   Plus,
   Trash2,
   Edit2,
+  Check,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
@@ -87,6 +88,9 @@ type WorkflowItem = {
 };
 
 const LS_DISMISSED_KEY = "dismissed_notices_v1";
+const LS_GROUPS_KEY = "cat_groups_v1";
+
+type CatGroup = { id: string; name: string; categoryIds: string[]; collapsed: boolean };
 
 function getDismissed(): Set<string> {
   try {
@@ -114,18 +118,18 @@ export default function HomePage() {
   const [notices, setNotices] = useState<NoticeItem[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
-  const [workflowCollapsed, setWorkflowCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try { return localStorage.getItem("wf_collapsed") === "1"; } catch { return false; }
-  });
-  const [agentCollapsed, setAgentCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try { return localStorage.getItem("agent_collapsed") === "1"; } catch { return false; }
-  });
-  const [myAgentsCollapsed, setMyAgentsCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try { return localStorage.getItem("my_agents_collapsed") === "1"; } catch { return false; }
-  });
+  const [workflowCollapsed, setWorkflowCollapsed] = useState<boolean>(false);
+  useEffect(() => {
+    try { if (localStorage.getItem("wf_collapsed") === "1") setWorkflowCollapsed(true); } catch {}
+  }, []);
+  const [agentCollapsed, setAgentCollapsed] = useState<boolean>(false);
+  useEffect(() => {
+    try { if (localStorage.getItem("agent_collapsed") === "1") setAgentCollapsed(true); } catch {}
+  }, []);
+  const [myAgentsCollapsed, setMyAgentsCollapsed] = useState<boolean>(false);
+  useEffect(() => {
+    try { if (localStorage.getItem("my_agents_collapsed") === "1") setMyAgentsCollapsed(true); } catch {}
+  }, []);
   const [userAgents, setUserAgents] = useState<UserAgentItem[]>([]);
   const [showMyAgentsSettings, setShowMyAgentsSettings] = useState(false);
   const [editingUA, setEditingUA] = useState<UserAgentItem | null>(null);
@@ -139,6 +143,13 @@ export default function HomePage() {
   });
   const [loading, setLoading] = useState(true);
   const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台" });
+
+  // ── 用户自定义分组 ──────────────────────────────────────────────
+  const [catGroups, setCatGroups] = useState<CatGroup[]>([]);
+  const [addingGroup, setAddingGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [editingGroup, setEditingGroup] = useState<CatGroup | null>(null);
+  const [editGroupForm, setEditGroupForm] = useState({ name: "", categoryIds: [] as string[] });
 
   useEffect(() => {
     async function load() {
@@ -231,6 +242,49 @@ export default function HomePage() {
     load();
   }, []);
 
+  // 加载分组
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LS_GROUPS_KEY);
+      if (raw) setCatGroups(JSON.parse(raw));
+    } catch {}
+  }, []);
+
+  function saveGroups(groups: CatGroup[]) {
+    setCatGroups(groups);
+    try { localStorage.setItem(LS_GROUPS_KEY, JSON.stringify(groups)); } catch {}
+  }
+
+  function createGroup() {
+    const name = newGroupName.trim();
+    if (!name) return;
+    saveGroups([...catGroups, { id: Date.now().toString(), name, categoryIds: [], collapsed: false }]);
+    setAddingGroup(false);
+    setNewGroupName("");
+  }
+
+  function deleteGroup(id: string) {
+    if (!confirm("确认删除该分组？分类本身不会删除。")) return;
+    saveGroups(catGroups.filter((g) => g.id !== id));
+  }
+
+  function toggleGroupCollapse(id: string) {
+    saveGroups(catGroups.map((g) => g.id === id ? { ...g, collapsed: !g.collapsed } : g));
+  }
+
+  function openEditGroup(group: CatGroup) {
+    setEditingGroup(group);
+    setEditGroupForm({ name: group.name, categoryIds: [...group.categoryIds] });
+  }
+
+  function saveEditGroup() {
+    if (!editingGroup) return;
+    const name = editGroupForm.name.trim();
+    if (!name) return;
+    saveGroups(catGroups.map((g) => g.id === editingGroup.id ? { ...g, name, categoryIds: editGroupForm.categoryIds } : g));
+    setEditingGroup(null);
+  }
+
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/login";
@@ -244,8 +298,11 @@ export default function HomePage() {
   }
 
   const allCats = [{ id: "__all__", name: "全部" }, ...categories];
-  // 展示集合由服务端计算好，直接使用
   const filtered = displayAgents;
+  // 已被加入任何分组的分类 ID 集合
+  const groupedCatIds = new Set(catGroups.flatMap((g) => g.categoryIds));
+  // 没有加入任何分组的分类（当无分组时 = 全部分类，行为与之前一致）
+  const ungroupedCats = categories.filter((c) => !groupedCatIds.has(c.id));
 
   async function switchCategory(catId: string) {
     setActiveCategory(catId);
@@ -375,14 +432,97 @@ export default function HomePage() {
             <button onClick={() => setSidebarOpen(false)}><X size={20} className="text-gray-500" /></button>
           </div>
           <div className="hidden lg:block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">我的工作任务</div>
-          <nav className="flex flex-col gap-1">
-            {allCats.map((cat) => (
+          <nav className="flex flex-col gap-0.5">
+            {/* 全部 */}
+            <button
+              onClick={() => switchCategory("__all__")}
+              className={`flex items-center px-3 py-2.5 rounded-[10px] text-sm font-medium transition-all duration-150 ${activeCategory === "__all__" ? "bg-[#002FA7] text-white" : "text-gray-600 hover:bg-gray-100"}`}
+            >
+              全部
+            </button>
+
+            {/* 用户自定义分组 */}
+            {catGroups.map((group) => {
+              const groupCats = categories.filter((c) => group.categoryIds.includes(c.id));
+              return (
+                <div key={group.id}>
+                  <div
+                    className="group/grp flex items-center gap-1 px-2 py-2 rounded-[10px] hover:bg-gray-100 cursor-pointer transition-colors"
+                    onClick={() => toggleGroupCollapse(group.id)}
+                  >
+                    <ChevronDown size={13} className={`text-gray-400 transition-transform duration-150 shrink-0 ${group.collapsed ? "-rotate-90" : ""}`} />
+                    <span className="text-xs font-semibold text-gray-500 flex-1 truncate">{group.name}</span>
+                    <div className="hidden group-hover/grp:flex items-center gap-0.5 shrink-0">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openEditGroup(group); }}
+                        className="p-1 rounded-[5px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
+                        title="编辑分组"
+                      >
+                        <Edit2 size={11} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteGroup(group.id); }}
+                        className="p-1 rounded-[5px] hover:bg-red-100 text-gray-400 hover:text-red-500 transition-colors"
+                        title="删除分组"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </div>
+                  {!group.collapsed && groupCats.map((cat) => (
+                    <button
+                      key={cat.id}
+                      onClick={() => switchCategory(cat.id)}
+                      className={`w-full flex items-center px-3 py-2 pl-7 rounded-[10px] text-sm font-medium transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7] text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                    >
+                      {cat.name}
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
+
+            {/* 新建分组 */}
+            {addingGroup ? (
+              <div className="flex items-center gap-1 px-1 py-1">
+                <input
+                  autoFocus
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") createGroup();
+                    if (e.key === "Escape") { setAddingGroup(false); setNewGroupName(""); }
+                  }}
+                  className="flex-1 h-7 text-xs border border-[#002FA7]/30 rounded-[7px] px-2 focus:outline-none focus:border-[#002FA7]"
+                  placeholder="分组名称…"
+                />
+                <button onClick={createGroup} className="p-1 rounded-[5px] bg-[#002FA7] text-white hover:bg-[#001f7a]" title="确认">
+                  <Check size={12} />
+                </button>
+                <button onClick={() => { setAddingGroup(false); setNewGroupName(""); }} className="p-1 rounded-[5px] hover:bg-gray-100 text-gray-400" title="取消">
+                  <X size={12} />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setAddingGroup(true)}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors rounded-[10px] hover:bg-gray-50"
+              >
+                <Plus size={11} /> 新建分组
+              </button>
+            )}
+
+            {/* 未分组的分类（有分组时加分割线） */}
+            {catGroups.length > 0 && ungroupedCats.length > 0 && (
+              <div className="border-t border-gray-100 my-1" />
+            )}
+            {ungroupedCats.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => switchCategory(cat.id)}
-                className={`flex items-center justify-between px-3 py-2.5 rounded-[10px] text-sm font-medium transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7] text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                className={`flex items-center px-3 py-2.5 rounded-[10px] text-sm font-medium transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7] text-white" : "text-gray-600 hover:bg-gray-100"}`}
               >
-                <span>{cat.name}</span>
+                {cat.name}
               </button>
             ))}
           </nav>
@@ -476,20 +616,26 @@ export default function HomePage() {
                                   <div className="w-7 h-7 rounded-full bg-[#002FA7]/10 border-2 border-white ring-1 ring-gray-100 flex items-center justify-center shrink-0 z-10 mt-0.5">
                                     <span className="text-[11px] font-bold text-[#002FA7]">{idx + 1}</span>
                                   </div>
-                                  {/* 横向紧凑布局：标题 + 类型标签 + 说明 + 按钮尽量排在一行 */}
-                                  <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1 py-0.5 pb-2.5">
-                                    <span className="text-sm font-semibold text-gray-900 shrink-0">{step.title}</span>
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5 shrink-0 ${step.exec_type === "agent" ? "bg-blue-50 text-blue-600" : "bg-amber-50 text-amber-600"}`}>
-                                      {step.exec_type === "agent" ? <><Bot size={9} />智能体</> : <><User size={9} />人工</>}
-                                    </span>
-                                    {step.description && (
-                                      <span className="text-xs text-gray-400 leading-relaxed flex-1 min-w-[80px]">{step.description}</span>
-                                    )}
-                                    {step.exec_type === "agent" ? (
-                                      <WorkflowStepButton step={step} />
-                                    ) : (
-                                      <span className="text-xs text-amber-600 bg-amber-50 px-2.5 py-1 rounded-[8px] shrink-0">此步骤需人工处理</span>
-                                    )}
+                                  {/* 两列固定布局：左侧标题+说明，右侧操作按钮始终对齐 */}
+                                  <div className="flex-1 min-w-0 flex items-start gap-2 py-0.5 pb-2.5">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-sm font-semibold text-gray-900">{step.title}</span>
+                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5 shrink-0 ${step.exec_type === "agent" ? "bg-blue-50 text-blue-600" : "bg-amber-50 text-amber-600"}`}>
+                                          {step.exec_type === "agent" ? <><Bot size={9} />智能体</> : <><User size={9} />人工</>}
+                                        </span>
+                                      </div>
+                                      {step.description && (
+                                        <p className="text-xs text-gray-400 leading-relaxed mt-0.5">{step.description}</p>
+                                      )}
+                                    </div>
+                                    <div className="shrink-0 flex justify-end" style={{ minWidth: 148 }}>
+                                      {step.exec_type === "agent" ? (
+                                        <WorkflowStepButton step={step} />
+                                      ) : (
+                                        <span className="text-xs text-amber-600 bg-amber-50 px-2.5 py-1 rounded-[8px]">此步骤需人工处理</span>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
                               ))}
@@ -559,28 +705,25 @@ export default function HomePage() {
           </div>
           {/* ── 我的智能体 ──────────────────────────────────────────── */}
           <div className="mt-6 bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
-            <div className="w-full flex items-center gap-2 px-5 py-3.5 border-b border-gray-50">
+            <div
+              className="w-full flex items-center gap-2 px-5 py-3.5 border-b border-gray-50 hover:bg-gray-50/50 transition-colors cursor-pointer"
+              onClick={() => {
+                const next = !myAgentsCollapsed;
+                setMyAgentsCollapsed(next);
+                try { localStorage.setItem("my_agents_collapsed", next ? "1" : "0"); } catch {}
+              }}
+            >
               <Bot size={15} className="text-[#002FA7] shrink-0" />
               <span className="text-sm font-semibold text-gray-800">我的智能体</span>
               <span className="flex-1" />
               <button
-                onClick={() => { openAddUA(); setShowMyAgentsSettings(true); }}
+                onClick={(e) => { e.stopPropagation(); openAddUA(); setShowMyAgentsSettings(true); }}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-[8px] text-xs font-medium text-[#002FA7] hover:bg-[#002FA7]/8 transition-colors"
               >
                 <Settings size={12} />
                 设置
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const next = !myAgentsCollapsed;
-                  setMyAgentsCollapsed(next);
-                  try { localStorage.setItem("my_agents_collapsed", next ? "1" : "0"); } catch {}
-                }}
-                className="p-1 rounded-[6px] hover:bg-gray-100 transition-colors"
-              >
-                <ChevronDown size={15} className={`text-gray-400 transition-transform duration-200 ${myAgentsCollapsed ? "-rotate-90" : ""}`} />
-              </button>
+              <ChevronDown size={15} className={`text-gray-400 transition-transform duration-200 ${myAgentsCollapsed ? "-rotate-90" : ""}`} />
             </div>
 
             {!myAgentsCollapsed && (
@@ -706,6 +849,57 @@ export default function HomePage() {
                     </button>
                   </div>
                 </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 编辑分组弹窗 ──────────────────────────────────────────── */}
+      {editingGroup && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-sm p-6">
+            <h3 className="font-semibold text-gray-900 mb-4">编辑分组</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">分组名称</label>
+                <input
+                  autoFocus
+                  value={editGroupForm.name}
+                  onChange={(e) => setEditGroupForm({ ...editGroupForm, name: e.target.value })}
+                  onKeyDown={(e) => e.key === "Enter" && saveEditGroup()}
+                  className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-2">包含的分类</label>
+                <div className="border border-gray-100 rounded-[12px] p-3 max-h-48 overflow-y-auto space-y-2">
+                  {categories.length === 0 ? (
+                    <p className="text-xs text-gray-400 text-center py-2">暂无分类</p>
+                  ) : categories.map((cat) => {
+                    const checked = editGroupForm.categoryIds.includes(cat.id);
+                    return (
+                      <label key={cat.id} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="accent-[#002FA7] w-4 h-4"
+                          checked={checked}
+                          onChange={() => setEditGroupForm({
+                            ...editGroupForm,
+                            categoryIds: checked
+                              ? editGroupForm.categoryIds.filter((id) => id !== cat.id)
+                              : [...editGroupForm.categoryIds, cat.id],
+                          })}
+                        />
+                        <span className="text-sm text-gray-700">{cat.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5">
+              <button onClick={() => setEditingGroup(null)} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-[10px] transition-colors">取消</button>
+              <button onClick={saveEditGroup} className="px-4 py-2 text-sm font-medium bg-[#002FA7] text-white rounded-[10px] hover:bg-[#001f7a] transition-colors">保存</button>
             </div>
           </div>
         </div>

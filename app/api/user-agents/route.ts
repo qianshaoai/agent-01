@@ -6,14 +6,10 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
-  const { data: dbUser } = await db
-    .from("users").select("id").eq("phone", user.phone).eq("tenant_code", user.tenantCode).single();
-  if (!dbUser) return NextResponse.json([]);
-
   const { data } = await db
     .from("user_agents")
     .select("id, name, description, agent_type, platform, api_url, external_url, enabled, created_at")
-    .eq("user_id", dbUser.id)
+    .eq("user_id", user.userId)
     .eq("enabled", true)
     .order("created_at", { ascending: false });
 
@@ -24,10 +20,6 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
-  const { data: dbUser } = await db
-    .from("users").select("id").eq("phone", user.phone).eq("tenant_code", user.tenantCode).single();
-  if (!dbUser) return NextResponse.json({ error: "用户不存在" }, { status: 404 });
-
   const body = await req.json();
   const { name, description, agentType, platform, apiUrl, apiKey, externalUrl } = body;
 
@@ -37,7 +29,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { data, error } = await db.from("user_agents").insert({
-    user_id: dbUser.id,
+    user_id: user.userId,
     name: name.trim(),
     description: description ?? "",
     agent_type: agentType ?? "chat",

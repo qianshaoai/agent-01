@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FirstLoginModal } from "@/components/ui/first-login-modal";
-import { Eye, EyeOff, Phone, Lock, Building2, ChevronDown, ChevronUp } from "lucide-react";
+import { Eye, EyeOff, Phone, Lock, Building2 } from "lucide-react";
 
 const LS_LOGIN_KEY = "login_remember_v1";
 
@@ -15,7 +15,6 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showFirstLogin, setShowFirstLogin] = useState(false);
-  const [showTips, setShowTips] = useState(false);
   const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台" });
 
   useEffect(() => {
@@ -96,29 +95,7 @@ export default function LoginPage() {
           <div className="bg-white rounded-[20px] shadow-[0_8px_40px_rgba(0,47,167,0.08)] p-8">
             <div className="mb-8">
               <h1 className="text-2xl font-bold text-gray-900 mb-1">登录</h1>
-              <p className="text-sm text-gray-500">欢迎使用 AI 智能体平台</p>
-            </div>
-
-            <div className="mb-6 rounded-[12px] overflow-hidden border border-[#002FA7]/10">
-              <button
-                type="button"
-                onClick={() => setShowTips(!showTips)}
-                className="w-full flex items-center justify-between px-4 py-3 bg-[#f0f4ff] text-left"
-              >
-                <span className="text-xs text-[#002FA7] font-medium">使用说明</span>
-                {showTips ? <ChevronUp size={14} className="text-[#002FA7]" /> : <ChevronDown size={14} className="text-[#002FA7]" />}
-              </button>
-              {showTips && (
-                <div className="px-4 py-3 bg-[#f0f4ff]/60 space-y-1.5">
-                  <p className="text-xs text-gray-600">
-                    🏢 <strong>企业用户：</strong>输入手机号 + 企业初始密码 + 企业码（由管理员提供）
-                  </p>
-                  <p className="text-xs text-gray-600">
-                    👤 <strong>个人用户：</strong>输入手机号，密码默认{" "}
-                    <code className="bg-white px-1 rounded">000000</code>，不填企业码，登录后建议修改密码
-                  </p>
-                </div>
-              )}
+              <p className="text-sm text-gray-500">欢迎使用AI人机协同工作舱</p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">

@@ -5,30 +5,19 @@ import { db } from "@/lib/db";
 export async function GET() {
   if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
-  // 总调用次数
-  const { count: totalCalls } = await db
-    .from("logs")
-    .select("*", { count: "exact", head: true })
-    .eq("action", "chat");
-
-  // 成功次数
-  const { count: successCalls } = await db
-    .from("logs")
-    .select("*", { count: "exact", head: true })
-    .eq("action", "chat")
-    .eq("status", "success");
-
-  // 企业数
-  const { count: totalTenants } = await db
-    .from("tenants")
-    .select("*", { count: "exact", head: true });
-
-  // Top 智能体（统计调用量）
-  const { data: topAgentRaw } = await db
-    .from("logs")
-    .select("agent_code, agent_name")
-    .eq("action", "chat")
-    .eq("status", "success");
+  const [
+    { count: totalCalls },
+    { count: successCalls },
+    { count: totalTenants },
+    { data: topAgentRaw },
+    { data: tenants },
+  ] = await Promise.all([
+    db.from("logs").select("*", { count: "exact", head: true }).eq("action", "chat"),
+    db.from("logs").select("*", { count: "exact", head: true }).eq("action", "chat").eq("status", "success"),
+    db.from("tenants").select("*", { count: "exact", head: true }),
+    db.from("logs").select("agent_code, agent_name").eq("action", "chat").eq("status", "success"),
+    db.from("tenants").select("code, name, quota, quota_used"),
+  ]);
 
   const agentCount: Record<string, { name: string; calls: number }> = {};
   for (const row of topAgentRaw ?? []) {
@@ -42,11 +31,6 @@ export async function GET() {
     .map(([code, v]) => ({ id: code, name: v.name, calls: v.calls }))
     .sort((a, b) => b.calls - a.calls)
     .slice(0, 5);
-
-  // 企业使用量
-  const { data: tenants } = await db
-    .from("tenants")
-    .select("code, name, quota, quota_used");
 
   return NextResponse.json({
     totalCalls: totalCalls ?? 0,

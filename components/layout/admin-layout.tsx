@@ -34,12 +34,21 @@ const navItems = [
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台" });
+  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "" });
 
   useEffect(() => {
+    // 先读缓存，立即渲染，避免闪烁
+    try {
+      const cached = localStorage.getItem("brand_settings_v1");
+      if (cached) setSiteSettings(JSON.parse(cached));
+    } catch {}
+    // 再从接口刷新
     fetch("/api/settings")
       .then((r) => r.json())
-      .then((d) => setSiteSettings(d))
+      .then((d) => {
+        setSiteSettings(d);
+        try { localStorage.setItem("brand_settings_v1", JSON.stringify(d)); } catch {}
+      })
       .catch(() => {});
   }, []);
 
@@ -56,7 +65,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <div>
-            <p className="text-sm font-semibold text-gray-900">{siteSettings.platform_name || "AI 智能体平台"}</p>
+            {siteSettings.platform_name ? (
+              <p className="text-sm font-semibold text-gray-900">{siteSettings.platform_name}</p>
+            ) : (
+              <div className="h-4 w-28 bg-gray-100 rounded animate-pulse" />
+            )}
             <p className="text-xs text-gray-400">管理后台</p>
           </div>
         </div>
