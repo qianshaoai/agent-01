@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        APP_NAME    = 'aiq-app'
-        DEPLOY_DIR  = '/www/wwwroot/aiq.qianshao.ai'
+        APP_NAME    = 'o-app'
+        DEPLOY_DIR  = '/www/wwwroot/o.qianshao.ai'
         APP_PORT    = '3000'
         NODE_ENV    = 'production'
         // 从 Jenkins Credentials 注入（ID 需与凭据页面一致）
