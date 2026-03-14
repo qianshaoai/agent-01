@@ -16,9 +16,12 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [showFirstLogin, setShowFirstLogin] = useState(false);
   const [showTips, setShowTips] = useState(false);
+  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台" });
 
-  // 读取上次登录信息
   useEffect(() => {
+    // 品牌配置
+    fetch("/api/settings").then((r) => r.json()).then((d) => setSiteSettings(d)).catch(() => {});
+    // 读取上次登录信息
     try {
       const saved = localStorage.getItem(LS_LOGIN_KEY);
       if (saved) {
@@ -75,10 +78,16 @@ export default function LoginPage() {
       )}
       <div className="flex items-center justify-between px-6 py-4">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-[10px] bg-[#002FA7] flex items-center justify-center">
-            <span className="text-white text-xs font-bold">AI</span>
+          <div className="w-10 h-10 rounded-[10px] overflow-hidden shrink-0 flex items-center justify-center bg-[#002FA7]">
+            {siteSettings.logo_url ? (
+              <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" />
+            ) : (
+              <span className="text-white text-xs font-bold">AI</span>
+            )}
           </div>
-          <span className="font-semibold text-gray-900 text-sm">前哨科技 · AI 智能体平台</span>
+          <span className="font-semibold text-gray-900 text-sm">
+            前哨科技 · {siteSettings.platform_name || "AI 智能体平台"}
+          </span>
         </div>
       </div>
 
@@ -166,7 +175,7 @@ export default function LoginPage() {
           </div>
 
           <p className="text-center text-xs text-gray-400 mt-6">
-            © 2024 前哨科技（QianShao.AI）保留所有权利
+            © 2026 前哨科技（QianShao.AI）保留所有权利
           </p>
         </div>
       </div>

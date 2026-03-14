@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   LayoutDashboard,
   Building2,
@@ -13,32 +13,50 @@ import {
   Menu,
   X,
   ChevronRight,
+  GitBranch,
+  Settings,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/admin/dashboard", label: "控制台", icon: LayoutDashboard },
   { href: "/admin/tenants", label: "企业码管理", icon: Building2 },
+  { href: "/admin/users", label: "用户管理", icon: Users },
   { href: "/admin/agents", label: "智能体管理", icon: Bot },
+  { href: "/admin/workflows", label: "工作流管理", icon: GitBranch },
   { href: "/admin/notices", label: "公告管理", icon: Megaphone },
   { href: "/admin/analytics", label: "用量看板", icon: BarChart3 },
   { href: "/admin/logs", label: "操作日志", icon: FileText },
+  { href: "/admin/settings", label: "品牌设置", icon: Settings },
 ];
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台" });
+
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => setSiteSettings(d))
+      .catch(() => {});
+  }, []);
 
   const NavContent = () => (
     <>
       {/* Logo */}
       <div className="p-6 border-b border-gray-100">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-[10px] bg-[#002FA7] flex items-center justify-center">
-            <span className="text-white text-xs font-bold">AI</span>
+          <div className="w-10 h-10 rounded-[10px] overflow-hidden shrink-0 flex items-center justify-center bg-[#002FA7]">
+            {siteSettings.logo_url ? (
+              <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" />
+            ) : (
+              <span className="text-white text-xs font-bold">AI</span>
+            )}
           </div>
           <div>
-            <p className="text-sm font-semibold text-gray-900">AI 智能体平台</p>
+            <p className="text-sm font-semibold text-gray-900">{siteSettings.platform_name || "AI 智能体平台"}</p>
             <p className="text-xs text-gray-400">管理后台</p>
           </div>
         </div>
@@ -119,7 +137,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         <main className="flex-1 p-4 sm:p-6 page-enter">{children}</main>
 
         <footer className="px-6 py-3 text-xs text-gray-400 border-t border-gray-100 bg-white">
-          © 2024 前哨科技（QianShao.AI）管理后台
+          © 2026 前哨科技（QianShao.AI）管理后台
         </footer>
       </div>
     </div>

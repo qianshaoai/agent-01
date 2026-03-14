@@ -16,6 +16,8 @@ export async function PATCH(
   if (body.description !== undefined) updates.description = body.description;
   if (body.categoryId !== undefined) updates.category_id = body.categoryId || null;
   if (body.platform !== undefined) updates.platform = body.platform;
+  if (body.agentType !== undefined) updates.agent_type = body.agentType;
+  if (body.externalUrl !== undefined) updates.external_url = body.externalUrl;
   if (body.apiEndpoint !== undefined) updates.api_endpoint = body.apiEndpoint;
   if (body.apiKey) updates.api_key_enc = body.apiKey;
   if (body.modelParams !== undefined) updates.model_params = body.modelParams;

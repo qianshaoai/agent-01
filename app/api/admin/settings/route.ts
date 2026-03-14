@@ -1,0 +1,42 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getCurrentAdmin } from "@/lib/auth";
+import { db } from "@/lib/db";
+
+export async function GET() {
+  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+
+  const { data } = await db.from("system_settings").select("key, value");
+
+  const map: Record<string, string> = {};
+  for (const row of data ?? []) {
+    map[row.key] = row.value;
+  }
+
+  return NextResponse.json({
+    logo_url: map.logo_url ?? "",
+    platform_name: map.platform_name ?? "AI 智能体平台",
+  });
+}
+
+export async function PATCH(req: NextRequest) {
+  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+
+  const body = await req.json();
+  const now = new Date().toISOString();
+
+  if (typeof body.platform_name === "string") {
+    await db.from("system_settings").upsert(
+      { key: "platform_name", value: body.platform_name, updated_at: now },
+      { onConflict: "key" }
+    );
+  }
+
+  if (typeof body.logo_url === "string") {
+    await db.from("system_settings").upsert(
+      { key: "logo_url", value: body.logo_url, updated_at: now },
+      { onConflict: "key" }
+    );
+  }
+
+  return NextResponse.json({ ok: true });
+}

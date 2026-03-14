@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getActiveUser } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function GET() {
-  const user = await getCurrentUser();
+  const user = await getActiveUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
-  // 获取配额信息
   let quota = null;
   if (!user.isPersonal) {
     const { data } = await db
@@ -20,9 +19,12 @@ export async function GET() {
   return NextResponse.json({
     userId: user.userId,
     phone: user.phone,
+    nickname: user.nickname,
     tenantCode: user.tenantCode,
     tenantName: user.tenantName,
     isPersonal: user.isPersonal,
+    status: user.status,
+    createdAt: user.createdAt,
     quota: quota
       ? {
           total: quota.quota,

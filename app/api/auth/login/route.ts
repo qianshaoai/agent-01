@@ -3,6 +3,12 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signToken, buildSetCookieHeader } from "@/lib/auth";
 
+function statusError(status: string) {
+  if (status === "deleted") return "该账号已注销，无法登录";
+  if (status === "disabled") return "该账号已被禁用，请联系管理员";
+  return "账号状态异常";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { phone, password, tenantCode } = await req.json();
@@ -28,14 +34,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "企业码无效或已禁用" }, { status: 401 });
       }
 
-      // 检查到期
       if (new Date(tenant.expires_at) < new Date()) {
         return NextResponse.json({ error: "该企业码已到期，请联系管理员" }, { status: 401 });
       }
 
       tenantName = tenant.name;
 
-      // 先尝试找已有用户
       const { data: existingUser } = await db
         .from("users")
         .select("*")
@@ -44,11 +48,16 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (existingUser) {
-        // 验证用户密码
+        // 检查账号状态
+        if (existingUser.status && existingUser.status !== "active") {
+          return NextResponse.json({ error: statusError(existingUser.status) }, { status: 401 });
+        }
         const ok = await bcrypt.compare(password, existingUser.pwd_hash);
         if (!ok) {
           return NextResponse.json({ error: "密码错误" }, { status: 401 });
         }
+        // 更新最近登录时间
+        await db.from("users").update({ last_login_at: new Date().toISOString() }).eq("id", existingUser.id);
         const token = await signToken({
           type: "user",
           userId: existingUser.id,
@@ -69,11 +78,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "企业码或密码错误" }, { status: 401 });
       }
 
-      // 创建企业用户（初始密码 = 企业密码）
       const pwdHash = await bcrypt.hash(password, 12);
       const { data: newUser, error } = await db
         .from("users")
-        .insert({ phone, tenant_code: normalizedCode, pwd_hash: pwdHash, first_login: true })
+        .insert({ phone, tenant_code: normalizedCode, pwd_hash: pwdHash, first_login: true, last_login_at: new Date().toISOString() })
         .select()
         .single();
 
@@ -105,10 +113,14 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (existingUser) {
+      if (existingUser.status && existingUser.status !== "active") {
+        return NextResponse.json({ error: statusError(existingUser.status) }, { status: 401 });
+      }
       const ok = await bcrypt.compare(password, existingUser.pwd_hash);
       if (!ok) {
         return NextResponse.json({ error: "密码错误" }, { status: 401 });
       }
+      await db.from("users").update({ last_login_at: new Date().toISOString() }).eq("id", existingUser.id);
       const token = await signToken({
         type: "user",
         userId: existingUser.id,
@@ -134,7 +146,7 @@ export async function POST(req: NextRequest) {
     const pwdHash = await bcrypt.hash("000000", 12);
     const { data: newUser, error } = await db
       .from("users")
-      .insert({ phone, tenant_code: "PERSONAL", pwd_hash: pwdHash, first_login: true })
+      .insert({ phone, tenant_code: "PERSONAL", pwd_hash: pwdHash, first_login: true, last_login_at: new Date().toISOString() })
       .select()
       .single();
 

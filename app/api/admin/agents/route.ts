@@ -5,20 +5,27 @@ import { db } from "@/lib/db";
 export async function GET() {
   if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
-  const { data } = await db
-    .from("agents")
-    .select("id, agent_code, name, description, platform, enabled, category_id, categories(name), api_endpoint, api_key_enc, model_params, tenant_agents(tenant_code)")
-    .order("created_at", { ascending: false });
+  // 拆分为两次独立查询，避免 PostgREST 因多个外键指向 agents 产生嵌套关系歧义
+  const [agentsRes, taRes] = await Promise.all([
+    db.from("agents")
+      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, categories!agents_category_id_fkey(name), api_endpoint, api_key_enc, model_params")
+      .order("created_at", { ascending: false }),
+    db.from("tenant_agents").select("agent_id, tenant_code"),
+  ]);
 
-  // 脱敏 API Key（只显示末4位）
-  const masked = (data ?? []).map((a) => ({
+  const agents = agentsRes.data ?? [];
+  const tenantMap = new Map<string, string[]>();
+  for (const ta of (taRes.data ?? [])) {
+    const arr = tenantMap.get(ta.agent_id) ?? [];
+    arr.push(ta.tenant_code);
+    tenantMap.set(ta.agent_id, arr);
+  }
+
+  const masked = agents.map((a) => ({
     ...a,
-    api_key_masked: a.api_key_enc
-      ? "••••••••••••" + a.api_key_enc.slice(-4)
-      : "",
-    api_key_enc: undefined, // 不返回原始 key
-    tenant_codes: (a.tenant_agents ?? []).map((ta: { tenant_code: string }) => ta.tenant_code),
-    tenant_agents: undefined,
+    api_key_masked: a.api_key_enc ? "••••••••••••" + a.api_key_enc.slice(-4) : "",
+    api_key_enc: undefined,
+    tenant_codes: tenantMap.get(a.id) ?? [],
   }));
 
   return NextResponse.json(masked);
@@ -27,7 +34,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
-  const { agentCode, name, description, categoryId, platform, apiEndpoint, apiKey, modelParams } =
+  const { agentCode, name, description, categoryId, platform, agentType, externalUrl, apiEndpoint, apiKey, modelParams } =
     await req.json();
 
   if (!agentCode || !name || !platform) {
@@ -42,6 +49,8 @@ export async function POST(req: NextRequest) {
       description: description ?? "",
       category_id: categoryId || null,
       platform,
+      agent_type: agentType ?? "chat",
+      external_url: externalUrl ?? "",
       api_endpoint: apiEndpoint ?? "",
       api_key_enc: apiKey ?? "",       // 生产环境建议加密存储
       model_params: modelParams ?? {},

@@ -35,6 +35,11 @@ export async function POST(
       return NextResponse.json({ error: "智能体不存在或已禁用" }, { status: 404 });
     }
 
+    // 外链型智能体不支持站内对话
+    if (agent.agent_type === "external") {
+      return NextResponse.json({ error: "此智能体为外链跳转型，请通过首页卡片访问" }, { status: 400 });
+    }
+
     // ── 2. 配额检查 ────────────────────────────────────────────
     if (!user.isPersonal) {
       const { data: tenant } = await db

@@ -34,6 +34,8 @@ type AgentInfo = {
   agent_code: string;
   name: string;
   description: string;
+  agent_type?: string;
+  external_url?: string;
 };
 
 type UploadedFile = {
@@ -45,6 +47,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const { id: agentCode } = use(params);
 
   const [agent, setAgent] = useState<AgentInfo | null>(null);
+  const [redirecting, setRedirecting] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -81,6 +84,12 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     if (agentsRes.status === "fulfilled" && agentsRes.value.ok) {
       const data = await agentsRes.value.json();
       const found = data.agents?.find((a: AgentInfo) => a.agent_code === agentCode);
+      if (found?.agent_type === "external" && found?.external_url) {
+        // 外链型智能体：自动跳转到外部链接
+        setRedirecting(true);
+        window.location.replace(found.external_url);
+        return;
+      }
       setAgent(found ?? { agent_code: agentCode, name: agentCode, description: "" });
     } else {
       setAgent({ agent_code: agentCode, name: agentCode, description: "" });
@@ -298,11 +307,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             return;
           }
 
-          // 2. 前端轮询结果（每 2 秒一次，最多 5 分钟）
+          // 2. 前端轮询结果（首次 500ms，之后每 1000ms，最多 5 分钟）
           const { requestId, audioPath } = submitData;
           const queryBase = `/api/speech?requestId=${requestId}&audioPath=${encodeURIComponent(audioPath ?? "")}`;
-          for (let i = 0; i < 150; i++) {
-            await new Promise((r) => setTimeout(r, 2000));
+          for (let i = 0; i < 300; i++) {
+            await new Promise((r) => setTimeout(r, i === 0 ? 500 : 1000));
             const queryRes = await fetch(queryBase);
             const queryData = await queryRes.json();
 
@@ -335,6 +344,19 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         setError("无法访问麦克风，请检查设备和权限");
       }
     }
+  }
+
+  // 外链跳转中：展示过渡页避免空白闪烁
+  if (redirecting) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center bg-[#f8f9fc] gap-4">
+        <div className="w-14 h-14 rounded-[16px] bg-[#002FA7]/8 flex items-center justify-center animate-pulse">
+          <Bot size={28} className="text-[#002FA7]" />
+        </div>
+        <p className="text-sm text-gray-500">正在跳转到外部链接…</p>
+        <Link href="/" className="text-xs text-[#002FA7] hover:underline">返回首页</Link>
+      </div>
+    );
   }
 
   return (

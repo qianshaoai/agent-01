@@ -2,15 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { getPayloadFromRequest, ADMIN_COOKIE_NAME, verifyToken } from "@/lib/auth";
 
 // 需要登录才能访问的用户路由
-const USER_PROTECTED = ["/", "/agents", "/settings"];
+const USER_PROTECTED = ["/", "/agents", "/settings", "/user-agents"];
 // 需要管理员才能访问的路由
 const ADMIN_PROTECTED = [
   "/admin/dashboard",
   "/admin/tenants",
   "/admin/agents",
+  "/admin/workflows",
   "/admin/notices",
   "/admin/analytics",
   "/admin/logs",
+  "/admin/settings",
+  "/admin/users",
 ];
 
 export async function proxy(req: NextRequest) {

@@ -4,7 +4,7 @@ import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2 } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle } from "lucide-react";
 
 type Agent = {
   id: string;
@@ -12,6 +12,8 @@ type Agent = {
   name: string;
   description: string;
   platform: string;
+  agent_type: string;
+  external_url: string;
   enabled: boolean;
   category_id: string | null;
   api_key_masked?: string;
@@ -22,9 +24,16 @@ type Agent = {
 };
 type Category = { id: string; name: string };
 type Tenant = { id: string; code: string; name: string };
+type CategoryDisplayConfig = {
+  category_id: string;
+  category_name: string;
+  is_auto: boolean;
+  is_manual: boolean;
+  is_hidden: boolean;
+};
 
 const PLATFORMS = ["coze", "dify", "qingyan", "yuanqi", "openai", "other"];
-const EMPTY_AGENT = { id: "", name: "", description: "", categoryId: "", platform: "coze" };
+const EMPTY_AGENT = { id: "", name: "", description: "", categoryId: "", platform: "coze", agentType: "chat", externalUrl: "" };
 const EMPTY_API = { endpoint: "", apiKey: "", modelParams: '{"temperature": 0.7, "max_tokens": 2000}' };
 
 export default function AgentsAdminPage() {
@@ -36,6 +45,9 @@ export default function AgentsAdminPage() {
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [showApiModal, setShowApiModal] = useState<Agent | null>(null);
   const [showAssignModal, setShowAssignModal] = useState<Agent | null>(null);
+  const [showDisplayModal, setShowDisplayModal] = useState<Agent | null>(null);
+  const [displayConfig, setDisplayConfig] = useState<CategoryDisplayConfig[]>([]);
+  const [displayLoading, setDisplayLoading] = useState(false);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [form, setForm] = useState(EMPTY_AGENT);
   const [apiForm, setApiForm] = useState(EMPTY_API);
@@ -60,9 +72,28 @@ export default function AgentsAdminPage() {
   useEffect(() => { load(); }, []);
 
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
-  function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryId: a.category_id ?? "", platform: a.platform }); setFormError(""); setShowAgentModal(true); }
+  function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryId: a.category_id ?? "", platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   function openApi(a: Agent) { setShowApiModal(a); setApiForm({ endpoint: a.api_endpoint ?? "", apiKey: "", modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}' }); }
   function openAssign(a: Agent) { setShowAssignModal(a); setSelectedTenants(a.tenant_codes ?? []); }
+
+  async function openDisplay(a: Agent) {
+    setShowDisplayModal(a);
+    setDisplayLoading(true);
+    const data = await fetch(`/api/admin/category-display?agentId=${a.id}`).then((r) => r.json()).catch(() => []);
+    setDisplayConfig(Array.isArray(data) ? data : []);
+    setDisplayLoading(false);
+  }
+
+  async function toggleDisplayConfig(agentId: string, categoryId: string, field: "isManual" | "isHidden", currentValue: boolean) {
+    await fetch("/api/admin/category-display", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId, categoryId, [field]: !currentValue }),
+    });
+    // 刷新展示配置
+    const data = await fetch(`/api/admin/category-display?agentId=${agentId}`).then((r) => r.json()).catch(() => []);
+    setDisplayConfig(Array.isArray(data) ? data : []);
+  }
 
   async function handleSaveAgent() {
     setFormError("");
@@ -71,8 +102,8 @@ export default function AgentsAdminPage() {
     setSaving(true);
     try {
       const res = editing
-        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform }) })
-        : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform }) });
+        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) })
+        : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
       setShowAgentModal(false); load();
@@ -135,7 +166,7 @@ export default function AgentsAdminPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 text-left">
-                      {["编号/名称", "分类", "对接平台", "操作"].map((h) => <th key={h} className="px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">{h}</th>)}
+                      {["编号/名称", "分类", "类型/平台", "操作"].map((h) => <th key={h} className="px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">{h}</th>)}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -143,17 +174,32 @@ export default function AgentsAdminPage() {
                       <tr key={a.id} className="hover:bg-gray-50/50 transition-colors">
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-[10px] bg-[#002FA7]/8 flex items-center justify-center shrink-0"><Bot size={18} className="text-[#002FA7]" /></div>
+                            <div className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${a.agent_type === "external" ? "bg-orange-50" : "bg-[#002FA7]/8"}`}>
+                              {a.agent_type === "external"
+                                ? <ExternalLink size={16} className="text-orange-500" />
+                                : <Bot size={18} className="text-[#002FA7]" />}
+                            </div>
                             <div><p className="font-medium text-gray-800">{a.name}</p><code className="text-[10px] text-gray-400 font-mono">{a.agent_code}</code></div>
                           </div>
                         </td>
                         <td className="px-5 py-4"><Badge variant="muted">{a.categories?.name ?? "未分类"}</Badge></td>
-                        <td className="px-5 py-4"><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${platformColor[a.platform] ?? "bg-gray-100 text-gray-600"}`}>{a.platform}</span></td>
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {a.agent_type === "external" ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-700 flex items-center gap-1"><ExternalLink size={10} />外链</span>
+                            ) : (
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${platformColor[a.platform] ?? "bg-gray-100 text-gray-600"}`}>{a.platform}</span>
+                            )}
+                          </div>
+                        </td>
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-1">
                             <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Edit2 size={14} /></button>
-                            <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置"><Key size={14} /></button>
+                            {a.agent_type !== "external" && (
+                              <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置"><Key size={14} /></button>
+                            )}
                             <button onClick={() => openAssign(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="企业分配"><Settings2 size={14} /></button>
+                            <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="分类展示配置"><LayoutGrid size={14} /></button>
                           </div>
                         </td>
                       </tr>
@@ -192,7 +238,25 @@ export default function AgentsAdminPage() {
               <Input label="名称" placeholder="如 营销文案助手" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">简介</label><textarea rows={3} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="简短描述功能…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">分类</label><select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">不分类</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-              <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">对接平台</label><select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>{PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-gray-700">智能体类型</label>
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="agentType" value="chat" checked={form.agentType === "chat"} onChange={() => setForm({ ...form, agentType: "chat" })} className="accent-[#002FA7]" />
+                    <MessageSquare size={14} className="text-[#002FA7]" /><span className="text-sm">站内对话型</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="agentType" value="external" checked={form.agentType === "external"} onChange={() => setForm({ ...form, agentType: "external" })} className="accent-[#002FA7]" />
+                    <ExternalLink size={14} className="text-orange-500" /><span className="text-sm">外链跳转型</span>
+                  </label>
+                </div>
+              </div>
+              {form.agentType === "external" && (
+                <Input label="跳转链接 URL" placeholder="https://example.com/tool" value={form.externalUrl} onChange={(e) => setForm({ ...form, externalUrl: e.target.value })} />
+              )}
+              {form.agentType === "chat" && (
+                <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">对接平台</label><select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>{PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
+              )}
               {formError && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{formError}</div>}
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowAgentModal(false)}>取消</Button><Button onClick={handleSaveAgent} loading={saving}>{editing ? "保存" : "创建"}</Button></div>
@@ -215,6 +279,65 @@ export default function AgentsAdminPage() {
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">模型参数（JSON）</label><textarea rows={4} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none" value={apiForm.modelParams} onChange={(e) => setApiForm({ ...apiForm, modelParams: e.target.value })} /></div>
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowApiModal(null)}>取消</Button><Button onClick={handleSaveApi} loading={saving}>保存配置</Button></div>
+          </div>
+        </div>
+      )}
+
+      {/* Category Display Modal */}
+      {showDisplayModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+            <h2 className="font-semibold text-gray-900 mb-1">分类展示配置</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              {showDisplayModal.name} — 控制此智能体在各分类"智能体展示"中的可见性
+            </p>
+            {displayLoading ? (
+              <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-12 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
+            ) : displayConfig.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">暂无分类</p>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {displayConfig.map((cfg) => (
+                  <div key={cfg.category_id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-[12px]">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800">{cfg.category_name}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {cfg.is_auto && <span className="mr-2 text-blue-500">自动同步（工作流）</span>}
+                        {cfg.is_manual && <span className="mr-2 text-green-600">手动添加</span>}
+                        {cfg.is_hidden && <span className="text-red-500">已隐藏</span>}
+                        {!cfg.is_auto && !cfg.is_manual && !cfg.is_hidden && <span className="text-gray-300">未展示</span>}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {/* 手动添加（仅对非自动同步的有意义） */}
+                      <button
+                        onClick={() => toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isManual", cfg.is_manual)}
+                        title={cfg.is_manual ? "取消手动添加" : "手动添加到此分类展示"}
+                        className={`p-1.5 rounded-[8px] transition-colors ${cfg.is_manual ? "bg-green-100 text-green-600" : "hover:bg-gray-200 text-gray-400"}`}
+                      >
+                        <PlusCircle size={14} />
+                      </button>
+                      {/* 隐藏（对自动同步和手动添加的都有效） */}
+                      <button
+                        onClick={() => toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isHidden", cfg.is_hidden)}
+                        title={cfg.is_hidden ? "取消隐藏" : "在此分类中隐藏"}
+                        className={`p-1.5 rounded-[8px] transition-colors ${cfg.is_hidden ? "bg-red-100 text-red-500" : "hover:bg-gray-200 text-gray-400"}`}
+                      >
+                        {cfg.is_hidden ? <Eye size={14} /> : <EyeOff size={14} />}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 p-3 bg-[#f0f4ff] rounded-[10px]">
+              <p className="text-xs text-[#002FA7]">
+                <strong>说明：</strong>自动同步来自工作流步骤绑定；手动添加可补充未在工作流中的智能体；隐藏优先级最高，会覆盖自动同步。
+              </p>
+            </div>
+            <div className="flex justify-end mt-4">
+              <Button variant="ghost" onClick={() => setShowDisplayModal(null)}>关闭</Button>
+            </div>
           </div>
         </div>
       )}

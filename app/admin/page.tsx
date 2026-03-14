@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,11 @@ export default function AdminLoginPage() {
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台" });
+
+  useEffect(() => {
+    fetch("/api/settings").then((r) => r.json()).then((d) => setSiteSettings(d)).catch(() => {});
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -45,12 +50,16 @@ export default function AdminLoginPage() {
       <div className="w-full max-w-sm page-enter">
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-2 mb-3">
-            <div className="w-10 h-10 rounded-[12px] bg-[#002FA7] flex items-center justify-center">
-              <span className="text-white text-sm font-bold">AI</span>
+            <div className="w-10 h-10 rounded-[12px] overflow-hidden flex items-center justify-center bg-[#002FA7]">
+              {siteSettings.logo_url ? (
+                <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" />
+              ) : (
+                <span className="text-white text-sm font-bold">AI</span>
+              )}
             </div>
           </div>
           <h1 className="text-xl font-bold text-gray-900">管理后台</h1>
-          <p className="text-sm text-gray-400 mt-1">前哨科技 · AI 智能体平台</p>
+          <p className="text-sm text-gray-400 mt-1">前哨科技 · {siteSettings.platform_name || "AI 智能体平台"}</p>
         </div>
 
         <div className="bg-white rounded-[20px] shadow-[0_8px_40px_rgba(0,47,167,0.08)] p-8">
@@ -71,7 +80,7 @@ export default function AdminLoginPage() {
           </form>
         </div>
 
-        <p className="text-center text-xs text-gray-400 mt-6">© 2024 前哨科技（QianShao.AI）</p>
+        <p className="text-center text-xs text-gray-400 mt-6">© 2026 前哨科技（QianShao.AI）</p>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  serverExternalPackages: ["pg", "pg-native"],
   outputFileTracingIncludes: {
     "/api/upload": [
       "./node_modules/pdf-parse/**/*",
