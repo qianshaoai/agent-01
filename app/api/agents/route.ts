@@ -101,10 +101,25 @@ export async function GET(req: NextRequest) {
   );
 
   // 4d. 最终集合 = (自动同步 ∪ 手动添加) - 手动隐藏 ∩ 用户可访问
+  // 注：工作流步骤中绑定的外链型智能体（external）不受租户权限表限制，
+  //     管理员将其加入工作流步骤即视为对该分类用户授权访问。
   const accessibleSet = new Set(accessibleIds);
+
+  // 查询 autoAgentIds 中属于外链类型的智能体（仅需 id）
+  let externalAutoSet = new Set<string>();
+  if (autoAgentIds.length > 0) {
+    const { data: extAgents } = await db
+      .from("agents")
+      .select("id")
+      .in("id", autoAgentIds)
+      .eq("agent_type", "external")
+      .eq("enabled", true);
+    externalAutoSet = new Set((extAgents ?? []).map((a: { id: string }) => a.id));
+  }
+
   const finalIds = [
     ...new Set([...autoAgentIds, ...manualIds]),
-  ].filter((id) => !hiddenSet.has(id) && accessibleSet.has(id));
+  ].filter((id) => !hiddenSet.has(id) && (accessibleSet.has(id) || externalAutoSet.has(id)));
 
   if (finalIds.length === 0) {
     return NextResponse.json({ categories: categories ?? [], agents: [] });
