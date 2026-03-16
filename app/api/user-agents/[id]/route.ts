@@ -37,6 +37,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.apiUrl !== undefined) updates.api_url = body.apiUrl;
   if (body.apiKey) updates.api_key_enc = body.apiKey;
   if (body.externalUrl !== undefined) updates.external_url = body.externalUrl;
+  if (body.modelParams !== undefined) updates.model_params = body.modelParams;
 
   const { error } = await db.from("user_agents").update(updates).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

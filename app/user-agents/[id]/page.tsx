@@ -15,6 +15,7 @@ export default function UserAgentChatPage({ params }: { params: Promise<{ id: st
   const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const platformConvIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     fetch(`/api/user-agents/${id}`)
@@ -54,6 +55,7 @@ export default function UserAgentChatPage({ params }: { params: Promise<{ id: st
         body: JSON.stringify({
           message: text,
           history: messages.slice(-20),
+          clientPlatformConvId: platformConvIdRef.current,
         }),
       });
 
@@ -78,6 +80,9 @@ export default function UserAgentChatPage({ params }: { params: Promise<{ id: st
           try {
             const payload = JSON.parse(line.slice(6));
             if (payload.error) throw new Error(payload.error);
+            if (payload.platformConvId) {
+              platformConvIdRef.current = payload.platformConvId;
+            }
             if (payload.text) {
               setMessages((prev) => {
                 const last = prev[prev.length - 1];

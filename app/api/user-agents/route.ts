@@ -8,12 +8,16 @@ export async function GET() {
 
   const { data } = await db
     .from("user_agents")
-    .select("id, name, description, agent_type, platform, api_url, external_url, enabled, created_at")
+    .select("id, name, description, agent_type, platform, api_url, external_url, model_params, api_key_enc, enabled, created_at")
     .eq("user_id", user.userId)
     .eq("enabled", true)
     .order("created_at", { ascending: false });
 
-  return NextResponse.json(data ?? []);
+  const masked = (data ?? []).map(({ api_key_enc, ...rest }) => ({
+    ...rest,
+    has_api_key: !!api_key_enc,
+  }));
+  return NextResponse.json(masked);
 }
 
 export async function POST(req: NextRequest) {
@@ -21,7 +25,7 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
   const body = await req.json();
-  const { name, description, agentType, platform, apiUrl, apiKey, externalUrl } = body;
+  const { name, description, agentType, platform, apiUrl, apiKey, externalUrl, modelParams } = body;
 
   if (!name?.trim()) return NextResponse.json({ error: "请填写名称" }, { status: 400 });
   if (agentType === "external" && !externalUrl?.trim()) {
@@ -37,7 +41,8 @@ export async function POST(req: NextRequest) {
     api_url: apiUrl ?? "",
     api_key_enc: apiKey ?? "",
     external_url: externalUrl ?? "",
-  }).select("id, name, description, agent_type, platform, api_url, external_url, enabled, created_at").single();
+    model_params: modelParams ?? {},
+  }).select("id, name, description, agent_type, platform, api_url, external_url, model_params, enabled, created_at").single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data, { status: 201 });

@@ -15,6 +15,7 @@ export async function GET() {
   return NextResponse.json({
     logo_url: map.logo_url ?? "",
     platform_name: map.platform_name ?? "前哨AI人机协同工作舱",
+    help_doc_url: map.help_doc_url ?? "",
   });
 }
 
@@ -34,6 +35,13 @@ export async function PATCH(req: NextRequest) {
   if (typeof body.logo_url === "string") {
     await db.from("system_settings").upsert(
       { key: "logo_url", value: body.logo_url, updated_at: now },
+      { onConflict: "key" }
+    );
+  }
+
+  if (typeof body.help_doc_url === "string") {
+    await db.from("system_settings").upsert(
+      { key: "help_doc_url", value: body.help_doc_url, updated_at: now },
       { onConflict: "key" }
     );
   }

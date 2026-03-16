@@ -11,7 +11,7 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
   const { id } = await params;
-  const { message, history = [] } = await req.json();
+  const { message, history = [], clientPlatformConvId } = await req.json();
 
   if (!message?.trim()) {
     return NextResponse.json({ error: "消息不能为空" }, { status: 400 });
@@ -36,25 +36,38 @@ export async function POST(
     { role: "user", content: message },
   ];
 
+  // 优先用客户端内存中的 convId（更可靠），其次从 DB 读取（跨会话持久化）
+  const platformConvId: string | null =
+    (clientPlatformConvId as string) || (agent.platform_conv_id as string) || null;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
       try {
+        let newPlatformConvId: string | null = null;
         const gen = streamChat(messages, {
           platform: agent.platform ?? "openai",
           apiEndpoint: agent.api_url ?? "",
           apiKey: agent.api_key_enc ?? "",
           modelParams: (agent.model_params ?? {}) as Record<string, unknown>,
           agentCode: agent.id,
-          platformConvId: null,
-          onPlatformConvId: () => {},
+          platformConvId,
+          onPlatformConvId: (cid) => { newPlatformConvId = cid; },
         });
 
         for await (const chunk of gen) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`));
         }
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
+
+        // 持久化 platform_conv_id（供 qingyan 等需要会话 ID 的平台维护上下文）
+        // 持久化到 DB（跨会话备份，失败不影响当前会话）
+        if (newPlatformConvId && newPlatformConvId !== (agent.platform_conv_id as string)) {
+          db.from("user_agents").update({ platform_conv_id: newPlatformConvId }).eq("id", id)
+            .then(({ error }) => { if (error) console.error("[user-agents/chat] DB update error:", error); });
+        }
+
+        // 把 conversation_id 返回给客户端，客户端内存中记住，下次请求带上
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, platformConvId: newPlatformConvId ?? platformConvId })}\n\n`));
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : "AI 调用失败";
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errMsg })}\n\n`));

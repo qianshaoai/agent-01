@@ -74,16 +74,20 @@ async function* cozeStream(
   }
 
   yield* parseSSEStream(res, (data, event) => {
+    let obj: Record<string, unknown>;
     try {
-      const obj = JSON.parse(data);
-      const isMessageDelta =
-        event === "conversation.message.delta" ||
-        obj.event === "conversation.message.delta";
-      if (isMessageDelta) {
-        // v3: content 直接在 obj，或嵌套在 obj.data
-        return obj.content ?? obj.data?.content ?? null;
-      }
-    } catch {}
+      obj = JSON.parse(data);
+    } catch {
+      return null;
+    }
+    const evtType = event || (obj.event as string);
+    if (evtType === "conversation.chat.failed") {
+      const errMsg = (obj.last_error as { msg?: string } | undefined)?.msg ?? JSON.stringify(obj);
+      throw new Error(`Coze 错误: ${errMsg}`);
+    }
+    if (evtType === "conversation.message.delta") {
+      return (obj.content as string) ?? (obj.data as { content?: string } | undefined)?.content ?? null;
+    }
     return null;
   });
 }

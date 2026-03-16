@@ -26,6 +26,7 @@ import {
   Trash2,
   Edit2,
   Check,
+  BookOpen,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
@@ -64,8 +65,10 @@ type UserAgentItem = {
   platform: string;
   api_url: string;
   external_url: string;
+  model_params?: Record<string, unknown>;
+  has_api_key?: boolean;
 };
-const EMPTY_UA_FORM = { name: "", description: "", agentType: "chat" as "chat" | "external", platform: "openai", apiUrl: "", apiKey: "", externalUrl: "" };
+const EMPTY_UA_FORM = { name: "", description: "", agentType: "chat" as "chat" | "external", platform: "openai", apiUrl: "", apiKey: "", externalUrl: "", modelParams: "{}" };
 
 type WorkflowStep = {
   id: string;
@@ -142,7 +145,7 @@ export default function HomePage() {
     return getDismissed();
   });
   const [loading, setLoading] = useState(true);
-  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台" });
+  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台", help_doc_url: "" });
 
   // ── 用户自定义分组 ──────────────────────────────────────────────
   const [catGroups, setCatGroups] = useState<CatGroup[]>([]);
@@ -337,7 +340,7 @@ export default function HomePage() {
   function openAddUA() { setEditingUA(null); setUaForm(EMPTY_UA_FORM); setUaError(""); }
   function openEditUA(a: UserAgentItem) {
     setEditingUA(a);
-    setUaForm({ name: a.name, description: a.description, agentType: a.agent_type, platform: a.platform, apiUrl: a.api_url, apiKey: "", externalUrl: a.external_url });
+    setUaForm({ name: a.name, description: a.description, agentType: a.agent_type, platform: a.platform, apiUrl: a.api_url, apiKey: "", externalUrl: a.external_url, modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : "{}" });
     setUaError("");
   }
 
@@ -345,17 +348,24 @@ export default function HomePage() {
     setUaError("");
     if (!uaForm.name.trim()) { setUaError("请填写名称"); return; }
     if (uaForm.agentType === "external" && !uaForm.externalUrl.trim()) { setUaError("请填写跳转链接"); return; }
+    let modelParams: Record<string, unknown> = {};
+    if (uaForm.modelParams.trim()) {
+      try { modelParams = JSON.parse(uaForm.modelParams); } catch {
+        setUaError("模型参数不是合法的 JSON，请检查格式");
+        return;
+      }
+    }
     setUaSaving(true);
     try {
-      const body = { name: uaForm.name, description: uaForm.description, agentType: uaForm.agentType, platform: uaForm.platform, apiUrl: uaForm.apiUrl, apiKey: uaForm.apiKey || undefined, externalUrl: uaForm.externalUrl };
+      const body = { name: uaForm.name, description: uaForm.description, agentType: uaForm.agentType, platform: uaForm.platform, apiUrl: uaForm.apiUrl, apiKey: uaForm.apiKey || undefined, externalUrl: uaForm.externalUrl, modelParams };
       const res = editingUA
         ? await fetch(`/api/user-agents/${editingUA.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
         : await fetch("/api/user-agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) { setUaError(data.error ?? "保存失败"); return; }
+      await refreshUserAgents();
       setEditingUA(null);
       setUaForm(EMPTY_UA_FORM);
-      await refreshUserAgents();
     } finally { setUaSaving(false); }
   }
 
@@ -411,6 +421,11 @@ export default function HomePage() {
               </div>
             )}
 
+            {siteSettings.help_doc_url && (
+              <a href={siteSettings.help_doc_url} target="_blank" rel="noopener noreferrer" className="p-2 rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="帮助文档">
+                <BookOpen size={18} />
+              </a>
+            )}
             <button onClick={() => setContactOpen(true)} className="p-2 rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="联系我们">
               <QrCode size={18} />
             </button>
@@ -827,8 +842,20 @@ export default function HomePage() {
                         <input className="h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" placeholder="https://api.openai.com/v1/chat/completions" value={uaForm.apiUrl} onChange={(e) => setUaForm({ ...uaForm, apiUrl: e.target.value })} />
                       </div>
                       <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-medium text-gray-600">API Key {editingUA && <span className="font-normal text-gray-400">（留空则保持不变）</span>}</label>
-                        <input type="password" className="h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" placeholder={editingUA ? "输入新 Key 覆盖" : "sk-..."} value={uaForm.apiKey} onChange={(e) => setUaForm({ ...uaForm, apiKey: e.target.value })} />
+                        <label className="text-xs font-medium text-gray-600">
+                          API Key
+                          {editingUA && editingUA.has_api_key && !uaForm.apiKey && (
+                            <span className="ml-1.5 font-normal text-green-600">✓ 已配置，留空保持不变</span>
+                          )}
+                          {editingUA && !editingUA.has_api_key && (
+                            <span className="ml-1.5 font-normal text-amber-500">未配置</span>
+                          )}
+                        </label>
+                        <input type="password" className="h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" placeholder={editingUA ? "输入新 Key 覆盖，留空保持不变" : "sk-..."} value={uaForm.apiKey} onChange={(e) => setUaForm({ ...uaForm, apiKey: e.target.value })} />
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-medium text-gray-600">模型参数（JSON）</label>
+                        <textarea rows={3} className="w-full border border-gray-200 rounded-[10px] px-3 py-2 text-sm font-mono focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" value={uaForm.modelParams} onChange={(e) => setUaForm({ ...uaForm, modelParams: e.target.value })} />
                       </div>
                     </>
                   )}

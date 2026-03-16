@@ -2,13 +2,15 @@
 import { useState, useEffect, useRef } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
-import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon } from "lucide-react";
+import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon, BookOpen } from "lucide-react";
 
-type Settings = { logo_url: string; platform_name: string };
+type Settings = { logo_url: string; platform_name: string; help_doc_url: string };
 
 export default function AdminSettingsPage() {
-  const [settings, setSettings] = useState<Settings>({ logo_url: "", platform_name: "" });
+  const [settings, setSettings] = useState<Settings>({ logo_url: "", platform_name: "", help_doc_url: "" });
   const [name, setName] = useState("");
+  const [helpDocUrl, setHelpDocUrl] = useState("");
+  const [helpDocSaving, setHelpDocSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -20,6 +22,7 @@ export default function AdminSettingsPage() {
       .then((d) => {
         setSettings(d);
         setName(d.platform_name ?? "");
+        setHelpDocUrl(d.help_doc_url ?? "");
       })
       .catch(() => {});
   }, []);
@@ -181,6 +184,51 @@ export default function AdminSettingsPage() {
             </Button>
           </div>
           {settings.platform_name && name !== settings.platform_name && (
+            <p className="mt-2 text-xs text-amber-600">有未保存的修改</p>
+          )}
+        </div>
+
+        {/* 帮助文档 */}
+        <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
+          <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
+            <BookOpen size={15} className="text-[#002FA7]" /> 帮助文档链接
+          </h2>
+          <p className="text-xs text-gray-500 mb-5">配置后用户端顶部会显示「帮助文档」按钮，点击在新标签页打开。支持飞书文档、语雀等任意 URL，留空则不显示按钮。</p>
+
+          <div className="flex gap-3">
+            <input
+              type="url"
+              value={helpDocUrl}
+              onChange={(e) => setHelpDocUrl(e.target.value)}
+              placeholder="https://xxx.feishu.cn/docx/..."
+              className="flex-1 h-10 bg-white border border-gray-200 rounded-[10px] px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+            />
+            <Button
+              size="sm"
+              loading={helpDocSaving}
+              disabled={helpDocUrl === settings.help_doc_url}
+              onClick={async () => {
+                setHelpDocSaving(true);
+                try {
+                  const res = await fetch("/api/admin/settings", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ help_doc_url: helpDocUrl }),
+                  });
+                  if (!res.ok) throw new Error();
+                  setSettings((s) => ({ ...s, help_doc_url: helpDocUrl }));
+                  flash("ok", "帮助文档链接已保存");
+                } catch {
+                  flash("err", "保存失败，请重试");
+                } finally {
+                  setHelpDocSaving(false);
+                }
+              }}
+            >
+              保存
+            </Button>
+          </div>
+          {helpDocUrl !== settings.help_doc_url && (
             <p className="mt-2 text-xs text-amber-600">有未保存的修改</p>
           )}
         </div>
