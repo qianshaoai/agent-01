@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'aiq-app',
       script: 'server.js',
-      cwd: '/www/wwwroot/aiq.qianshao.ai',
+      cwd: '/www/wwwroot/o.qianshao.ai',
       instances: 1,
       exec_mode: 'fork',
       env: {
@@ -13,8 +13,8 @@ module.exports = {
       },
       env_file: '.env.local',
       // 日志路径
-      out_file: '/www/wwwroot/aiq.qianshao.ai/logs/out.log',
-      error_file: '/www/wwwroot/aiq.qianshao.ai/logs/error.log',
+      out_file: '/www/wwwroot/o.qianshao.ai/logs/out.log',
+      error_file: '/www/wwwroot/o.qianshao.ai/logs/error.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       // 崩溃自动重启
       autorestart: true,
