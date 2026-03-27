@@ -4,7 +4,7 @@ import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2 } from "lucide-react";
 
 type Agent = {
   id: string;
@@ -57,6 +57,8 @@ export default function AgentsAdminPage() {
   const [newCatName, setNewCatName] = useState("");
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [editingCatName, setEditingCatName] = useState("");
+  const [showCatAssignModal, setShowCatAssignModal] = useState<Category | null>(null);
+  const [selectedCatTenants, setSelectedCatTenants] = useState<string[]>([]);
 
   async function load() {
     setLoading(true);
@@ -133,6 +135,19 @@ export default function AgentsAdminPage() {
     setSaving(true);
     await fetch(`/api/admin/agents/${showAssignModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tenantCodes: selectedTenants }) });
     setSaving(false); setShowAssignModal(null); load();
+  }
+
+  async function openCatAssign(cat: Category) {
+    setShowCatAssignModal(cat);
+    const data = await fetch(`/api/admin/categories/${cat.id}`).then((r) => r.json()).catch(() => ({}));
+    setSelectedCatTenants(data.tenant_codes ?? []);
+  }
+
+  async function handleCatAssign() {
+    if (!showCatAssignModal) return;
+    setSaving(true);
+    await fetch(`/api/admin/categories/${showCatAssignModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tenantCodes: selectedCatTenants }) });
+    setSaving(false); setShowCatAssignModal(null);
   }
 
   async function addCategory() {
@@ -257,7 +272,10 @@ export default function AgentsAdminPage() {
                   ) : (
                     <>
                       <div className="flex items-center gap-2"><Tag size={15} className="text-[#002FA7]" /><span className="font-medium text-gray-800">{cat.name}</span></div>
-                      <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => openCatAssign(cat)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="企业分配"><Building2 size={13} /></button>
+                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
+                      </div>
                     </>
                   )}
                 </div>
@@ -398,6 +416,26 @@ export default function AgentsAdminPage() {
               {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无企业，请先新增</p>}
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowAssignModal(null)}>取消</Button><Button onClick={handleAssign} loading={saving}>保存分配</Button></div>
+          </div>
+        </div>
+      )}
+      {/* Category Assign Tenants Modal */}
+      {showCatAssignModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+            <h2 className="font-semibold text-gray-900 mb-1">企业分配</h2>
+            <p className="text-sm text-gray-500 mb-4">{showCatAssignModal.name} — 选择可以看到此分类的企业</p>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {tenants.map((t) => (
+                <label key={t.code} className="flex items-center gap-3 p-3 bg-gray-50 rounded-[10px] cursor-pointer hover:bg-gray-100 transition-colors">
+                  <input type="checkbox" className="accent-[#002FA7] w-4 h-4" checked={selectedCatTenants.includes(t.code)} onChange={(e) => setSelectedCatTenants((prev) => e.target.checked ? [...prev, t.code] : prev.filter((c) => c !== t.code))} />
+                  <div><p className="text-sm font-medium text-gray-800">{t.name}</p><code className="text-xs text-gray-400 font-mono">{t.code}</code></div>
+                  {selectedCatTenants.includes(t.code) && <CheckCircle2 size={15} className="text-[#002FA7] ml-auto" />}
+                </label>
+              ))}
+              {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无企业，请先新增</p>}
+            </div>
+            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowCatAssignModal(null)}>取消</Button><Button onClick={handleCatAssign} loading={saving}>保存分配</Button></div>
           </div>
         </div>
       )}
