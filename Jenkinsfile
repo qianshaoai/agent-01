@@ -86,6 +86,7 @@ VOLCENGINE_API_KEY=${env.VOLCENGINE_API_KEY}
                     sh """
                         ssh -o StrictHostKeyChecking=no root@host.docker.internal '
                             cd ${DEPLOY_DIR}
+                            pm2 delete aiq-app > /dev/null 2>&1 || true
                             if pm2 describe ${APP_NAME} > /dev/null 2>&1; then
                                 pm2 reload ecosystem.config.js --update-env
                             else

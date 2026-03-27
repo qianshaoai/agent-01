@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'aiq-app',
+      name: 'o-app',
       script: 'server.js',
       cwd: '/www/wwwroot/o.qianshao.ai',
       instances: 1,
