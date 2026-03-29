@@ -16,6 +16,7 @@ import {
   ToggleLeft,
   ToggleRight,
   GripVertical,
+  Copy,
 } from "lucide-react";
 
 type Agent = { id: string; agent_code: string; name: string; agent_type: string; external_url: string };
@@ -111,6 +112,12 @@ export default function WorkflowsAdminPage() {
 
   async function toggleWfEnabled(wf: Workflow) {
     await fetch(`/api/admin/workflows/${wf.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !wf.enabled }) });
+    load();
+  }
+
+  async function duplicateWf(wf: Workflow) {
+    if (!confirm(`确认复制工作流「${wf.name}」？将连同所有步骤一起复制。`)) return;
+    await fetch(`/api/admin/workflows/${wf.id}/duplicate`, { method: "POST" });
     load();
   }
 
@@ -217,6 +224,7 @@ export default function WorkflowsAdminPage() {
                       <button onClick={() => toggleWfEnabled(wf)} className={`p-1.5 rounded-[8px] transition-colors ${wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={wf.enabled ? "停用" : "启用"}>
                         {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                       </button>
+                      <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流"><Copy size={14} /></button>
                       <button onClick={() => openEditWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Edit2 size={14} /></button>
                       <button onClick={() => deleteWf(wf)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={14} /></button>
                     </div>
