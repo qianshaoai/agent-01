@@ -15,8 +15,9 @@ export async function PATCH(
   if (body.stepOrder !== undefined) updates.step_order = body.stepOrder;
   if (body.title !== undefined) updates.title = body.title;
   if (body.description !== undefined) updates.description = body.description;
-  if (body.execType !== undefined) updates.exec_type = body.execType;
-  if (body.agentId !== undefined) updates.agent_id = body.agentId || null;
+  const validExecTypes = ["agent", "manual", "review", "external"];
+  if (body.execType !== undefined) updates.exec_type = validExecTypes.includes(body.execType) ? body.execType : "agent";
+  if (body.agentId !== undefined) updates.agent_id = updates.exec_type === "agent" ? (body.agentId || null) : null;
   if (body.buttonText !== undefined) updates.button_text = body.buttonText;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
 

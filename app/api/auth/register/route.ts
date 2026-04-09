@@ -5,6 +5,7 @@ import { signToken, buildSetCookieHeader } from "@/lib/auth";
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 const PHONE_RE = /^\d{7,15}$/;
+const TENANT_CODE_RE = /^[A-Za-z]{4,8}$/;
 
 export async function POST(req: NextRequest) {
   try {
@@ -31,15 +32,6 @@ export async function POST(req: NextRequest) {
     const normalizedPhone = phone.trim();
     const normalizedReal = realName.trim();
 
-    // ── 用户名唯一性 ──────────────────────────────────────────
-    const { count: unameCount } = await db
-      .from("users")
-      .select("id", { count: "exact", head: true })
-      .eq("username", normalizedUsername);
-    if (unameCount && unameCount > 0) {
-      return NextResponse.json({ error: "该用户名已被注册，请换一个" }, { status: 409 });
-    }
-
     // ── 组织用户：校验组织码 ──────────────────────────────────
     let tenantName = "个人空间";
     let normalizedCode = "PERSONAL";
@@ -49,6 +41,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "组织用户必须填写组织码" }, { status: 400 });
       }
       normalizedCode = tenantCode.trim().toUpperCase();
+
+      if (!TENANT_CODE_RE.test(tenantCode.trim())) {
+        return NextResponse.json({ error: "组织码只能为 4~8 位英文字母" }, { status: 400 });
+      }
 
       const { data: tenant } = await db
         .from("tenants")
@@ -65,7 +61,6 @@ export async function POST(req: NextRequest) {
       }
       tenantName = tenant.name;
 
-      // 同一组织内手机号唯一
       const { count: phoneCount } = await db
         .from("users")
         .select("id", { count: "exact", head: true })
@@ -75,7 +70,6 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "该手机号在此组织下已注册" }, { status: 409 });
       }
     } else {
-      // 个人用户：手机号在个人空间唯一
       const { count: phoneCount } = await db
         .from("users")
         .select("id", { count: "exact", head: true })
@@ -86,22 +80,32 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ── 用户名唯一性校验 ──────────────────────────────────────
+    const { count: unameCount } = await db
+      .from("users")
+      .select("id", { count: "exact", head: true })
+      .eq("username", normalizedUsername);
+    if (unameCount && unameCount > 0) {
+      return NextResponse.json({ error: "该用户名已被使用" }, { status: 409 });
+    }
+
     // ── 创建用户 ──────────────────────────────────────────────
     const pwd_hash = await bcrypt.hash(password, 12);
     const { data: newUser, error } = await db
       .from("users")
       .insert({
         phone: normalizedPhone,
+        nickname: `${normalizedReal} (@${normalizedUsername})`,
         username: normalizedUsername,
         real_name: normalizedReal,
-        tenant_code: normalizedCode,
-        pwd_hash,
         user_type: userType,
         role: "user",
+        tenant_code: normalizedCode,
+        pwd_hash,
         first_login: false,
         last_login_at: new Date().toISOString(),
       })
-      .select()
+      .select("id, phone")
       .single();
 
     if (error || !newUser) {

@@ -22,6 +22,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "请填写所有必填字段" }, { status: 400 });
   }
 
+  if (!/^[A-Za-z]{4,8}$/.test(code.trim())) {
+    return NextResponse.json({ error: "组织码只能为 4~8 位英文字母" }, { status: 400 });
+  }
+
   const normalizedCode = code.trim().toUpperCase();
   const pwdHash = await bcrypt.hash(initialPwd, 12);
 

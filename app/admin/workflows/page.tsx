@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Plus,
+  PlusCircle,
   Edit2,
   Trash2,
   GitBranch,
@@ -27,7 +28,7 @@ type WorkflowStep = {
   step_order: number;
   title: string;
   description: string;
-  exec_type: "agent" | "manual";
+  exec_type: "agent" | "manual" | "review" | "external";
   agent_id: string | null;
   button_text: string;
   enabled: boolean;
@@ -46,7 +47,7 @@ type Workflow = {
 };
 
 const EMPTY_WF = { name: "", description: "", category: "", sortOrder: 0, enabled: true, visibleTo: "all", categoryIds: [] as string[] };
-const EMPTY_STEP = { title: "", description: "", execType: "agent" as "agent" | "manual", agentId: "", buttonText: "进入智能体", enabled: true, stepOrder: 1 };
+const EMPTY_STEP = { title: "", description: "", execType: "agent" as "agent" | "manual" | "review" | "external", agentId: "", buttonText: "进入智能体", enabled: true, stepOrder: 1 };
 
 export default function WorkflowsAdminPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
@@ -62,8 +63,8 @@ export default function WorkflowsAdminPage() {
   const [wfError, setWfError] = useState("");
 
   // Step modal
-  const [showStepModal, setShowStepModal] = useState<{ workflowId: string; step?: WorkflowStep } | null>(null);
-  const [stepForm, setStepForm] = useState<{ title: string; description: string; execType: "agent" | "manual"; agentId: string; buttonText: string; enabled: boolean; stepOrder: number }>(EMPTY_STEP);
+  const [showStepModal, setShowStepModal] = useState<{ workflowId: string; step?: WorkflowStep; insertAfterOrder?: number } | null>(null);
+  const [stepForm, setStepForm] = useState<{ title: string; description: string; execType: "agent" | "manual" | "review" | "external"; agentId: string; buttonText: string; enabled: boolean; stepOrder: number }>(EMPTY_STEP);
   const [stepError, setStepError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -133,10 +134,54 @@ export default function WorkflowsAdminPage() {
     setStepForm({ ...EMPTY_STEP, stepOrder: currentStepCount + 1 });
     setStepError("");
   }
+  // 在指定位置插入（insertAfterOrder: 插入在第几步之后，0=最前面）
+  function openInsertStep(workflowId: string, insertAfterOrder: number) {
+    setShowStepModal({ workflowId, insertAfterOrder });
+    setStepForm({ ...EMPTY_STEP, stepOrder: insertAfterOrder + 1 });
+    setStepError("");
+  }
   function openEditStep(workflowId: string, step: WorkflowStep) {
     setShowStepModal({ workflowId, step });
     setStepForm({ title: step.title, description: step.description, execType: step.exec_type, agentId: step.agent_id ?? "", buttonText: step.button_text, enabled: step.enabled, stepOrder: step.step_order });
     setStepError("");
+  }
+
+  // 保存后对工作流所有步骤重新顺序编号（1, 2, 3...）
+  async function renumberSteps(workflowId: string, newStepId?: string) {
+    const wf = workflows.find(w => w.id === workflowId);
+    const steps = [...(wf?.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
+    // 如果是插入，新步骤已用 insertAfterOrder+1，这里按当前顺序重排
+    // 先 reload 拿最新列表再重排
+    const res = await fetch(`/api/admin/workflows`).then(r => r.json()).catch(() => []);
+    const fresh = (Array.isArray(res) ? res : []).find((w: { id: string }) => w.id === workflowId);
+    const freshSteps: WorkflowStep[] = fresh?.workflow_steps
+      ? [...fresh.workflow_steps].sort((a: WorkflowStep, b: WorkflowStep) => a.step_order - b.step_order)
+      : steps;
+    // 如果有 insertAfterOrder，把新步骤放到正确位置后重排
+    const insertAfterOrder = showStepModal?.insertAfterOrder;
+    if (insertAfterOrder !== undefined && newStepId) {
+      const newStep = freshSteps.find(s => s.id === newStepId);
+      if (newStep) {
+        const others = freshSteps.filter(s => s.id !== newStepId);
+        const reordered = [
+          ...others.slice(0, insertAfterOrder),
+          newStep,
+          ...others.slice(insertAfterOrder),
+        ];
+        await Promise.all(reordered.map((s, i) =>
+          s.step_order !== i + 1
+            ? fetch(`/api/admin/workflow-steps/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stepOrder: i + 1 }) })
+            : Promise.resolve()
+        ));
+        return;
+      }
+    }
+    // 普通重排：按当前顺序重新编 1,2,3
+    await Promise.all(freshSteps.map((s, i) =>
+      s.step_order !== i + 1
+        ? fetch(`/api/admin/workflow-steps/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stepOrder: i + 1 }) })
+        : Promise.resolve()
+    ));
   }
 
   async function handleSaveStep() {
@@ -145,25 +190,31 @@ export default function WorkflowsAdminPage() {
     if (!showStepModal) return;
     setSaving(true);
     try {
-      // manual 类型不绑定智能体，清空 agent_id
       const body = { stepOrder: stepForm.stepOrder, title: stepForm.title, description: stepForm.description, execType: stepForm.execType, agentId: stepForm.execType === "agent" ? (stepForm.agentId || null) : null, buttonText: stepForm.buttonText, enabled: stepForm.enabled };
       const res = showStepModal.step
         ? await fetch(`/api/admin/workflow-steps/${showStepModal.step.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
         : await fetch(`/api/admin/workflows/${showStepModal.workflowId}/steps`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) { setStepError(data.error ?? "保存失败"); return; }
-      // 保存后保持工作流展开状态
       const parentId = showStepModal.workflowId;
+      const newStepId = !showStepModal.step ? data.id : undefined;
       setShowStepModal(null);
       setExpandedId(parentId);
-      load();
+      await load();
+      if (newStepId || showStepModal?.insertAfterOrder !== undefined) {
+        await renumberSteps(parentId, newStepId);
+        await load();
+      }
     } finally { setSaving(false); }
   }
 
   async function deleteStep(step: WorkflowStep) {
     if (!confirm(`确认删除步骤「${step.title}」？`)) return;
+    const wf = workflows.find(w => w.workflow_steps?.some(s => s.id === step.id));
     await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "DELETE" });
-    load();
+    await load();
+    if (wf) await renumberSteps(wf.id);
+    await load();
   }
 
   async function toggleStepEnabled(step: WorkflowStep) {
@@ -238,14 +289,32 @@ export default function WorkflowsAdminPage() {
                           <p className="text-sm text-gray-400 py-3 text-center">暂无步骤</p>
                         ) : (
                           steps.map((step, idx) => (
-                            <div key={step.id} className={`flex items-start gap-3 p-3 rounded-[12px] ${step.enabled ? "bg-gray-50" : "bg-gray-50/50 opacity-60"}`}>
+                            <div key={step.id}>
+                              {/* 在每个步骤前插入按钮（第一个步骤前） */}
+                              {idx === 0 && (
+                                <button onClick={() => openInsertStep(wf.id, 0)} className="w-full flex items-center gap-1 py-0.5 text-xs text-gray-300 hover:text-[#002FA7] transition-colors group mb-1">
+                                  <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
+                                  <PlusCircle size={12} />
+                                  <span>插入</span>
+                                  <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
+                                </button>
+                              )}
+                            <div className={`flex items-start gap-3 p-3 rounded-[12px] ${step.enabled ? "bg-gray-50" : "bg-gray-50/50 opacity-60"}`}>
                               <GripVertical size={14} className="text-gray-300 mt-0.5 shrink-0" />
                               <div className="w-6 h-6 rounded-full bg-[#002FA7]/10 text-[#002FA7] text-xs font-bold flex items-center justify-center shrink-0">{idx + 1}</div>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2">
                                   <p className="text-sm font-medium text-gray-800">{step.title}</p>
-                                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5 ${step.exec_type === "agent" ? "bg-blue-50 text-blue-600" : "bg-amber-50 text-amber-600"}`}>
-                                    {step.exec_type === "agent" ? <><Bot size={10} />智能体</> : <><User size={10} />人工</>}
+                                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5 ${
+                                    step.exec_type === "agent" ? "bg-blue-50 text-blue-600" :
+                                    step.exec_type === "manual" ? "bg-amber-50 text-amber-600" :
+                                    step.exec_type === "review" ? "bg-purple-50 text-purple-600" :
+                                    "bg-green-50 text-green-600"
+                                  }`}>
+                                    {step.exec_type === "agent" && <><Bot size={10} />智能体</>}
+                                    {step.exec_type === "manual" && <><User size={10} />人工执行</>}
+                                    {step.exec_type === "review" && <><User size={10} />人工审核</>}
+                                    {step.exec_type === "external" && <>⚡外部工具</>}
                                   </span>
                                 </div>
                                 {step.description && <p className="text-xs text-gray-400 mt-0.5">{step.description}</p>}
@@ -263,6 +332,14 @@ export default function WorkflowsAdminPage() {
                                 <button onClick={() => openEditStep(wf.id, step)} className="p-1 rounded-[6px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"><Edit2 size={12} /></button>
                                 <button onClick={() => deleteStep(step)} className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
                               </div>
+                            </div>
+                            {/* 每个步骤后面的插入按钮 */}
+                            <button onClick={() => openInsertStep(wf.id, idx + 1)} className="w-full flex items-center gap-1 py-0.5 text-xs text-gray-300 hover:text-[#002FA7] transition-colors group mt-1">
+                              <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
+                              <PlusCircle size={12} />
+                              <span>插入</span>
+                              <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
+                            </button>
                             </div>
                           ))
                         )}
@@ -349,7 +426,7 @@ export default function WorkflowsAdminPage() {
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
             <h2 className="font-semibold text-gray-900 mb-5">{showStepModal.step ? "编辑步骤" : "添加步骤"}</h2>
             <div className="space-y-4">
-              <Input label="步骤顺序" type="number" value={String(stepForm.stepOrder)} onChange={(e) => setStepForm({ ...stepForm, stepOrder: Number(e.target.value) })} />
+              <Input label="步骤顺序" type="number" min="1" value={String(stepForm.stepOrder)} onChange={(e) => setStepForm({ ...stepForm, stepOrder: Math.max(1, Number(e.target.value)) })} />
               <Input label="步骤标题" placeholder="如 撰写初稿" value={stepForm.title} onChange={(e) => setStepForm({ ...stepForm, title: e.target.value })} />
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">步骤说明</label>
@@ -357,14 +434,22 @@ export default function WorkflowsAdminPage() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">执行类型</label>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer p-2 rounded-[8px] hover:bg-gray-50">
                     <input type="radio" name="execType" value="agent" checked={stepForm.execType === "agent"} onChange={() => setStepForm({ ...stepForm, execType: "agent" })} className="accent-[#002FA7]" />
                     <Bot size={14} className="text-[#002FA7]" /><span className="text-sm">智能体执行</span>
                   </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
+                  <label className="flex items-center gap-2 cursor-pointer p-2 rounded-[8px] hover:bg-gray-50">
                     <input type="radio" name="execType" value="manual" checked={stepForm.execType === "manual"} onChange={() => setStepForm({ ...stepForm, execType: "manual" })} className="accent-[#002FA7]" />
                     <User size={14} className="text-amber-500" /><span className="text-sm">人工执行</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer p-2 rounded-[8px] hover:bg-gray-50">
+                    <input type="radio" name="execType" value="review" checked={stepForm.execType === "review"} onChange={() => setStepForm({ ...stepForm, execType: "review" })} className="accent-[#002FA7]" />
+                    <User size={14} className="text-purple-500" /><span className="text-sm">人工审核</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer p-2 rounded-[8px] hover:bg-gray-50">
+                    <input type="radio" name="execType" value="external" checked={stepForm.execType === "external"} onChange={() => setStepForm({ ...stepForm, execType: "external" })} className="accent-[#002FA7]" />
+                    <span className="text-green-500 text-sm">⚡</span><span className="text-sm">其他（外部AI工具）</span>
                   </label>
                 </div>
               </div>

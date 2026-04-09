@@ -9,11 +9,32 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const categoryId = searchParams.get("categoryId");
 
+  // ── 0. 组织用户：获取 dept_id / team_id 用于细粒度权限匹配 ──────
+  let userDeptId: string | null = null;
+  let userTeamId: string | null = null;
+  if (!user.isPersonal) {
+    const { data: uRow } = await db.from("users").select("dept_id, team_id").eq("id", user.userId).single();
+    userDeptId = uRow?.dept_id ?? null;
+    userTeamId = uRow?.team_id ?? null;
+  }
+
   // ── 1+2. 并行：可访问 ID 集合 + 分类列表 + 分类组织分配 ───────────
+  const buildOrgAccessQuery = () => {
+    const orParts = [
+      "scope_type.eq.all",
+      `and(scope_type.eq.user_type,scope_id.eq.organization)`,
+      `and(scope_type.eq.org,scope_id.eq.${user.tenantCode})`,
+      `and(scope_type.eq.user,scope_id.eq.${user.userId})`,
+    ];
+    if (userDeptId) orParts.push(`and(scope_type.eq.dept,scope_id.eq.${userDeptId})`);
+    if (userTeamId) orParts.push(`and(scope_type.eq.team,scope_id.eq.${userTeamId})`);
+    return db.from("resource_permissions").select("resource_id").eq("resource_type", "agent").or(orParts.join(","));
+  };
+
   const [accessibleQuery, categoriesQuery, tcQuery] = await Promise.all([
     user.isPersonal
       ? db.from("agents").select("id").eq("enabled", true)
-      : db.from("tenant_agents").select("agent_id").eq("tenant_code", user.tenantCode),
+      : buildOrgAccessQuery(),
     db.from("categories").select("id, name").order("sort_order"),
     user.isPersonal
       ? Promise.resolve({ data: [] as { category_id: string; tenant_code: string }[] })
@@ -23,7 +44,7 @@ export async function GET(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const accessibleIds: string[] = user.isPersonal
     ? (accessibleQuery.data ?? []).map((a: any) => a.id as string)
-    : (accessibleQuery.data ?? []).map((r: any) => r.agent_id as string);
+    : (accessibleQuery.data ?? []).map((r: any) => r.resource_id as string);
 
   // 分类过滤：有分配记录 → 仅对指定组织显示；无分配记录 → 对所有人可见
   const allCategories = categoriesQuery.data ?? [];

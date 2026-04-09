@@ -21,9 +21,17 @@ type Agent = {
   model_params?: Record<string, unknown>;
   categories?: { name: string };
   tenant_codes?: string[];
+  permissions?: { scope_type: string; scope_id: string | null }[];
 };
 type Category = { id: string; name: string };
 type Tenant = { id: string; code: string; name: string };
+type Permission = { id: string; scope_type: string; scope_id: string | null; scope_label: string };
+type Dept = { id: string; name: string; tenant_code: string };
+type Team = { id: string; name: string; dept_id: string };
+
+const SCOPE_TYPE_LABELS: Record<string, string> = {
+  all: "全部用户", org: "组织", dept: "部门", team: "小组", user: "用户", user_type: "用户类型",
+};
 type CategoryDisplayConfig = {
   category_id: string;
   category_name: string;
@@ -53,6 +61,16 @@ export default function AgentsAdminPage() {
   const [apiForm, setApiForm] = useState(EMPTY_API);
   const [selectedTenants, setSelectedTenants] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // 权限弹窗状态
+  const [showPermModal, setShowPermModal] = useState<Agent | null>(null);
+  const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [permLoading, setPermLoading] = useState(false);
+  const [newScopeType, setNewScopeType] = useState("org");
+  const [newScopeId, setNewScopeId] = useState("");
+  const [addingPerm, setAddingPerm] = useState(false);
+  const [depts, setDepts] = useState<Dept[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [formError, setFormError] = useState("");
   const [newCatName, setNewCatName] = useState("");
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
@@ -84,6 +102,46 @@ export default function AgentsAdminPage() {
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryId: a.category_id ?? "", platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   function openApi(a: Agent) { setShowApiModal(a); setApiForm({ endpoint: a.api_endpoint ?? "", apiKey: "", modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}' }); }
   function openAssign(a: Agent) { setShowAssignModal(a); setSelectedTenants(a.tenant_codes ?? []); }
+
+  async function openPermModal(a: Agent) {
+    setShowPermModal(a);
+    setPermLoading(true);
+    setNewScopeType("org");
+    setNewScopeId("");
+    const [permsData, deptsData, teamsData] = await Promise.all([
+      fetch(`/api/admin/resource-permissions?resource_type=agent&resource_id=${a.id}`).then(r => r.json()).catch(() => []),
+      fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
+      fetch("/api/admin/teams").then(r => r.json()).catch(() => []),
+    ]);
+    setPermissions(Array.isArray(permsData) ? permsData : []);
+    setDepts(Array.isArray(deptsData) ? deptsData : []);
+    setTeams(Array.isArray(teamsData) ? teamsData : []);
+    setPermLoading(false);
+  }
+
+  async function refreshPerms() {
+    if (!showPermModal) return;
+    const data = await fetch(`/api/admin/resource-permissions?resource_type=agent&resource_id=${showPermModal.id}`).then(r => r.json()).catch(() => []);
+    setPermissions(Array.isArray(data) ? data : []);
+  }
+
+  async function deletePerm(permId: string) {
+    await fetch("/api/admin/resource-permissions", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: permId }) });
+    await refreshPerms();
+  }
+
+  async function addPerm() {
+    if (!showPermModal) return;
+    if (newScopeType !== "all" && !newScopeId) return;
+    setAddingPerm(true);
+    const res = await fetch("/api/admin/resource-permissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resourceType: "agent", resourceId: showPermModal.id, scopeType: newScopeType, scopeId: newScopeType === "all" ? null : newScopeId }),
+    });
+    setAddingPerm(false);
+    if (res.ok) { setNewScopeId(""); await refreshPerms(); load(); }
+  }
 
   async function openDisplay(a: Agent) {
     setShowDisplayModal(a);
@@ -231,7 +289,7 @@ export default function AgentsAdminPage() {
                             {a.agent_type !== "external" && (
                               <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置"><Key size={14} /></button>
                             )}
-                            <button onClick={() => openAssign(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="组织分配"><Settings2 size={14} /></button>
+                            <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置"><Settings2 size={14} /></button>
                             <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="分类展示配置"><LayoutGrid size={14} /></button>
                           </div>
                         </td>
@@ -399,23 +457,95 @@ export default function AgentsAdminPage() {
         </div>
       )}
 
-      {/* Assign Tenants Modal */}
-      {showAssignModal && (
+      {/* 权限设置弹窗 */}
+      {showPermModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
-            <h2 className="font-semibold text-gray-900 mb-1">组织分配</h2>
-            <p className="text-sm text-gray-500 mb-4">{showAssignModal.name} — 选择可以使用此智能体的组织</p>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {tenants.map((t) => (
-                <label key={t.code} className="flex items-center gap-3 p-3 bg-gray-50 rounded-[10px] cursor-pointer hover:bg-gray-100 transition-colors">
-                  <input type="checkbox" className="accent-[#002FA7] w-4 h-4" checked={selectedTenants.includes(t.code)} onChange={(e) => setSelectedTenants((prev) => e.target.checked ? [...prev, t.code] : prev.filter((c) => c !== t.code))} />
-                  <div><p className="text-sm font-medium text-gray-800">{t.name}</p><code className="text-xs text-gray-400 font-mono">{t.code}</code></div>
-                  {selectedTenants.includes(t.code) && <CheckCircle2 size={15} className="text-[#002FA7] ml-auto" />}
-                </label>
-              ))}
-              {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无组织，请先新增</p>}
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-lg p-6 max-h-[90vh] flex flex-col">
+            <h2 className="font-semibold text-gray-900 mb-0.5">权限设置</h2>
+            <p className="text-sm text-gray-500 mb-4">{showPermModal.name} — 控制哪些用户可以访问此智能体</p>
+
+            {/* 当前权限列表 */}
+            <div className="mb-4 flex-1 overflow-y-auto">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">当前权限</p>
+              {permLoading ? (
+                <div className="h-10 bg-gray-50 rounded-[10px] animate-pulse" />
+              ) : permissions.length === 0 ? (
+                <div className="p-3 bg-amber-50 border border-amber-100 rounded-[10px] text-sm text-amber-700">
+                  暂无权限配置 — 所有人均无法访问此智能体
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {permissions.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-[10px]">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="shrink-0 text-xs px-2 py-0.5 bg-[#e8eeff] text-[#002FA7] rounded-full font-medium">
+                          {SCOPE_TYPE_LABELS[p.scope_type] ?? p.scope_type}
+                        </span>
+                        <span className="text-sm text-gray-700 truncate">{p.scope_label}</span>
+                      </div>
+                      <button onClick={() => deletePerm(p.id)} className="shrink-0 text-gray-300 hover:text-red-500 transition-colors"><X size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowAssignModal(null)}>取消</Button><Button onClick={handleAssign} loading={saving}>保存分配</Button></div>
+
+            {/* 添加权限 */}
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">添加权限</p>
+              <div className="flex gap-2 mb-2 flex-wrap">
+                <select value={newScopeType} onChange={e => { setNewScopeType(e.target.value); setNewScopeId(""); }}
+                  className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white shrink-0">
+                  <option value="all">全部用户</option>
+                  <option value="user_type">用户类型</option>
+                  <option value="org">按组织</option>
+                  <option value="dept">按部门</option>
+                  <option value="team">按小组</option>
+                  <option value="user">指定用户(ID)</option>
+                </select>
+                {newScopeType === "user_type" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择</option>
+                    <option value="personal">个人用户</option>
+                    <option value="organization">组织用户</option>
+                  </select>
+                )}
+                {newScopeType === "org" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择组织</option>
+                    {tenants.map(t => <option key={t.code} value={t.code}>{t.name} ({t.code})</option>)}
+                  </select>
+                )}
+                {newScopeType === "dept" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择部门</option>
+                    {depts.map(d => <option key={d.id} value={d.id}>{d.name} ({d.tenant_code})</option>)}
+                  </select>
+                )}
+                {newScopeType === "team" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择小组</option>
+                    {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                )}
+                {newScopeType === "user" && (
+                  <input value={newScopeId} onChange={e => setNewScopeId(e.target.value)} placeholder="粘贴用户 ID"
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]" />
+                )}
+              </div>
+              <button onClick={addPerm} disabled={addingPerm || (newScopeType !== "all" && !newScopeId)}
+                className="w-full h-9 bg-[#002FA7] text-white rounded-[8px] text-sm font-medium hover:bg-[#001f7a] transition-colors disabled:opacity-50">
+                {addingPerm ? "添加中…" : "+ 添加权限"}
+              </button>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <Button variant="ghost" onClick={() => { setShowPermModal(null); load(); }}>关闭</Button>
+            </div>
           </div>
         </div>
       )}

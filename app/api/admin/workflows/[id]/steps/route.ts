@@ -13,6 +13,9 @@ export async function POST(
 
   if (!title) return NextResponse.json({ error: "请填写步骤标题" }, { status: 400 });
 
+  const validExecTypes = ["agent", "manual", "review", "external"];
+  const safeExecType = validExecTypes.includes(execType) ? execType : "agent";
+
   const { data, error } = await db
     .from("workflow_steps")
     .insert({
@@ -20,8 +23,8 @@ export async function POST(
       step_order: stepOrder ?? 1,
       title,
       description: description ?? "",
-      exec_type: execType ?? "agent",
-      agent_id: agentId || null,
+      exec_type: safeExecType,
+      agent_id: safeExecType === "agent" ? (agentId || null) : null,
       button_text: buttonText ?? "进入智能体",
       enabled: enabled ?? true,
     })

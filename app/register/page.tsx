@@ -53,9 +53,12 @@ export default function RegisterPage() {
     if (!form.password) { setError("请填写密码"); return; }
     if (form.password.length < 8) { setError("密码至少 8 位"); return; }
     if (form.password !== form.confirmPwd) { setError("两次密码输入不一致"); return; }
-    if (userType === "organization" && !form.tenantCode.trim()) {
-      setError("组织用户必须填写组织码");
-      return;
+    if (userType === "organization") {
+      if (!form.tenantCode.trim()) { setError("组织用户必须填写组织码"); return; }
+      if (!/^[A-Za-z]{4,8}$/.test(form.tenantCode.trim())) {
+        setError("组织码只能为 4~8 位英文字母");
+        return;
+      }
     }
 
     setLoading(true);
@@ -196,13 +199,13 @@ export default function RegisterPage() {
                     <FieldIcon icon={<Building2 size={16} />} />
                     <input
                       className={inputCls}
-                      placeholder="请输入组织码（大小写均可）"
+                      placeholder="4~8 位英文字母"
                       value={form.tenantCode}
-                      onChange={(e) => set("tenantCode", e.target.value.toUpperCase())}
+                      onChange={(e) => set("tenantCode", e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 8))}
                       autoComplete="off"
                     />
                   </div>
-                  <p className="text-xs text-gray-400">组织码由管理员提供</p>
+                  <p className="text-xs text-gray-400">组织码由管理员提供，4~8 位英文字母</p>
                 </div>
               )}
 

@@ -175,6 +175,7 @@ export default function TenantsPage() {
     setFormError("");
     if (!form.name || !form.quota || !form.expiresAt) { setFormError("请填写组织名称、配额和到期日"); return; }
     if (!editing && (!form.code || !form.initialPwd)) { setFormError("新建时请填写组织码和初始密码"); return; }
+    if (!editing && !/^[A-Za-z]{4,8}$/.test(form.code.trim())) { setFormError("组织码只能为 4~8 位英文字母"); return; }
     setSaving(true);
     try {
       const res = editing
@@ -384,7 +385,7 @@ export default function TenantsPage() {
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
             <h2 className="font-semibold text-gray-900 mb-5">{editing ? "编辑组织码" : "新增组织码"}</h2>
             <div className="space-y-4">
-              <Input label="组织码（自动转大写）" placeholder="如 COMPANY2024" value={form.code} disabled={!!editing} onChange={(e) => setForm({ ...form, code: e.target.value })} />
+              <Input label="组织码（4~8 位英文字母）" placeholder="如 DEMO" value={form.code} disabled={!!editing} onChange={(e) => setForm({ ...form, code: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 8) })} />
               <Input label="组织名称" placeholder="如 前哨科技有限公司" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <Input label={editing ? "组织初始密码（留空不修改）" : "组织初始密码"} type="password" placeholder={editing ? "留空则不修改" : "设置初始密码"} value={form.initialPwd} onChange={(e) => setForm({ ...form, initialPwd: e.target.value })} />
               <Input label="总配额（次数）" type="number" placeholder="500" value={form.quota} onChange={(e) => setForm({ ...form, quota: e.target.value })} />
