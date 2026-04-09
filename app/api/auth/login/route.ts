@@ -11,160 +11,73 @@ function statusError(status: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { phone, password, tenantCode } = await req.json();
+    const body = await req.json();
+    const identifier: string = (body.identifier ?? body.phone ?? "").trim();
+    const { password } = body;
 
-    if (!phone || !password) {
-      return NextResponse.json({ error: "请填写手机号和密码" }, { status: 400 });
+    if (!identifier || !password) {
+      return NextResponse.json({ error: "请填写账号和密码" }, { status: 400 });
     }
 
-    const normalizedCode = tenantCode?.trim().toUpperCase() || "PERSONAL";
-    const isPersonal = normalizedCode === "PERSONAL" || !tenantCode?.trim();
-
-    // ── 企业码验证 ────────────────────────────────────────────
-    let tenantName = "个人空间";
-    if (!isPersonal) {
-      const { data: tenant } = await db
-        .from("tenants")
-        .select("*")
-        .eq("code", normalizedCode)
-        .eq("enabled", true)
-        .single();
-
-      if (!tenant) {
-        return NextResponse.json({ error: "企业码无效或已禁用" }, { status: 401 });
-      }
-
-      if (new Date(tenant.expires_at) < new Date()) {
-        return NextResponse.json({ error: "该企业码已到期，请联系管理员" }, { status: 401 });
-      }
-
-      tenantName = tenant.name;
-
-      const { data: existingUser } = await db
-        .from("users")
-        .select("*")
-        .eq("phone", phone)
-        .eq("tenant_code", normalizedCode)
-        .single();
-
-      if (existingUser) {
-        // 检查账号状态
-        if (existingUser.status && existingUser.status !== "active") {
-          return NextResponse.json({ error: statusError(existingUser.status) }, { status: 401 });
-        }
-        const ok = await bcrypt.compare(password, existingUser.pwd_hash);
-        if (!ok) {
-          return NextResponse.json({ error: "密码错误" }, { status: 401 });
-        }
-        // 更新最近登录时间
-        await db.from("users").update({ last_login_at: new Date().toISOString() }).eq("id", existingUser.id);
-        const token = await signToken({
-          type: "user",
-          userId: existingUser.id,
-          phone,
-          tenantCode: normalizedCode,
-          tenantName,
-          isPersonal: false,
-        });
-        return NextResponse.json(
-          { ok: true, firstLogin: existingUser.first_login, tenantName },
-          { headers: { "Set-Cookie": buildSetCookieHeader(token) } }
-        );
-      }
-
-      // 新用户：验证企业初始密码
-      const tenantPwdOk = await bcrypt.compare(password, tenant.pwd_hash);
-      if (!tenantPwdOk) {
-        return NextResponse.json({ error: "企业码或密码错误" }, { status: 401 });
-      }
-
-      const pwdHash = await bcrypt.hash(password, 12);
-      const { data: newUser, error } = await db
-        .from("users")
-        .insert({ phone, tenant_code: normalizedCode, pwd_hash: pwdHash, first_login: true, last_login_at: new Date().toISOString() })
-        .select()
-        .single();
-
-      if (error || !newUser) {
-        return NextResponse.json({ error: "创建用户失败" }, { status: 500 });
-      }
-
-      const token = await signToken({
-        type: "user",
-        userId: newUser.id,
-        phone,
-        tenantCode: normalizedCode,
-        tenantName,
-        isPersonal: false,
-      });
-
-      return NextResponse.json(
-        { ok: true, firstLogin: true, tenantName },
-        { headers: { "Set-Cookie": buildSetCookieHeader(token) } }
-      );
-    }
-
-    // ── 个人空间逻辑 ──────────────────────────────────────────
-    const { data: existingUser } = await db
+    // ── 全局查找用户（用户名唯一；手机号可能跨租户重复）────────
+    const { data: matches } = await db
       .from("users")
       .select("*")
-      .eq("phone", phone)
-      .eq("tenant_code", "PERSONAL")
-      .single();
+      .or(`phone.eq.${identifier},username.eq.${identifier}`);
 
-    if (existingUser) {
-      if (existingUser.status && existingUser.status !== "active") {
-        return NextResponse.json({ error: statusError(existingUser.status) }, { status: 401 });
-      }
-      const ok = await bcrypt.compare(password, existingUser.pwd_hash);
-      if (!ok) {
-        return NextResponse.json({ error: "密码错误" }, { status: 401 });
-      }
-      await db.from("users").update({ last_login_at: new Date().toISOString() }).eq("id", existingUser.id);
-      const token = await signToken({
-        type: "user",
-        userId: existingUser.id,
-        phone,
-        tenantCode: "PERSONAL",
-        tenantName: "个人空间",
-        isPersonal: true,
-      });
+    if (!matches || matches.length === 0) {
+      return NextResponse.json({ error: "账号不存在，请先注册" }, { status: 401 });
+    }
+
+    // 手机号在多个组织下重复时，要求改用用户名登录
+    if (matches.length > 1) {
       return NextResponse.json(
-        { ok: true, firstLogin: existingUser.first_login },
-        { headers: { "Set-Cookie": buildSetCookieHeader(token) } }
+        { error: "该手机号存在多个账号，请使用用户名登录" },
+        { status: 409 }
       );
     }
 
-    // 个人用户首次登录：验证默认密码 000000
-    if (password !== "000000") {
-      return NextResponse.json(
-        { error: "个人用户初始密码为 000000" },
-        { status: 401 }
-      );
+    const user = matches[0];
+
+    if (user.status !== "active") {
+      return NextResponse.json({ error: statusError(user.status) }, { status: 401 });
     }
 
-    const pwdHash = await bcrypt.hash("000000", 12);
-    const { data: newUser, error } = await db
-      .from("users")
-      .insert({ phone, tenant_code: "PERSONAL", pwd_hash: pwdHash, first_login: true, last_login_at: new Date().toISOString() })
-      .select()
-      .single();
-
-    if (error || !newUser) {
-      return NextResponse.json({ error: "创建用户失败" }, { status: 500 });
+    const ok = await bcrypt.compare(password, user.pwd_hash);
+    if (!ok) {
+      return NextResponse.json({ error: "密码错误" }, { status: 401 });
     }
 
+    // 若是组织用户，校验组织是否仍有效
+    if (user.tenant_code !== "PERSONAL") {
+      const { data: tenant } = await db
+        .from("tenants")
+        .select("name, expires_at, enabled")
+        .eq("code", user.tenant_code)
+        .single();
+
+      if (!tenant || !tenant.enabled) {
+        return NextResponse.json({ error: "所属组织已禁用，请联系管理员" }, { status: 401 });
+      }
+      if (new Date(tenant.expires_at) < new Date()) {
+        return NextResponse.json({ error: "所属组织已到期，请联系管理员" }, { status: 401 });
+      }
+    }
+
+    await db.from("users").update({ last_login_at: new Date().toISOString() }).eq("id", user.id);
+
+    const tenantName = user.tenant_code === "PERSONAL" ? "个人空间" : user.tenant_code;
     const token = await signToken({
       type: "user",
-      userId: newUser.id,
-      phone,
-      tenantCode: "PERSONAL",
-      tenantName: "个人空间",
-      isPersonal: true,
+      userId: user.id,
+      phone: user.phone,
+      tenantCode: user.tenant_code,
+      tenantName,
+      isPersonal: user.tenant_code === "PERSONAL",
     });
 
     return NextResponse.json(
-      { ok: true, firstLogin: true },
+      { ok: true, firstLogin: user.first_login, tenantName },
       { headers: { "Set-Cookie": buildSetCookieHeader(token) } }
     );
   } catch (e) {

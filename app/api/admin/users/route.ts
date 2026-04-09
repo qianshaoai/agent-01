@@ -12,16 +12,28 @@ export async function GET(req: NextRequest) {
   const search = searchParams.get("search")?.trim() ?? "";
   const statusFilter = searchParams.get("status") ?? "";
 
+  const userTypeFilter = searchParams.get("user_type") ?? "";
+  const roleFilter = searchParams.get("role") ?? "";
+  const deptFilter = searchParams.get("dept_id") ?? "";
+
   let query = db
     .from("users")
-    .select("id, phone, nickname, tenant_code, status, first_login, created_at, last_login_at", { count: "exact" });
+    .select(
+      "id, phone, nickname, tenant_code, status, first_login, created_at, last_login_at, user_type, role, dept_id, team_id, departments(name), teams(name)",
+      { count: "exact" }
+    );
 
-  if (search) {
-    query = query.ilike("phone", `%${search}%`);
-  }
+  if (search) query = query.ilike("phone", `%${search}%`);
   if (statusFilter && ["active", "disabled", "deleted"].includes(statusFilter)) {
     query = query.eq("status", statusFilter);
   }
+  if (userTypeFilter && ["personal", "organization"].includes(userTypeFilter)) {
+    query = query.eq("user_type", userTypeFilter);
+  }
+  if (roleFilter && ["super_admin", "system_admin", "org_admin", "user"].includes(roleFilter)) {
+    query = query.eq("role", roleFilter);
+  }
+  if (deptFilter) query = query.eq("dept_id", deptFilter);
 
   const { data, count, error } = await query
     .order("created_at", { ascending: false })
