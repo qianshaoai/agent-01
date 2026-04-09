@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const categoryId = searchParams.get("categoryId");
 
-  // ── 1+2. 并行：可访问 ID 集合 + 分类列表 + 分类企业分配 ───────────
+  // ── 1+2. 并行：可访问 ID 集合 + 分类列表 + 分类组织分配 ───────────
   const [accessibleQuery, categoriesQuery, tcQuery] = await Promise.all([
     user.isPersonal
       ? db.from("agents").select("id").eq("enabled", true)
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
     ? (accessibleQuery.data ?? []).map((a: any) => a.id as string)
     : (accessibleQuery.data ?? []).map((r: any) => r.agent_id as string);
 
-  // 分类过滤：有分配记录 → 仅对指定企业显示；无分配记录 → 对所有人可见
+  // 分类过滤：有分配记录 → 仅对指定组织显示；无分配记录 → 对所有人可见
   const allCategories = categoriesQuery.data ?? [];
   const tcData = (tcQuery.data ?? []) as { category_id: string; tenant_code: string }[];
   const allowedCatIds = new Set(tcData.filter((r) => r.tenant_code === user.tenantCode).map((r) => r.category_id));

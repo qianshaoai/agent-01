@@ -45,7 +45,7 @@ export default function NoticesPage() {
 
   async function handleSave() {
     if (!form.content.trim()) return;
-    if (form.type === "enterprise" && !form.tenantCode) { alert("请选择企业"); return; }
+    if (form.type === "enterprise" && !form.tenantCode) { alert("请选择组织"); return; }
     setSaving(true);
     try {
       const body = { tenantCode: form.type === "enterprise" ? form.tenantCode : null, content: form.content };
@@ -60,7 +60,7 @@ export default function NoticesPage() {
     <AdminLayout>
       <div className="max-w-3xl mx-auto space-y-5">
         <div className="flex items-center justify-between">
-          <div><h1 className="text-xl font-bold text-gray-900">公告管理</h1><p className="text-sm text-gray-500 mt-0.5">全局公告对所有用户可见；企业公告仅对指定企业可见</p></div>
+          <div><h1 className="text-xl font-bold text-gray-900">公告管理</h1><p className="text-sm text-gray-500 mt-0.5">全局公告对所有用户可见；组织公告仅对指定组织可见</p></div>
           <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增公告</Button>
         </div>
 
@@ -79,7 +79,7 @@ export default function NoticesPage() {
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <Badge variant={n.tenant_code ? "default" : "warning"}>{n.tenant_code ? "企业专属" : "全局公告"}</Badge>
+                        <Badge variant={n.tenant_code ? "default" : "warning"}>{n.tenant_code ? "组织专属" : "全局公告"}</Badge>
                         {n.tenant_code && <span className="text-xs text-gray-400">{tenants.find((t) => t.code === n.tenant_code)?.name ?? n.tenant_code}</span>}
                         <Badge variant={n.enabled ? "success" : "muted"}>{n.enabled ? "已启用" : "已禁用"}</Badge>
                       </div>
@@ -109,16 +109,16 @@ export default function NoticesPage() {
                   {(["global", "enterprise"] as const).map((t) => (
                     <label key={t} className="flex items-center gap-2 cursor-pointer">
                       <input type="radio" name="type" value={t} checked={form.type === t} onChange={() => setForm({ ...form, type: t })} className="accent-[#002FA7]" />
-                      <span className="text-sm text-gray-700">{t === "global" ? "全局公告" : "企业专属公告"}</span>
+                      <span className="text-sm text-gray-700">{t === "global" ? "全局公告" : "组织专属公告"}</span>
                     </label>
                   ))}
                 </div>
               </div>
               {form.type === "enterprise" && (
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-sm font-medium text-gray-700">目标企业</label>
+                  <label className="text-sm font-medium text-gray-700">目标组织</label>
                   <select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={form.tenantCode} onChange={(e) => setForm({ ...form, tenantCode: e.target.value })}>
-                    <option value="">请选择企业</option>
+                    <option value="">请选择组织</option>
                     {tenants.map((t) => <option key={t.code} value={t.code}>{t.name} ({t.code})</option>)}
                   </select>
                 </div>

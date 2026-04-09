@@ -31,10 +31,10 @@ export default function DashboardPage() {
   }, []);
 
   const cards = [
-    { label: "企业码管理", desc: "新增/编辑/禁用企业码，配置额度与到期", icon: Building2, href: "/admin/tenants", count: data?.totalTenants ?? "—", countLabel: "家企业", color: "bg-blue-50 text-blue-600" },
+    { label: "组织码管理", desc: "新增/编辑/禁用组织码，配置额度与到期", icon: Building2, href: "/admin/tenants", count: data?.totalTenants ?? "—", countLabel: "家组织", color: "bg-blue-50 text-blue-600" },
     { label: "智能体管理", desc: "管理分类与智能体，配置 API 对接", icon: Bot, href: "/admin/agents", count: agentCount || "—", countLabel: "个智能体", color: "bg-purple-50 text-purple-600" },
-    { label: "公告管理", desc: "配置全局公告与企业专属公告", icon: Megaphone, href: "/admin/notices", count: noticeCount || "—", countLabel: "条公告", color: "bg-amber-50 text-amber-600" },
-    { label: "用量看板", desc: "企业用量统计与 Top 智能体分析", icon: BarChart3, href: "/admin/analytics", count: data?.totalCalls ?? "—", countLabel: "总调用次数", color: "bg-green-50 text-green-600" },
+    { label: "公告管理", desc: "配置全局公告与组织专属公告", icon: Megaphone, href: "/admin/notices", count: noticeCount || "—", countLabel: "条公告", color: "bg-amber-50 text-amber-600" },
+    { label: "用量看板", desc: "组织用量统计与 Top 智能体分析", icon: BarChart3, href: "/admin/analytics", count: data?.totalCalls ?? "—", countLabel: "总调用次数", color: "bg-green-50 text-green-600" },
     { label: "操作日志", desc: "登录、调用、失败等全量日志查询", icon: FileText, href: "/admin/logs", count: "实时", countLabel: "审计日志", color: "bg-gray-50 text-gray-600" },
   ];
 
@@ -49,7 +49,7 @@ export default function DashboardPage() {
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[
-            { label: "活跃企业", value: data?.totalTenants, icon: Users, color: "text-[#002FA7] bg-[#f0f4ff]" },
+            { label: "活跃组织", value: data?.totalTenants, icon: Users, color: "text-[#002FA7] bg-[#f0f4ff]" },
             { label: "智能体数量", value: agentCount, icon: Bot, color: "text-purple-600 bg-purple-50" },
             { label: "总调用次数", value: data?.totalCalls?.toLocaleString(), icon: TrendingUp, color: "text-green-600 bg-green-50" },
             { label: "调用成功率", value: data ? `${data.successRate}%` : "—", icon: AlertCircle, color: "text-amber-600 bg-amber-50" },
@@ -91,13 +91,13 @@ export default function DashboardPage() {
 
         {/* Quota overview */}
         <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
-          <h2 className="text-sm font-semibold text-gray-700 mb-4">企业配额概览</h2>
+          <h2 className="text-sm font-semibold text-gray-700 mb-4">组织配额概览</h2>
           {loading ? (
             <div className="space-y-3">
               {[...Array(3)].map((_, i) => <div key={i} className="h-10 bg-gray-50 rounded-[10px] animate-pulse" />)}
             </div>
           ) : data?.tenantUsage.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-6">暂无企业数据</p>
+            <p className="text-sm text-gray-400 text-center py-6">暂无组织数据</p>
           ) : (
             <div className="space-y-3">
               {data?.tenantUsage.map((t) => {

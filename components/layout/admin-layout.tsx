@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/admin/dashboard", label: "控制台", icon: LayoutDashboard },
-  { href: "/admin/tenants", label: "企业码管理", icon: Building2 },
+  { href: "/admin/tenants", label: "组织码管理", icon: Building2 },
   { href: "/admin/users", label: "用户管理", icon: Users },
   { href: "/admin/agents", label: "智能体管理", icon: Bot },
   { href: "/admin/workflows", label: "工作流管理", icon: GitBranch },

@@ -23,7 +23,7 @@ export async function PATCH(
   if (body.modelParams !== undefined) updates.model_params = body.modelParams;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
 
-  // 企业分配
+  // 组织分配
   if (body.tenantCodes !== undefined) {
     // 先删除旧分配
     await db.from("tenant_agents").delete().eq("agent_id", id);

@@ -150,7 +150,7 @@ export default function SettingsPage() {
               <p className="text-xs text-gray-400 mb-1">用户类型</p>
               <div className="flex items-center gap-2">
                 <Building2 size={14} className="text-[#002FA7]" />
-                <p className="font-medium text-gray-800">{user ? (user.isPersonal ? "个人用户" : "企业用户") : "—"}</p>
+                <p className="font-medium text-gray-800">{user ? (user.isPersonal ? "个人用户" : "组织用户") : "—"}</p>
               </div>
             </div>
             <div className="p-4 bg-gray-50 rounded-[12px]">
@@ -163,7 +163,7 @@ export default function SettingsPage() {
             </div>
             {!user?.isPersonal && (
               <div className="p-4 bg-gray-50 rounded-[12px]">
-                <p className="text-xs text-gray-400 mb-1">企业码</p>
+                <p className="text-xs text-gray-400 mb-1">组织码</p>
                 <p className="font-medium text-gray-800 font-mono">{user?.tenantCode}</p>
               </div>
             )}

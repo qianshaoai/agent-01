@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   let query = db
     .from("users")
     .select(
-      "id, phone, nickname, tenant_code, status, first_login, created_at, last_login_at, user_type, role, dept_id, team_id, departments(name), teams(name)",
+      "id, phone, username, real_name, nickname, tenant_code, status, first_login, created_at, last_login_at, user_type, role, dept_id, team_id, departments(name), teams(name)",
       { count: "exact" }
     );
 

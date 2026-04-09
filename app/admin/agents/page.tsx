@@ -231,7 +231,7 @@ export default function AgentsAdminPage() {
                             {a.agent_type !== "external" && (
                               <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置"><Key size={14} /></button>
                             )}
-                            <button onClick={() => openAssign(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="企业分配"><Settings2 size={14} /></button>
+                            <button onClick={() => openAssign(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="组织分配"><Settings2 size={14} /></button>
                             <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="分类展示配置"><LayoutGrid size={14} /></button>
                           </div>
                         </td>
@@ -273,7 +273,7 @@ export default function AgentsAdminPage() {
                     <>
                       <div className="flex items-center gap-2"><Tag size={15} className="text-[#002FA7]" /><span className="font-medium text-gray-800">{cat.name}</span></div>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => openCatAssign(cat)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="企业分配"><Building2 size={13} /></button>
+                        <button onClick={() => openCatAssign(cat)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="组织分配"><Building2 size={13} /></button>
                         <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
                       </div>
                     </>
@@ -403,8 +403,8 @@ export default function AgentsAdminPage() {
       {showAssignModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
-            <h2 className="font-semibold text-gray-900 mb-1">企业分配</h2>
-            <p className="text-sm text-gray-500 mb-4">{showAssignModal.name} — 选择可以使用此智能体的企业</p>
+            <h2 className="font-semibold text-gray-900 mb-1">组织分配</h2>
+            <p className="text-sm text-gray-500 mb-4">{showAssignModal.name} — 选择可以使用此智能体的组织</p>
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {tenants.map((t) => (
                 <label key={t.code} className="flex items-center gap-3 p-3 bg-gray-50 rounded-[10px] cursor-pointer hover:bg-gray-100 transition-colors">
@@ -413,7 +413,7 @@ export default function AgentsAdminPage() {
                   {selectedTenants.includes(t.code) && <CheckCircle2 size={15} className="text-[#002FA7] ml-auto" />}
                 </label>
               ))}
-              {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无企业，请先新增</p>}
+              {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无组织，请先新增</p>}
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowAssignModal(null)}>取消</Button><Button onClick={handleAssign} loading={saving}>保存分配</Button></div>
           </div>
@@ -423,8 +423,8 @@ export default function AgentsAdminPage() {
       {showCatAssignModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
-            <h2 className="font-semibold text-gray-900 mb-1">企业分配</h2>
-            <p className="text-sm text-gray-500 mb-4">{showCatAssignModal.name} — 选择可以看到此分类的企业</p>
+            <h2 className="font-semibold text-gray-900 mb-1">组织分配</h2>
+            <p className="text-sm text-gray-500 mb-4">{showCatAssignModal.name} — 选择可以看到此分类的组织</p>
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {tenants.map((t) => (
                 <label key={t.code} className="flex items-center gap-3 p-3 bg-gray-50 rounded-[10px] cursor-pointer hover:bg-gray-100 transition-colors">
@@ -433,7 +433,7 @@ export default function AgentsAdminPage() {
                   {selectedCatTenants.includes(t.code) && <CheckCircle2 size={15} className="text-[#002FA7] ml-auto" />}
                 </label>
               ))}
-              {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无企业，请先新增</p>}
+              {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无组织，请先新增</p>}
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowCatAssignModal(null)}>取消</Button><Button onClick={handleCatAssign} loading={saving}>保存分配</Button></div>
           </div>

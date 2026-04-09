@@ -173,8 +173,8 @@ export default function TenantsPage() {
   }
   async function handleSave() {
     setFormError("");
-    if (!form.name || !form.quota || !form.expiresAt) { setFormError("请填写企业名称、配额和到期日"); return; }
-    if (!editing && (!form.code || !form.initialPwd)) { setFormError("新建时请填写企业码和初始密码"); return; }
+    if (!form.name || !form.quota || !form.expiresAt) { setFormError("请填写组织名称、配额和到期日"); return; }
+    if (!editing && (!form.code || !form.initialPwd)) { setFormError("新建时请填写组织码和初始密码"); return; }
     setSaving(true);
     try {
       const res = editing
@@ -191,15 +191,15 @@ export default function TenantsPage() {
       <div className="max-w-5xl mx-auto space-y-5">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">企业码管理</h1>
-            <p className="text-sm text-gray-500 mt-0.5">共 {tenants.length} 家企业</p>
+            <h1 className="text-xl font-bold text-gray-900">组织码管理</h1>
+            <p className="text-sm text-gray-500 mt-0.5">共 {tenants.length} 家组织</p>
           </div>
-          <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增企业码</Button>
+          <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增组织码</Button>
         </div>
 
         <div className="relative max-w-sm">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input className="w-full h-10 pl-9 pr-4 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" placeholder="搜索企业名称或企业码…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className="w-full h-10 pl-9 pr-4 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" placeholder="搜索组织名称或组织码…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
 
         <div className="space-y-3">
@@ -210,7 +210,7 @@ export default function TenantsPage() {
           ) : filtered.length === 0 ? (
             <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] py-16 text-center text-gray-400">
               <Building2 size={32} className="mx-auto mb-3 text-gray-200" />
-              <p className="text-sm">{search ? "没有匹配的企业" : "暂无企业，点击右上角新增"}</p>
+              <p className="text-sm">{search ? "没有匹配的组织" : "暂无组织，点击右上角新增"}</p>
             </div>
           ) : (
             filtered.map((t) => {
@@ -378,15 +378,15 @@ export default function TenantsPage() {
         </div>
       </div>
 
-      {/* 新增/编辑企业弹窗 */}
+      {/* 新增/编辑组织弹窗 */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
-            <h2 className="font-semibold text-gray-900 mb-5">{editing ? "编辑企业码" : "新增企业码"}</h2>
+            <h2 className="font-semibold text-gray-900 mb-5">{editing ? "编辑组织码" : "新增组织码"}</h2>
             <div className="space-y-4">
-              <Input label="企业码（自动转大写）" placeholder="如 COMPANY2024" value={form.code} disabled={!!editing} onChange={(e) => setForm({ ...form, code: e.target.value })} />
-              <Input label="企业名称" placeholder="如 前哨科技有限公司" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              <Input label={editing ? "企业初始密码（留空不修改）" : "企业初始密码"} type="password" placeholder={editing ? "留空则不修改" : "设置初始密码"} value={form.initialPwd} onChange={(e) => setForm({ ...form, initialPwd: e.target.value })} />
+              <Input label="组织码（自动转大写）" placeholder="如 COMPANY2024" value={form.code} disabled={!!editing} onChange={(e) => setForm({ ...form, code: e.target.value })} />
+              <Input label="组织名称" placeholder="如 前哨科技有限公司" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <Input label={editing ? "组织初始密码（留空不修改）" : "组织初始密码"} type="password" placeholder={editing ? "留空则不修改" : "设置初始密码"} value={form.initialPwd} onChange={(e) => setForm({ ...form, initialPwd: e.target.value })} />
               <Input label="总配额（次数）" type="number" placeholder="500" value={form.quota} onChange={(e) => setForm({ ...form, quota: e.target.value })} />
               <Input label="到期日" type="date" value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} />
               {formError && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{formError}</div>}

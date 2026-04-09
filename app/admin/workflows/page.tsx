@@ -323,7 +323,7 @@ export default function WorkflowsAdminPage() {
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
                 <select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={wfForm.visibleTo === "all" ? "all" : "custom"} onChange={(e) => setWfForm({ ...wfForm, visibleTo: e.target.value === "all" ? "all" : "" })}>
                   <option value="all">全部用户可见</option>
-                  <option value="custom">指定企业码</option>
+                  <option value="custom">指定组织码</option>
                 </select>
                 {wfForm.visibleTo !== "all" && (
                   <input className="w-full h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" placeholder="逗号分隔，如 DEMO,ACME" value={wfForm.visibleTo} onChange={(e) => setWfForm({ ...wfForm, visibleTo: e.target.value })} />

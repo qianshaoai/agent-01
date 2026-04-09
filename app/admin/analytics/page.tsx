@@ -26,7 +26,7 @@ export default function AnalyticsPage() {
 
   const stats = [
     { label: "总调用次数", value: data?.totalCalls?.toLocaleString() ?? "—", icon: TrendingUp, color: "text-[#002FA7] bg-[#f0f4ff]" },
-    { label: "接入企业数", value: data?.totalTenants ?? "—", icon: Building2, color: "text-blue-600 bg-blue-50" },
+    { label: "接入组织数", value: data?.totalTenants ?? "—", icon: Building2, color: "text-blue-600 bg-blue-50" },
     { label: "成功次数", value: data?.successCalls?.toLocaleString() ?? "—", icon: Bot, color: "text-purple-600 bg-purple-50" },
     { label: "调用成功率", value: data ? `${data.successRate}%` : "—", icon: AlertCircle, color: "text-green-600 bg-green-50" },
   ];
@@ -35,7 +35,7 @@ export default function AnalyticsPage() {
     <AdminLayout>
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
-          <div><h1 className="text-xl font-bold text-gray-900">用量看板</h1><p className="text-sm text-gray-500 mt-0.5">企业维度调用统计（实时）</p></div>
+          <div><h1 className="text-xl font-bold text-gray-900">用量看板</h1><p className="text-sm text-gray-500 mt-0.5">组织维度调用统计（实时）</p></div>
           <button onClick={load} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-[#002FA7] transition-colors">
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> 刷新
           </button>
@@ -78,11 +78,11 @@ export default function AnalyticsPage() {
           </div>
 
           <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
-            <h2 className="font-semibold text-gray-700 mb-4 flex items-center gap-2"><Building2 size={16} className="text-[#002FA7]" /> 企业使用情况</h2>
+            <h2 className="font-semibold text-gray-700 mb-4 flex items-center gap-2"><Building2 size={16} className="text-[#002FA7]" /> 组织使用情况</h2>
             {loading ? (
               <div className="space-y-4">{[...Array(4)].map((_, i) => <div key={i} className="h-10 bg-gray-50 rounded animate-pulse" />)}</div>
             ) : !data?.tenantUsage.length ? (
-              <p className="text-sm text-gray-400 text-center py-8">暂无企业数据</p>
+              <p className="text-sm text-gray-400 text-center py-8">暂无组织数据</p>
             ) : (
               <div className="space-y-4">
                 {data.tenantUsage.map((t) => {

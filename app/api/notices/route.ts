@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-// 公开接口：根据企业码获取公告（全局 + 企业专属）
+// 公开接口：根据组织码获取公告（全局 + 组织专属）
 export async function GET(req: NextRequest) {
   const tenantCode = req.nextUrl.searchParams.get("tenantCode") ?? "PERSONAL";
 
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
     .eq("enabled", true)
     .order("created_at", { ascending: false });
 
-  // 企业专属公告
+  // 组织专属公告
   const { data: enterprise } = await db
     .from("notices")
     .select("id, tenant_code, content, enabled")

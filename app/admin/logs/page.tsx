@@ -62,7 +62,7 @@ export default function LogsPage() {
         <form onSubmit={handleSearch} className="flex flex-wrap gap-3">
           <div className="relative">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input className="h-10 pl-9 pr-4 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 w-56" placeholder="手机号、企业码、智能体…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <input className="h-10 pl-9 pr-4 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 w-56" placeholder="手机号、组织码、智能体…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           <select className="h-10 px-3 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7]" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="all">全部状态</option>
@@ -70,7 +70,7 @@ export default function LogsPage() {
             <option value="error">失败</option>
           </select>
           <select className="h-10 px-3 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7]" value={tenantFilter} onChange={(e) => setTenantFilter(e.target.value)}>
-            <option value="all">全部企业</option>
+            <option value="all">全部组织</option>
             {tenants.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
           </select>
           <button type="submit" className="h-10 px-4 bg-[#002FA7] text-white text-sm rounded-[10px] hover:bg-[#1a47c0] transition-colors">搜索</button>

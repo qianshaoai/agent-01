@@ -16,7 +16,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   const body = await req.json();
 
-  // 企业分配
+  // 组织分配
   if (body.tenantCodes !== undefined) {
     await db.from("tenant_categories").delete().eq("category_id", id);
     if (body.tenantCodes.length > 0) {

@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
 
   if (error) {
     if (error.code === "23505") {
-      return NextResponse.json({ error: "企业码已存在" }, { status: 409 });
+      return NextResponse.json({ error: "组织码已存在" }, { status: 409 });
     }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

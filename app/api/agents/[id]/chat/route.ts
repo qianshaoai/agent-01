@@ -49,10 +49,10 @@ export async function POST(
         .single();
 
       if (!tenant || !tenant.enabled) {
-        return NextResponse.json({ error: "企业账号已禁用" }, { status: 403 });
+        return NextResponse.json({ error: "组织账号已禁用" }, { status: 403 });
       }
       if (new Date(tenant.expires_at) < new Date()) {
-        return NextResponse.json({ error: "企业配额已到期，请联系管理员续期" }, { status: 403 });
+        return NextResponse.json({ error: "组织配额已到期，请联系管理员续期" }, { status: 403 });
       }
       if (tenant.quota_used >= tenant.quota) {
         return NextResponse.json({ error: "使用次数已耗尽，请联系管理员充值" }, { status: 403 });

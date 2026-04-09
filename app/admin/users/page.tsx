@@ -6,6 +6,8 @@ import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronD
 type UserRow = {
   id: string;
   phone: string;
+  username: string | null;
+  real_name: string | null;
   nickname: string;
   tenant_code: string;
   status: "active" | "disabled" | "deleted";
@@ -307,7 +309,10 @@ export default function AdminUsersPage() {
                     return (
                       <tr key={u.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                         <td className="px-4 py-3">
-                          <p className="font-medium text-gray-800">{u.nickname || "—"}</p>
+                          <p className="font-medium text-gray-800">{u.real_name || u.nickname || "—"}</p>
+                          {u.username && (
+                            <p className="text-[11px] text-gray-400">@{u.username}</p>
+                          )}
                           {u.first_login && (
                             <span className="text-[10px] text-amber-500">未改初始密码</span>
                           )}
