@@ -15,7 +15,7 @@ export async function getActiveUser(): Promise<ActiveUser | null> {
 
   const { data: dbUser } = await db
     .from("users")
-    .select("status, nickname, created_at")
+    .select("status, nickname, created_at, role, user_type")
     .eq("id", payload.userId)
     .single();
 
@@ -23,6 +23,9 @@ export async function getActiveUser(): Promise<ActiveUser | null> {
 
   return {
     ...payload,
+    // role 和 userType 从数据库实时读取，不依赖 JWT
+    role: dbUser.role ?? "user",
+    userType: dbUser.user_type ?? "personal",
     nickname: dbUser.nickname ?? "",
     status: "active" as const,
     createdAt: dbUser.created_at ?? null,

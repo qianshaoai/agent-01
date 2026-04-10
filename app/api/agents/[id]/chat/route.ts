@@ -13,7 +13,8 @@ export async function POST(
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
-  const { id: agentCode } = await params;
+  const { id: rawId } = await params;
+  const agentCode = decodeURIComponent(rawId);
   const { message, conversationId, fileTexts } = await req.json();
 
   if (!message?.trim()) {

@@ -7,7 +7,7 @@ export async function GET() {
     const { data } = await db
       .from("system_settings")
       .select("key, value")
-      .in("key", ["logo_url", "platform_name", "help_doc_url"]);
+      .in("key", ["logo_url", "platform_name", "help_doc_url", "contact_qr_url", "contact_qr_text"]);
 
     const map: Record<string, string> = {};
     for (const row of data ?? []) {
@@ -18,6 +18,8 @@ export async function GET() {
       logo_url: map.logo_url ?? "",
       platform_name: map.platform_name ?? "前哨AI人机协同工作舱",
       help_doc_url: map.help_doc_url ?? "",
+      contact_qr_url: map.contact_qr_url ?? "",
+      contact_qr_text: map.contact_qr_text ?? "扫码添加微信，获取专属服务",
     });
   } catch {
     // 表不存在时（迁移未执行）返回默认值，避免前台报错
@@ -25,6 +27,8 @@ export async function GET() {
       logo_url: "",
       platform_name: "AI 智能体平台",
       help_doc_url: "",
+      contact_qr_url: "",
+      contact_qr_text: "扫码添加微信，获取专属服务",
     });
   }
 }

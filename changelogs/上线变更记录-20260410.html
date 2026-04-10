@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>上线变更记录 · 2026-04-10</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #f4f6f9;
+      color: #1a1a2e;
+      padding: 40px 20px;
+      line-height: 1.7;
+    }
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      padding: 36px 40px;
+    }
+    .header h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .meta-item {
+      background: rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 10px 14px;
+    }
+    .meta-item .label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 4px;
+    }
+    .meta-item .value {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      font-family: "SF Mono", "Consolas", monospace;
+    }
+    .body { padding: 36px 40px; }
+    .section { margin-bottom: 36px; }
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #f0f0f0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-title .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      background: #1a1a2e;
+      color: #fff;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th {
+      background: #f8f9fb;
+      text-align: left;
+      padding: 10px 14px;
+      font-weight: 600;
+      color: #555;
+      font-size: 12px;
+      letter-spacing: 0.4px;
+      border-bottom: 1px solid #eee;
+    }
+    td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    code {
+      background: #f2f4f7;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: "SF Mono", "Consolas", monospace;
+      font-size: 12px;
+      color: #c7254e;
+    }
+    .feature-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .feature-item {
+      border: 1px solid #eee;
+      border-radius: 8px;
+      padding: 14px 16px;
+      background: #fafbfc;
+    }
+    .feature-item .feat-title {
+      font-weight: 700;
+      font-size: 14px;
+      color: #1a1a2e;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-new    { background: #e8f5e9; color: #2e7d32; }
+    .badge-fix    { background: #fff3e0; color: #e65100; }
+    .badge-update { background: #e3f2fd; color: #1565c0; }
+    .feature-item .feat-desc {
+      font-size: 13px;
+      color: #555;
+      line-height: 1.6;
+    }
+    .feature-item .feat-desc ul {
+      padding-left: 18px;
+      margin-top: 4px;
+    }
+    .feature-item .feat-desc li { margin-top: 4px; }
+    .warning-box {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-left: 4px solid #f59e0b;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #78350f;
+      margin-top: 12px;
+    }
+    .info-box {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-left: 4px solid #3b82f6;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #1e3a5f;
+      margin-top: 12px;
+    }
+    .footer {
+      background: #f8f9fb;
+      border-top: 1px solid #eee;
+      padding: 20px 40px;
+      font-size: 12px;
+      color: #999;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <div class="header">
+      <h1>智能体舱 · 上线变更记录</h1>
+      <div class="meta-grid">
+        <div class="meta-item">
+          <div class="label">发布时间</div>
+          <div class="value">2026-04-10</div>
+        </div>
+        <div class="meta-item">
+          <div class="label">需求版本</div>
+          <div class="value">补丁 V2.0（P0+P1）</div>
+        </div>
+        <div class="meta-item">
+          <div class="label">迭代周期</div>
+          <div class="value">2026-04-09 ~ 04-10</div>
+        </div>
+        <div class="meta-item">
+          <div class="label">发布状态</div>
+          <div class="value">✅ 完成</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="body">
+
+      <!-- 一、数据库变更 -->
+      <div class="section">
+        <div class="section-title">
+          <span class="num">一</span>数据库变更
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th width="220">文件</th>
+              <th>变更内容</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>migration_v7.sql</code></td>
+              <td>
+                <strong>用户表扩展 + 部门/小组表</strong><br>
+                users 表新增字段：<code>username</code>、<code>real_name</code>、<code>user_type</code>（个人/组织）、<code>role</code>（用户角色）、<code>dept_id</code>、<code>team_id</code>；
+                新建 <code>departments</code>（部门）和 <code>teams</code>（小组）表
+              </td>
+            </tr>
+            <tr>
+              <td><code>migration_v8.sql</code></td>
+              <td>
+                <strong>统一资源权限表</strong><br>
+                新建 <code>resource_permissions</code> 表，替代 <code>tenant_agents</code>，支持按组织/部门/小组/用户/用户类型控制智能体可见权限；已自动迁移存量数据
+              </td>
+            </tr>
+            <tr>
+              <td><code>migration_v9.sql</code></td>
+              <td>
+                <strong>工作流步骤类型扩展</strong><br>
+                <code>workflow_steps.exec_type</code> 枚举新增 <code>review</code>（人工审核）和 <code>external</code>（外部 AI 工具）两个值
+              </td>
+            </tr>
+            <tr>
+              <td><code>migration_v10.sql</code></td>
+              <td>
+                <strong>系统设置新增联系二维码配置项</strong><br>
+                <code>system_settings</code> 表新增 <code>contact_qr_url</code> 和 <code>contact_qr_text</code> 两个配置键（文档记录，无结构变更）
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="warning-box">
+          ⚠️ migration_v7 ~ v9 须在发布前于 Supabase SQL Editor 中依次执行完毕，<strong>不可重复执行</strong>。
+        </div>
+        <div class="info-box">
+          💡 Supabase Storage 需手动创建名为 <code>uploads</code> 的公开存储桶（Storage → New bucket → 名称填 uploads，Public 开启），用于二维码及 Logo 上传。
+        </div>
+      </div>
+
+      <!-- 二、功能变更 -->
+      <div class="section">
+        <div class="section-title">
+          <span class="num">二</span>功能变更（2026-04-09 ~ 04-10）
+        </div>
+        <ul class="feature-list">
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-new">新增</span>注册入口与登录方式升级
+            </div>
+            <div class="feat-desc">
+              <ul>
+                <li>新增 <code>/register</code> 注册页，支持个人用户和组织用户两种注册类型</li>
+                <li>注册字段：用户名（全局唯一）、真实姓名、手机号、密码（≥8位）、组织码（组织用户必填）</li>
+                <li>登录页支持手机号或用户名两种登录方式，移除旧版"首次登录自动建号"逻辑</li>
+              </ul>
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-new">新增</span>用户类型与角色体系重构
+            </div>
+            <div class="feat-desc">
+              <ul>
+                <li>用户分为个人用户（personal）和组织用户（organization）两种类型</li>
+                <li>新增四级系统角色：普通用户 / 组织管理员 / 系统管理员 / 超级管理员</li>
+                <li>管理后台用户列表新增用户类型列、系统角色列，支持按类型/角色筛选，可点击角色标签直接修改</li>
+                <li>前台首页顶栏实时展示当前用户角色标签（修改后无需重新登录即时生效）</li>
+              </ul>
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-new">新增</span>固定三级组织结构
+            </div>
+            <div class="feat-desc">
+              <ul>
+                <li>新建部门（departments）和小组（teams）两级结构，挂载在租户下</li>
+                <li>租户管理页支持展开组织树，可内联增删改部门和小组</li>
+                <li>用户管理页新增"分配部门"功能，可将组织用户分配至指定部门/小组</li>
+              </ul>
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-update">优化</span>权限与可见性模型升级
+            </div>
+            <div class="feat-desc">
+              智能体可见范围控制粒度从"按组织"升级为多维度支持：
+              <ul>
+                <li>全部用户 / 指定组织 / 指定部门 / 指定小组 / 按用户类型 / 指定用户</li>
+                <li>智能体管理页新增权限设置弹窗，支持增删权限条目，含标签展示</li>
+              </ul>
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-update">优化</span>组织码规则升级
+            </div>
+            <div class="feat-desc">
+              组织码限制为 4~8 位纯英文字母，不区分大小写，展示时统一转大写；前端实时过滤非法字符，后端同步校验。
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-new">新增</span>工作流步骤类型扩展
+            </div>
+            <div class="feat-desc">
+              步骤执行类型由 2 种扩展为 4 种：智能体执行 / 人工执行 / <strong>人工审核</strong>（紫色标签）/ <strong>其他（外部 AI 工具）</strong>（灰色标签），前台步骤卡片可视化区分四种类型。
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-update">优化</span>工作流可见范围设置交互优化
+            </div>
+            <div class="feat-desc">
+              <ul>
+                <li>旧版为手动输入组织码字符串（如 <code>DEMO,ACME</code>），体验差</li>
+                <li>新版改为四模式下拉选择：全部 / 仅组织用户 / 仅个人用户 / 指定组织（含搜索+复选框）</li>
+              </ul>
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-new">新增</span>首页联系二维码后台配置
+            </div>
+            <div class="feat-desc">
+              <ul>
+                <li>品牌设置页新增"二维码上传"区域，支持上传、预览、删除联系二维码</li>
+                <li>前台首页"联系我们"弹窗实时读取后台配置的二维码图片及说明文字</li>
+                <li>文件存储于 Supabase Storage <code>uploads</code> 桶，路径 <code>logos/contact-qr.*</code></li>
+              </ul>
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-new">新增</span>列表页多条件筛选
+            </div>
+            <div class="feat-desc">
+              <ul>
+                <li><strong>用户管理</strong>：按组织、用户类型、角色、状态、部门筛选，搜索支持手机号/用户名/真实姓名</li>
+                <li><strong>智能体管理</strong>：按类型、分类、状态筛选</li>
+                <li><strong>工作流管理</strong>：按分类、可见范围、状态筛选</li>
+                <li>全部列表页均支持"清除筛选"一键重置</li>
+              </ul>
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-new">新增</span>批量操作
+            </div>
+            <div class="feat-desc">
+              <ul>
+                <li><strong>用户管理</strong>：表格新增复选框列，支持当页全选；勾选后显示工具栏，可批量启用/禁用</li>
+                <li><strong>智能体管理</strong>：分类分配弹窗和展示配置弹窗均新增"一键全选"/"全部取消"按钮</li>
+              </ul>
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-update">优化</span>全站术语替换
+            </div>
+            <div class="feat-desc">
+              全站"企业"统一改为"组织"：企业码 → 组织码、企业管理 → 组织管理、企业分配 → 组织分配；覆盖侧边栏导航、控制台、API 错误提示及代码注释。
+            </div>
+          </li>
+
+        </ul>
+      </div>
+
+      <!-- 三、Bug 修复 -->
+      <div class="section">
+        <div class="section-title">
+          <span class="num">三</span>Bug 修复
+        </div>
+        <ul class="feature-list">
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-fix">修复</span>注册接口 Token 字段缺失
+            </div>
+            <div class="feat-desc">
+              <code>app/api/auth/register/route.ts</code> 中 <code>signToken</code> 调用缺少 <code>role</code> 和 <code>userType</code> 字段，导致 TypeScript 编译错误，生产构建失败。已补全两个字段。
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-fix">修复</span>智能体 agent_code 含中文时 URL 编码问题
+            </div>
+            <div class="feat-desc">
+              当 <code>agent_code</code> 包含中文字符时，URL 经浏览器编码后 <code>params.id</code> 返回编码态字符串，导致：
+              <ul>
+                <li>对话页面智能体名称显示为 <code>%E6%B5%8B...</code></li>
+                <li>聊天 API 查不到智能体，返回"智能体不存在"</li>
+                <li>历史会话列表加载失败</li>
+              </ul>
+              已在前台页面、聊天 API、会话 API 三处统一添加 <code>decodeURIComponent</code>。
+              <br><strong>建议</strong>：agent_code 字段使用英文+数字，避免此类问题。
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-fix">修复</span>前台工作任务分组数据多账号共用问题
+            </div>
+            <div class="feat-desc">
+              首页左侧"我的工作任务"分组使用固定 key <code>cat_groups_v1</code> 存储于 localStorage，导致同一浏览器下多个账号共享分组数据，账号切换后会看到其他账号的分组。
+              已将 key 改为按用户 ID 隔离（<code>cat_groups_v1_&lt;userId&gt;</code>），各账号分组数据互不影响。
+              <br><strong>注意</strong>：旧版已建的分组不会自动迁移，需用户重新创建。
+            </div>
+          </li>
+
+          <li class="feature-item">
+            <div class="feat-title">
+              <span class="badge badge-fix">修复</span>proxy.ts 与 middleware.ts 冲突
+            </div>
+            <div class="feat-desc">
+              误创建 <code>middleware.ts</code> 导致与 Next.js 16 的 <code>proxy.ts</code> 路由保护机制冲突，造成所有页面返回 404。已删除 <code>middleware.ts</code>，恢复正常。
+            </div>
+          </li>
+
+        </ul>
+      </div>
+
+      <!-- 四、操作后注意事项 -->
+      <div class="section">
+        <div class="section-title">
+          <span class="num">四</span>操作后注意事项
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th width="220">项目</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>数据库 migration v7~v9</td>
+              <td>⚠️ 须在 Supabase SQL Editor 执行，执行前备份数据</td>
+            </tr>
+            <tr>
+              <td>Supabase Storage 创建 uploads 桶</td>
+              <td>⚠️ 须手动操作：Storage → New bucket → 名称 <code>uploads</code>，Public 开启</td>
+            </tr>
+            <tr>
+              <td>agent_code 规范化</td>
+              <td>💡 建议存量中文 agent_code 在后台更新为英文+数字格式，避免 URL 编码问题</td>
+            </tr>
+            <tr>
+              <td>应用重启</td>
+              <td>✅ 代码变更后通过 PM2 热重载</td>
+            </tr>
+            <tr>
+              <td>Nginx 缓存</td>
+              <td>⚠️ 若页面内容未更新，请手动清除 Nginx proxy_cache</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <div class="footer">
+      <span>智能体舱 · 内部变更记录 · 仅供运维及产研参考</span>
+      <span>生成时间：2026-04-10</span>
+    </div>
+
+  </div>
+</body>
+</html>

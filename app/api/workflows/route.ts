@@ -38,11 +38,15 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json([]);
 
   const tenantCode = user.tenantCode ?? "";
+  const isPersonal = user.isPersonal ?? !tenantCode;
 
-  // 权限过滤：visible_to = 'all' 或包含当前用户的 tenant_code
+  // 权限过滤
   const visible = (data ?? []).filter((wf) => {
     if (wf.visible_to === "all") return true;
-    const allowed = wf.visible_to.split(",").map((s: string) => s.trim().toUpperCase());
+    if (wf.visible_to === "org_only") return !isPersonal;
+    if (wf.visible_to === "personal_only") return isPersonal;
+    // 指定组织：逗号分隔的组织码列表
+    const allowed = wf.visible_to.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean);
     return allowed.includes(tenantCode.toUpperCase());
   });
 

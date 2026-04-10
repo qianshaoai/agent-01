@@ -19,6 +19,8 @@ export type UserPayload = {
   tenantCode: string;
   tenantName: string;
   isPersonal: boolean;
+  role: "super_admin" | "system_admin" | "org_admin" | "user";
+  userType: "personal" | "organization";
 };
 
 export type AdminPayload = {

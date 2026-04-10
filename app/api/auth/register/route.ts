@@ -121,6 +121,8 @@ export async function POST(req: NextRequest) {
       tenantCode: normalizedCode,
       tenantName,
       isPersonal: userType === "personal",
+      role: "user",
+      userType,
     });
 
     return NextResponse.json(

@@ -2,19 +2,23 @@
 import { useState, useEffect, useRef } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
-import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon, BookOpen } from "lucide-react";
+import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon, BookOpen, QrCode } from "lucide-react";
 
-type Settings = { logo_url: string; platform_name: string; help_doc_url: string };
+type Settings = { logo_url: string; platform_name: string; help_doc_url: string; contact_qr_url: string; contact_qr_text: string };
 
 export default function AdminSettingsPage() {
-  const [settings, setSettings] = useState<Settings>({ logo_url: "", platform_name: "", help_doc_url: "" });
+  const [settings, setSettings] = useState<Settings>({ logo_url: "", platform_name: "", help_doc_url: "", contact_qr_url: "", contact_qr_text: "" });
   const [name, setName] = useState("");
   const [helpDocUrl, setHelpDocUrl] = useState("");
+  const [contactQrText, setContactQrText] = useState("");
   const [helpDocSaving, setHelpDocSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [qrUploading, setQrUploading] = useState(false);
+  const [qrTextSaving, setQrTextSaving] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const qrFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch("/api/admin/settings")
@@ -23,6 +27,7 @@ export default function AdminSettingsPage() {
         setSettings(d);
         setName(d.platform_name ?? "");
         setHelpDocUrl(d.help_doc_url ?? "");
+        setContactQrText(d.contact_qr_text ?? "扫码添加微信，获取专属服务");
       })
       .catch(() => {});
   }, []);
@@ -85,6 +90,40 @@ export default function AdminSettingsPage() {
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function handleQrFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setQrUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/admin/settings/contact-qr", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "上传失败");
+      setSettings((s) => ({ ...s, contact_qr_url: data.url }));
+      flash("ok", "联系二维码已更新");
+    } catch (err: unknown) {
+      flash("err", err instanceof Error ? err.message : "上传失败，请重试");
+    } finally {
+      setQrUploading(false);
+      if (qrFileRef.current) qrFileRef.current.value = "";
+    }
+  }
+
+  async function clearQr() {
+    setQrUploading(true);
+    try {
+      const res = await fetch("/api/admin/settings/contact-qr", { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setSettings((s) => ({ ...s, contact_qr_url: "" }));
+      flash("ok", "已删除联系二维码");
+    } catch {
+      flash("err", "操作失败，请重试");
+    } finally {
+      setQrUploading(false);
     }
   }
 
@@ -230,6 +269,88 @@ export default function AdminSettingsPage() {
           </div>
           {helpDocUrl !== settings.help_doc_url && (
             <p className="mt-2 text-xs text-amber-600">有未保存的修改</p>
+          )}
+        </div>
+
+        {/* 联系二维码 */}
+        <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
+          <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
+            <QrCode size={15} className="text-[#002FA7]" /> 二维码上传
+          </h2>
+          <p className="text-xs text-gray-500 mb-5">配置后首页「联系我们」弹窗显示真实二维码图片，留空则显示占位图标。支持 PNG / JPG / WEBP。</p>
+
+          <div className="flex flex-col items-center gap-3">
+            <input
+              ref={qrFileRef}
+              type="file"
+              accept=".png,.jpg,.jpeg,.webp"
+              className="hidden"
+              onChange={handleQrFileChange}
+            />
+            <div className="w-32 h-32 rounded-[12px] overflow-hidden bg-gray-100 border border-gray-100 flex items-center justify-center">
+              {settings.contact_qr_url ? (
+                <img src={settings.contact_qr_url} alt="联系二维码" className="w-full h-full object-contain" />
+              ) : (
+                <QrCode size={40} className="text-gray-300" />
+              )}
+            </div>
+            <Button
+              size="sm"
+              onClick={() => qrFileRef.current?.click()}
+              loading={qrUploading}
+              className="flex items-center gap-1.5"
+            >
+              <Upload size={14} />
+              {qrUploading ? "上传中…" : settings.contact_qr_url ? "替换二维码" : "上传二维码"}
+            </Button>
+            {settings.contact_qr_url && (
+              <button
+                onClick={clearQr}
+                disabled={qrUploading}
+                className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+              >
+                删除二维码（恢复占位图标）
+              </button>
+            )}
+          </div>
+
+          {/* 说明文案 */}
+          <div className="mt-5 flex gap-3">
+            <input
+              type="text"
+              value={contactQrText}
+              onChange={(e) => setContactQrText(e.target.value)}
+              placeholder="扫码添加微信，获取专属服务"
+              className="flex-1 h-10 bg-white border border-gray-200 rounded-[10px] px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+            />
+            <Button
+              size="sm"
+              loading={qrTextSaving}
+              disabled={contactQrText === settings.contact_qr_text}
+              onClick={async () => {
+                setQrTextSaving(true);
+                try {
+                  const res = await fetch("/api/admin/settings", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ contact_qr_text: contactQrText }),
+                  });
+                  if (!res.ok) throw new Error();
+                  setSettings((s) => ({ ...s, contact_qr_text: contactQrText }));
+                  flash("ok", "说明文案已保存");
+                } catch {
+                  flash("err", "保存失败，请重试");
+                } finally {
+                  setQrTextSaving(false);
+                }
+              }}
+            >
+              保存
+            </Button>
+          </div>
+          <p className="mt-1.5 text-xs text-gray-400">二维码下方说明文案，留空则不显示</p>
+          {contactQrText !== settings.contact_qr_text && (
+            <p className="mt-1 text-xs text-amber-600">有未保存的修改</p>
           )}
         </div>
       </div>

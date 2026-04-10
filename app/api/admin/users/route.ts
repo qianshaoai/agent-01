@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
   const userTypeFilter = searchParams.get("user_type") ?? "";
   const roleFilter = searchParams.get("role") ?? "";
   const deptFilter = searchParams.get("dept_id") ?? "";
+  const orgFilter = searchParams.get("org") ?? "";
 
   let query = db
     .from("users")
@@ -23,7 +24,8 @@ export async function GET(req: NextRequest) {
       { count: "exact" }
     );
 
-  if (search) query = query.ilike("phone", `%${search}%`);
+  if (search) query = query.or(`phone.ilike.%${search}%,username.ilike.%${search}%,real_name.ilike.%${search}%`);
+  if (orgFilter) query = query.eq("tenant_code", orgFilter.toUpperCase());
   if (statusFilter && ["active", "disabled", "deleted"].includes(statusFilter)) {
     query = query.eq("status", statusFilter);
   }

@@ -61,6 +61,9 @@ export default function AgentsAdminPage() {
   const [apiForm, setApiForm] = useState(EMPTY_API);
   const [selectedTenants, setSelectedTenants] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [agentTypeFilter, setAgentTypeFilter] = useState("");
+  const [agentCategoryFilter, setAgentCategoryFilter] = useState("");
+  const [agentStatusFilter, setAgentStatusFilter] = useState("");
 
   // 权限弹窗状态
   const [showPermModal, setShowPermModal] = useState<Agent | null>(null);
@@ -246,12 +249,44 @@ export default function AgentsAdminPage() {
           ))}
         </div>
 
-        {activeTab === "agents" && (
+        {activeTab === "agents" && (() => {
+          const filteredAgents = agents.filter(a => {
+            if (agentTypeFilter && a.agent_type !== agentTypeFilter) return false;
+            if (agentCategoryFilter && a.category_id !== agentCategoryFilter) return false;
+            if (agentStatusFilter === "enabled" && !a.enabled) return false;
+            if (agentStatusFilter === "disabled" && a.enabled) return false;
+            return true;
+          });
+          const hasAgentFilter = agentTypeFilter || agentCategoryFilter || agentStatusFilter;
+          return (
+          <>
+          <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-3 flex flex-wrap gap-2 items-center">
+            <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={agentTypeFilter} onChange={e => setAgentTypeFilter(e.target.value)}>
+              <option value="">全部类型</option>
+              <option value="chat">对话型</option>
+              <option value="external">外链型</option>
+            </select>
+            <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={agentCategoryFilter} onChange={e => setAgentCategoryFilter(e.target.value)}>
+              <option value="">全部分类</option>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={agentStatusFilter} onChange={e => setAgentStatusFilter(e.target.value)}>
+              <option value="">全部状态</option>
+              <option value="enabled">已启用</option>
+              <option value="disabled">已停用</option>
+            </select>
+            {hasAgentFilter && (
+              <button onClick={() => { setAgentTypeFilter(""); setAgentCategoryFilter(""); setAgentStatusFilter(""); }} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+                <X size={12} /> 清除
+              </button>
+            )}
+            <span className="ml-auto text-xs text-gray-400">{filteredAgents.length} / {agents.length} 个</span>
+          </div>
           <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
             {loading ? (
               <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
-            ) : agents.length === 0 ? (
-              <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">暂无智能体，点击右上角新增</p></div>
+            ) : filteredAgents.length === 0 ? (
+              <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体，点击右上角新增" : "没有符合筛选条件的智能体"}</p></div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -261,7 +296,7 @@ export default function AgentsAdminPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {agents.map((a) => (
+                    {filteredAgents.map((a) => (
                       <tr key={a.id} className="hover:bg-gray-50/50 transition-colors">
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-3">
@@ -300,7 +335,9 @@ export default function AgentsAdminPage() {
               </div>
             )}
           </div>
-        )}
+          </>
+          );
+        })()}
 
         {activeTab === "categories" && (
           <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
@@ -403,9 +440,16 @@ export default function AgentsAdminPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
             <h2 className="font-semibold text-gray-900 mb-1">分类展示配置</h2>
-            <p className="text-sm text-gray-500 mb-4">
+            <p className="text-sm text-gray-500 mb-2">
               {showDisplayModal.name} — 控制此智能体在各分类"智能体展示"中的可见性
             </p>
+            {!displayLoading && displayConfig.length > 0 && (
+              <div className="flex items-center gap-2 mb-3">
+                <button onClick={async () => { for (const cfg of displayConfig.filter(c => !c.is_manual)) await toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isManual", false); }} className="text-xs text-[#002FA7] hover:underline">一键全选</button>
+                <span className="text-gray-300">·</span>
+                <button onClick={async () => { for (const cfg of displayConfig.filter(c => c.is_manual)) await toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isManual", true); }} className="text-xs text-gray-400 hover:text-gray-600 hover:underline">全部取消</button>
+              </div>
+            )}
             {displayLoading ? (
               <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-12 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
             ) : displayConfig.length === 0 ? (
@@ -554,7 +598,13 @@ export default function AgentsAdminPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
             <h2 className="font-semibold text-gray-900 mb-1">组织分配</h2>
-            <p className="text-sm text-gray-500 mb-4">{showCatAssignModal.name} — 选择可以看到此分类的组织</p>
+            <p className="text-sm text-gray-500 mb-2">{showCatAssignModal.name} — 选择可以看到此分类的组织</p>
+            <div className="flex items-center gap-2 mb-3">
+              <button onClick={() => setSelectedCatTenants(tenants.map(t => t.code))} className="text-xs text-[#002FA7] hover:underline">一键全选</button>
+              <span className="text-gray-300">·</span>
+              <button onClick={() => setSelectedCatTenants([])} className="text-xs text-gray-400 hover:text-gray-600 hover:underline">全部取消</button>
+              <span className="ml-auto text-xs text-gray-400">已选 {selectedCatTenants.length} / {tenants.length}</span>
+            </div>
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {tenants.map((t) => (
                 <label key={t.code} className="flex items-center gap-3 p-3 bg-gray-50 rounded-[10px] cursor-pointer hover:bg-gray-100 transition-colors">

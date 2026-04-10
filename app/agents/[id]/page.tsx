@@ -44,7 +44,8 @@ type UploadedFile = {
 };
 
 export default function AgentChatPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id: agentCode } = use(params);
+  const { id: rawId } = use(params);
+  const agentCode = decodeURIComponent(rawId);
 
   const [agent, setAgent] = useState<AgentInfo | null>(null);
   const [redirecting, setRedirecting] = useState(false);

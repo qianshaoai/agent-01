@@ -23,6 +23,8 @@ export async function GET() {
     tenantCode: user.tenantCode,
     tenantName: user.tenantName,
     isPersonal: user.isPersonal,
+    role: user.role,
+    userType: user.userType,
     status: user.status,
     createdAt: user.createdAt,
     quota: quota

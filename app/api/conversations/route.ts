@@ -7,7 +7,8 @@ export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
-  const agentCode = req.nextUrl.searchParams.get("agentCode");
+  const rawAgentCode = req.nextUrl.searchParams.get("agentCode");
+  const agentCode = rawAgentCode ? decodeURIComponent(rawAgentCode) : null;
 
   const { data: dbUser } = await db
     .from("users")

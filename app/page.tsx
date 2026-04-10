@@ -41,6 +41,8 @@ type UserInfo = {
   tenantCode: string;
   tenantName: string;
   isPersonal: boolean;
+  role: "super_admin" | "system_admin" | "org_admin" | "user";
+  userType: "personal" | "organization";
   quota: { total: number; used: number; left: number; expiresAt: string } | null;
 };
 
@@ -75,7 +77,7 @@ type WorkflowStep = {
   step_order: number;
   title: string;
   description: string;
-  exec_type: "agent" | "manual";
+  exec_type: "agent" | "manual" | "review" | "external";
   agent_id: string | null;
   button_text: string;
   enabled: boolean;
@@ -91,7 +93,7 @@ type WorkflowItem = {
 };
 
 const LS_DISMISSED_KEY = "dismissed_notices_v1";
-const LS_GROUPS_KEY = "cat_groups_v1";
+const groupsKey = (userId: string) => `cat_groups_v1_${userId}`;
 
 type CatGroup = { id: string; name: string; categoryIds: string[]; collapsed: boolean };
 
@@ -145,7 +147,7 @@ export default function HomePage() {
     return getDismissed();
   });
   const [loading, setLoading] = useState(true);
-  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台", help_doc_url: "" });
+  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台", help_doc_url: "", contact_qr_url: "", contact_qr_text: "扫码添加微信，获取专属服务" });
 
   // ── 用户自定义分组 ──────────────────────────────────────────────
   const [catGroups, setCatGroups] = useState<CatGroup[]>([]);
@@ -175,6 +177,8 @@ export default function HomePage() {
             tenantCode: "DEMO2024",
             tenantName: "前哨科技示例企业",
             isPersonal: false,
+            role: "user",
+            userType: "organization",
             quota: { total: 500, used: 127, left: 373, expiresAt: "2025-12-31" },
           });
           const mockMapped = mockAgents.map((a) => ({
@@ -245,17 +249,19 @@ export default function HomePage() {
     load();
   }, []);
 
-  // 加载分组
+  // 加载分组（user 加载完后按用户 ID 隔离读取）
   useEffect(() => {
+    if (!user?.userId) return;
     try {
-      const raw = localStorage.getItem(LS_GROUPS_KEY);
-      if (raw) setCatGroups(JSON.parse(raw));
+      const raw = localStorage.getItem(groupsKey(user.userId));
+      setCatGroups(raw ? JSON.parse(raw) : []);
     } catch {}
-  }, []);
+  }, [user?.userId]);
 
   function saveGroups(groups: CatGroup[]) {
     setCatGroups(groups);
-    try { localStorage.setItem(LS_GROUPS_KEY, JSON.stringify(groups)); } catch {}
+    if (!user?.userId) return;
+    try { localStorage.setItem(groupsKey(user.userId), JSON.stringify(groups)); } catch {}
   }
 
   function createGroup() {
@@ -404,12 +410,17 @@ export default function HomePage() {
 
           <div className="flex items-center gap-2 sm:gap-3">
             {user && (
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-[#f0f4ff] rounded-[10px]">
-                <div className="w-2 h-2 rounded-full bg-[#002FA7]" />
-                <span className="text-xs font-medium text-[#002FA7]">
-                  {user.isPersonal ? "个人空间" : user.tenantName}
-                </span>
-                {!user.isPersonal && <span className="text-xs text-gray-400">{user.tenantCode}</span>}
+              <div className="hidden sm:flex items-center gap-2">
+                {user.role === "super_admin" && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">超级管理员</span>}
+                {user.role === "system_admin" && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600 font-medium">系统管理员</span>}
+                {user.role === "org_admin" && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-600 font-medium">组织管理员</span>}
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-[#f0f4ff] rounded-[10px]">
+                  <div className="w-2 h-2 rounded-full bg-[#002FA7]" />
+                  <span className="text-xs font-medium text-[#002FA7]">
+                    {user.isPersonal ? "个人空间" : user.tenantName}
+                  </span>
+                  {!user.isPersonal && <span className="text-xs text-gray-400">{user.tenantCode}</span>}
+                </div>
               </div>
             )}
 
@@ -636,8 +647,16 @@ export default function HomePage() {
                                     <div className="flex-1 min-w-0">
                                       <div className="flex items-center gap-1.5 flex-wrap">
                                         <span className="text-sm font-semibold text-gray-900">{step.title}</span>
-                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5 shrink-0 ${step.exec_type === "agent" ? "bg-blue-50 text-blue-600" : "bg-amber-50 text-amber-600"}`}>
-                                          {step.exec_type === "agent" ? <><Bot size={9} />智能体</> : <><User size={9} />人工</>}
+                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5 shrink-0 ${
+                                          step.exec_type === "agent" ? "bg-blue-50 text-blue-600" :
+                                          step.exec_type === "manual" ? "bg-amber-50 text-amber-600" :
+                                          step.exec_type === "review" ? "bg-purple-50 text-purple-600" :
+                                          "bg-gray-50 text-gray-600"
+                                        }`}>
+                                          {step.exec_type === "agent" && <><Bot size={9} />智能体</>}
+                                          {step.exec_type === "manual" && <><User size={9} />人工执行</>}
+                                          {step.exec_type === "review" && <><User size={9} />人工审核</>}
+                                          {step.exec_type === "external" && <>⚡外部工具</>}
                                         </span>
                                       </div>
                                       {step.description && (
@@ -647,8 +666,12 @@ export default function HomePage() {
                                     <div className="shrink-0 flex justify-end" style={{ minWidth: 148 }}>
                                       {step.exec_type === "agent" ? (
                                         <WorkflowStepButton step={step} />
-                                      ) : (
+                                      ) : step.exec_type === "manual" ? (
                                         <span className="text-xs text-amber-600 bg-amber-50 px-2.5 py-1 rounded-[8px]">此步骤需人工处理</span>
+                                      ) : step.exec_type === "review" ? (
+                                        <span className="text-xs text-purple-600 bg-purple-50 px-2.5 py-1 rounded-[8px]">此步骤需人工审核</span>
+                                      ) : (
+                                        <span className="text-xs text-gray-600 bg-gray-50 px-2.5 py-1 rounded-[8px]">使用外部工具处理</span>
                                       )}
                                     </div>
                                   </div>
@@ -946,10 +969,16 @@ export default function HomePage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setContactOpen(false)}>
           <div className="bg-white rounded-[20px] p-8 shadow-2xl flex flex-col items-center gap-4 w-72" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-semibold text-gray-900">联系我们</h3>
-            <div className="w-40 h-40 bg-gray-100 rounded-[12px] flex items-center justify-center">
-              <QrCode size={64} className="text-gray-300" />
+            <div className="w-40 h-40 bg-gray-100 rounded-[12px] flex items-center justify-center overflow-hidden">
+              {siteSettings.contact_qr_url ? (
+                <img src={siteSettings.contact_qr_url} alt="联系二维码" className="w-full h-full object-contain" />
+              ) : (
+                <QrCode size={64} className="text-gray-300" />
+              )}
             </div>
-            <p className="text-xs text-gray-500 text-center">扫码添加微信，获取专属服务</p>
+            {siteSettings.contact_qr_text && (
+              <p className="text-xs text-gray-500 text-center">{siteSettings.contact_qr_text}</p>
+            )}
             <button onClick={() => setContactOpen(false)} className="text-sm text-gray-400 hover:text-gray-600">关闭</button>
           </div>
         </div>

@@ -16,6 +16,8 @@ export async function GET() {
     logo_url: map.logo_url ?? "",
     platform_name: map.platform_name ?? "前哨AI人机协同工作舱",
     help_doc_url: map.help_doc_url ?? "",
+    contact_qr_url: map.contact_qr_url ?? "",
+    contact_qr_text: map.contact_qr_text ?? "扫码添加微信，获取专属服务",
   });
 }
 
@@ -42,6 +44,13 @@ export async function PATCH(req: NextRequest) {
   if (typeof body.help_doc_url === "string") {
     await db.from("system_settings").upsert(
       { key: "help_doc_url", value: body.help_doc_url, updated_at: now },
+      { onConflict: "key" }
+    );
+  }
+
+  if (typeof body.contact_qr_text === "string") {
+    await db.from("system_settings").upsert(
+      { key: "contact_qr_text", value: body.contact_qr_text, updated_at: now },
       { onConflict: "key" }
     );
   }

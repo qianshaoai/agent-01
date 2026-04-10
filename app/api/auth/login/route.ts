@@ -74,6 +74,8 @@ export async function POST(req: NextRequest) {
       tenantCode: user.tenant_code,
       tenantName,
       isPersonal: user.tenant_code === "PERSONAL",
+      role: user.role ?? "user",
+      userType: user.user_type ?? "personal",
     });
 
     return NextResponse.json(

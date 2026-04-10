@@ -18,10 +18,13 @@ import {
   ToggleRight,
   GripVertical,
   Copy,
+  Search,
+  X,
 } from "lucide-react";
 
 type Agent = { id: string; agent_code: string; name: string; agent_type: string; external_url: string };
 type Category = { id: string; name: string };
+type Tenant = { id: string; code: string; name: string; enabled: boolean };
 
 type WorkflowStep = {
   id: string;
@@ -53,8 +56,14 @@ export default function WorkflowsAdminPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenantSearch, setTenantSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [wfSearch, setWfSearch] = useState("");
+  const [wfCatFilter, setWfCatFilter] = useState("");
+  const [wfVisibleFilter, setWfVisibleFilter] = useState("");
+  const [wfStatusFilter, setWfStatusFilter] = useState("");
 
   // Workflow modal
   const [showWfModal, setShowWfModal] = useState(false);
@@ -71,14 +80,16 @@ export default function WorkflowsAdminPage() {
   async function load() {
     setLoading(true);
     try {
-      const [wr, ar, cr] = await Promise.all([
+      const [wr, ar, cr, tr] = await Promise.all([
         fetch("/api/admin/workflows").then((r) => r.json()),
         fetch("/api/admin/agents").then((r) => r.json()),
         fetch("/api/admin/categories").then((r) => r.json()),
+        fetch("/api/admin/tenants").then((r) => r.json()),
       ]);
       setWorkflows(Array.isArray(wr) ? wr : []);
       setAgents(Array.isArray(ar) ? ar : []);
       setCategories(Array.isArray(cr) ? cr : []);
+      setTenants(Array.isArray(tr) ? tr : []);
     } catch {
       setWorkflows([]);
     } finally {
@@ -238,16 +249,57 @@ export default function WorkflowsAdminPage() {
           <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>
         </div>
 
+        {/* 筛选栏 */}
+        <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-3 flex flex-wrap gap-2 items-center">
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input className="h-8 border border-gray-200 rounded-[8px] pl-7 pr-3 text-xs focus:outline-none focus:border-[#002FA7] w-44" placeholder="搜索工作流名称…" value={wfSearch} onChange={e => setWfSearch(e.target.value)} />
+          </div>
+          <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={wfCatFilter} onChange={e => setWfCatFilter(e.target.value)}>
+            <option value="">全部分类</option>
+            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={wfVisibleFilter} onChange={e => setWfVisibleFilter(e.target.value)}>
+            <option value="">全部可见范围</option>
+            <option value="all">全部用户</option>
+            <option value="org_only">仅组织用户</option>
+            <option value="personal_only">仅个人用户</option>
+            <option value="custom">指定组织</option>
+          </select>
+          <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={wfStatusFilter} onChange={e => setWfStatusFilter(e.target.value)}>
+            <option value="">全部状态</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已停用</option>
+          </select>
+          {(wfSearch || wfCatFilter || wfVisibleFilter || wfStatusFilter) && (
+            <button onClick={() => { setWfSearch(""); setWfCatFilter(""); setWfVisibleFilter(""); setWfStatusFilter(""); }} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+              <X size={12} /> 清除
+            </button>
+          )}
+        </div>
+
         {loading ? (
           <div className="space-y-3">{[...Array(3)].map((_, i) => <div key={i} className="h-20 bg-white rounded-[16px] animate-pulse" />)}</div>
-        ) : workflows.length === 0 ? (
+        ) : (() => {
+          const filteredWorkflows = workflows.filter(wf => {
+            if (wfSearch && !wf.name.toLowerCase().includes(wfSearch.toLowerCase())) return false;
+            if (wfCatFilter && !(wf.categoryIds ?? []).includes(wfCatFilter)) return false;
+            if (wfStatusFilter === "enabled" && !wf.enabled) return false;
+            if (wfStatusFilter === "disabled" && wf.enabled) return false;
+            if (wfVisibleFilter === "all" && wf.visible_to !== "all") return false;
+            if (wfVisibleFilter === "org_only" && wf.visible_to !== "org_only") return false;
+            if (wfVisibleFilter === "personal_only" && wf.visible_to !== "personal_only") return false;
+            if (wfVisibleFilter === "custom" && ["all", "org_only", "personal_only"].includes(wf.visible_to)) return false;
+            return true;
+          });
+          return filteredWorkflows.length === 0 ? (
           <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] py-16 text-center text-gray-400">
             <GitBranch size={32} className="mx-auto mb-3 text-gray-200" />
-            <p className="text-sm">暂无工作流，点击右上角新增</p>
+            <p className="text-sm">{workflows.length === 0 ? "暂无工作流，点击右上角新增" : "没有符合筛选条件的工作流"}</p>
           </div>
         ) : (
           <div className="space-y-3">
-            {workflows.map((wf) => {
+            {filteredWorkflows.map((wf) => {
               const isExpanded = expandedId === wf.id;
               const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
               return (
@@ -265,7 +317,9 @@ export default function WorkflowsAdminPage() {
                           const cat = categories.find((c) => c.id === cid);
                           return cat ? <span key={cid} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">#{cat.name}</span> : null;
                         })}
-                        {wf.visible_to !== "all" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`仅限：${wf.visible_to}`}>限定可见</span>}
+                        {wf.visible_to === "org_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>}
+                        {wf.visible_to === "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>}
+                        {wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织：${wf.visible_to}`}>指定组织</span>}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
                       </div>
                       {wf.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{wf.description}</p>}
@@ -353,13 +407,14 @@ export default function WorkflowsAdminPage() {
               );
             })}
           </div>
-        )}
+        );
+        })()}
       </div>
 
       {/* Workflow Modal */}
       {showWfModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
             <h2 className="font-semibold text-gray-900 mb-5">{editingWf ? "编辑工作流" : "新增工作流"}</h2>
             <div className="space-y-4">
               <Input label="工作流名称" placeholder="如 内容生产流程" value={wfForm.name} onChange={(e) => setWfForm({ ...wfForm, name: e.target.value })} />
@@ -398,12 +453,63 @@ export default function WorkflowsAdminPage() {
               <Input label="排序（数字越小越靠前）" type="number" value={String(wfForm.sortOrder)} onChange={(e) => setWfForm({ ...wfForm, sortOrder: Number(e.target.value) })} />
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
-                <select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={wfForm.visibleTo === "all" ? "all" : "custom"} onChange={(e) => setWfForm({ ...wfForm, visibleTo: e.target.value === "all" ? "all" : "" })}>
+                <select
+                  className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
+                  value={["all", "org_only", "personal_only"].includes(wfForm.visibleTo) ? wfForm.visibleTo : "custom"}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setWfForm({ ...wfForm, visibleTo: v === "custom" ? "" : v });
+                    setTenantSearch("");
+                  }}
+                >
                   <option value="all">全部用户可见</option>
-                  <option value="custom">指定组织码</option>
+                  <option value="org_only">仅组织用户可见</option>
+                  <option value="personal_only">仅个人用户可见</option>
+                  <option value="custom">指定组织</option>
                 </select>
-                {wfForm.visibleTo !== "all" && (
-                  <input className="w-full h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" placeholder="逗号分隔，如 DEMO,ACME" value={wfForm.visibleTo} onChange={(e) => setWfForm({ ...wfForm, visibleTo: e.target.value })} />
+                {!["all", "org_only", "personal_only"].includes(wfForm.visibleTo) && (
+                  <div className="flex flex-col gap-1.5">
+                    <input
+                      className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
+                      placeholder="搜索组织名称或组织码…"
+                      value={tenantSearch}
+                      onChange={(e) => setTenantSearch(e.target.value)}
+                    />
+                    <div className="border border-gray-200 rounded-[12px] p-3 max-h-40 overflow-y-auto space-y-1.5">
+                      {tenants
+                        .filter((t) => {
+                          const q = tenantSearch.toLowerCase();
+                          return !q || t.name.toLowerCase().includes(q) || t.code.toLowerCase().includes(q);
+                        })
+                        .map((t) => {
+                          const selectedCodes = wfForm.visibleTo ? wfForm.visibleTo.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : [];
+                          const checked = selectedCodes.includes(t.code.toUpperCase());
+                          return (
+                            <label key={t.id} className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                className="accent-[#002FA7] w-4 h-4"
+                                checked={checked}
+                                onChange={() => {
+                                  const codes = wfForm.visibleTo ? wfForm.visibleTo.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : [];
+                                  const next = checked ? codes.filter((c) => c !== t.code.toUpperCase()) : [...codes, t.code.toUpperCase()];
+                                  setWfForm({ ...wfForm, visibleTo: next.join(",") });
+                                }}
+                              />
+                              <span className="text-sm text-gray-700">{t.name}</span>
+                              <span className="text-xs text-gray-400 font-mono">{t.code}</span>
+                              {!t.enabled && <span className="text-xs text-red-400">已停用</span>}
+                            </label>
+                          );
+                        })}
+                      {tenants.length === 0 && <p className="text-xs text-gray-400 text-center py-2">暂无组织</p>}
+                    </div>
+                    {wfForm.visibleTo && (
+                      <p className="text-xs text-gray-400">
+                        已选：{wfForm.visibleTo.split(",").filter(Boolean).join("、")}
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
               <label className="flex items-center gap-2 cursor-pointer">

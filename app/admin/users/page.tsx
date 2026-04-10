@@ -58,7 +58,12 @@ export default function AdminUsersPage() {
   const [userTypeFilter, setUserTypeFilter] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
+  const [orgFilter, setOrgFilter] = useState("");
   const [loading, setLoading] = useState(false);
+  const [tenants, setTenants] = useState<{ id: string; code: string; name: string }[]>([]);
+  const [allDepts, setAllDepts] = useState<{ id: string; name: string; tenant_code: string }[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchLoading, setBatchLoading] = useState(false);
 
   // 重置密码弹窗
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null);
@@ -91,6 +96,7 @@ export default function AdminUsersPage() {
       if (userTypeFilter) params.set("user_type", userTypeFilter);
       if (roleFilter) params.set("role", roleFilter);
       if (deptFilter) params.set("dept_id", deptFilter);
+      if (orgFilter) params.set("org", orgFilter);
       const res = await fetch(`/api/admin/users?${params}`);
       const data = await res.json();
       setUsers(data.users ?? []);
@@ -98,10 +104,20 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter, userTypeFilter, roleFilter]);
+  }, [page, search, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
 
-  useEffect(() => { fetchUsers(1); setPage(1); }, [search, statusFilter, userTypeFilter, roleFilter, deptFilter]);
+  useEffect(() => { fetchUsers(1); setPage(1); setSelectedIds([]); }, [search, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
   useEffect(() => { fetchUsers(page); }, [page]);
+
+  useEffect(() => {
+    Promise.all([
+      fetch("/api/admin/tenants").then(r => r.json()).catch(() => []),
+      fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
+    ]).then(([tr, dr]) => {
+      setTenants(Array.isArray(tr) ? tr : []);
+      setAllDepts(Array.isArray(dr) ? dr : []);
+    });
+  }, []);
 
   async function setStatus(user: UserRow, status: "active" | "disabled") {
     const label = status === "active" ? "恢复正常" : "禁用";
@@ -112,6 +128,26 @@ export default function AdminUsersPage() {
       body: JSON.stringify({ action: "set-status", status }),
     });
     if (res.ok) fetchUsers(page);
+  }
+
+  async function batchSetStatus(status: "active" | "disabled") {
+    if (selectedIds.length === 0) return;
+    const label = status === "active" ? "启用" : "禁用";
+    if (!confirm(`确认批量${label}已选 ${selectedIds.length} 个用户？`)) return;
+    setBatchLoading(true);
+    try {
+      await Promise.all(selectedIds.map(id =>
+        fetch(`/api/admin/users/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "set-status", status }),
+        })
+      ));
+      setSelectedIds([]);
+      fetchUsers(page);
+    } finally {
+      setBatchLoading(false);
+    }
   }
 
   async function doReset() {
@@ -205,7 +241,7 @@ export default function AdminUsersPage() {
     return new Date(s).toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
   }
 
-  const hasFilter = search || statusFilter || userTypeFilter || roleFilter || deptFilter;
+  const hasFilter = search || statusFilter || userTypeFilter || roleFilter || deptFilter || orgFilter;
 
   return (
     <AdminLayout>
@@ -228,16 +264,14 @@ export default function AdminUsersPage() {
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               className={`${inputCls} pl-8 w-full`}
-              placeholder="搜索手机号…"
+              placeholder="搜索手机号 / 用户名 / 真实姓名…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <select className={`${inputCls} pr-2`} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="">全部状态</option>
-            <option value="active">正常</option>
-            <option value="disabled">已禁用</option>
-            <option value="deleted">已注销</option>
+          <select className={`${inputCls} pr-2`} value={orgFilter} onChange={(e) => setOrgFilter(e.target.value)}>
+            <option value="">全部组织</option>
+            {tenants.map(t => <option key={t.id} value={t.code}>{t.name}（{t.code}）</option>)}
           </select>
           <select className={`${inputCls} pr-2`} value={userTypeFilter} onChange={(e) => setUserTypeFilter(e.target.value)}>
             <option value="">全部类型</option>
@@ -251,15 +285,19 @@ export default function AdminUsersPage() {
             <option value="org_admin">组织管理员</option>
             <option value="user">普通用户</option>
           </select>
-          <input
-            className={`${inputCls} w-36`}
-            placeholder="按部门ID筛选…"
-            value={deptFilter}
-            onChange={(e) => setDeptFilter(e.target.value)}
-          />
+          <select className={`${inputCls} pr-2`} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="">全部状态</option>
+            <option value="active">正常</option>
+            <option value="disabled">已禁用</option>
+            <option value="deleted">已注销</option>
+          </select>
+          <select className={`${inputCls} pr-2`} value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)}>
+            <option value="">全部部门</option>
+            {allDepts.map(d => <option key={d.id} value={d.id}>{d.name}（{d.tenant_code}）</option>)}
+          </select>
           {hasFilter && (
             <button
-              onClick={() => { setSearch(""); setStatusFilter(""); setUserTypeFilter(""); setRoleFilter(""); setDeptFilter(""); }}
+              onClick={() => { setSearch(""); setStatusFilter(""); setUserTypeFilter(""); setRoleFilter(""); setDeptFilter(""); setOrgFilter(""); }}
               className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
             >
               <X size={13} /> 清除筛选
@@ -267,12 +305,47 @@ export default function AdminUsersPage() {
           )}
         </div>
 
+        {/* 批量操作工具栏 */}
+        {selectedIds.length > 0 && (
+          <div className="bg-[#002FA7]/5 border border-[#002FA7]/20 rounded-[14px] px-4 py-2.5 flex items-center gap-3">
+            <span className="text-sm text-[#002FA7] font-medium">已选 {selectedIds.length} 人</span>
+            <button
+              onClick={() => batchSetStatus("active")}
+              disabled={batchLoading}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-[8px] text-xs font-medium bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-60"
+            >
+              <ShieldCheck size={13} /> 批量启用
+            </button>
+            <button
+              onClick={() => batchSetStatus("disabled")}
+              disabled={batchLoading}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-[8px] text-xs font-medium bg-amber-500 text-white hover:bg-amber-600 transition-colors disabled:opacity-60"
+            >
+              <ShieldOff size={13} /> 批量禁用
+            </button>
+            <button
+              onClick={() => setSelectedIds([])}
+              className="ml-auto text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
+            >
+              <X size={13} /> 取消选择
+            </button>
+          </div>
+        )}
+
         {/* 表格 */}
         <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/50">
+                  <th className="px-4 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      className="rounded border-gray-300 text-[#002FA7] focus:ring-[#002FA7]/30"
+                      checked={users.length > 0 && users.every(u => selectedIds.includes(u.id))}
+                      onChange={(e) => setSelectedIds(e.target.checked ? users.map(u => u.id) : [])}
+                    />
+                  </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">用户</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">手机号</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">用户类型</th>
@@ -289,7 +362,7 @@ export default function AdminUsersPage() {
                 {loading ? (
                   [...Array(5)].map((_, i) => (
                     <tr key={i} className="border-b border-gray-50">
-                      {[...Array(9)].map((_, j) => (
+                      {[...Array(10)].map((_, j) => (
                         <td key={j} className="px-4 py-3">
                           <div className="h-4 bg-gray-100 rounded animate-pulse w-20" />
                         </td>
@@ -298,7 +371,7 @@ export default function AdminUsersPage() {
                   ))
                 ) : users.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-14 text-center text-sm text-gray-400">暂无用户数据</td>
+                    <td colSpan={10} className="px-4 py-14 text-center text-sm text-gray-400">暂无用户数据</td>
                   </tr>
                 ) : (
                   users.map((u) => {
@@ -307,7 +380,15 @@ export default function AdminUsersPage() {
                     const ut = USER_TYPE_MAP[u.user_type] ?? USER_TYPE_MAP.organization;
                     const rl = ROLE_MAP[u.role] ?? ROLE_MAP.user;
                     return (
-                      <tr key={u.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                      <tr key={u.id} className={`border-b border-gray-50 hover:bg-gray-50/50 transition-colors ${selectedIds.includes(u.id) ? "bg-blue-50/40" : ""}`}>
+                        <td className="px-4 py-3 w-10">
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300 text-[#002FA7] focus:ring-[#002FA7]/30"
+                            checked={selectedIds.includes(u.id)}
+                            onChange={(e) => setSelectedIds(e.target.checked ? [...selectedIds, u.id] : selectedIds.filter(id => id !== u.id))}
+                          />
+                        </td>
                         <td className="px-4 py-3">
                           <p className="font-medium text-gray-800">{u.real_name || u.nickname || "—"}</p>
                           {u.username && (
