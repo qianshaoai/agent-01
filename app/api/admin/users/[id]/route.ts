@@ -62,5 +62,12 @@ export async function PATCH(
     return NextResponse.json({ ok: true });
   }
 
+  // ── 软删除用户 ──────────────────────────────────────────────
+  if (body.action === "soft-delete") {
+    const { error } = await db.from("users").update({ status: "deleted" }).eq("id", id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true });
+  }
+
   return NextResponse.json({ error: "未知操作" }, { status: 400 });
 }

@@ -12,6 +12,7 @@ export async function PATCH(
   const body = await req.json();
   const updates: Record<string, unknown> = {};
 
+  if (body.agentCode !== undefined) updates.agent_code = body.agentCode;
   if (body.name !== undefined) updates.name = body.name;
   if (body.description !== undefined) updates.description = body.description;
   if (body.categoryId !== undefined) updates.category_id = body.categoryId || null;
@@ -42,6 +43,9 @@ export async function PATCH(
     .select()
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    if (error.code === "23505") return NextResponse.json({ error: "该编号已被其他智能体使用，请换一个编号" }, { status: 409 });
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
   return NextResponse.json(data);
 }

@@ -171,6 +171,17 @@ export default function TenantsPage() {
     await fetch(`/api/admin/tenants/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !t.enabled }) });
     load();
   }
+
+  async function deleteTenant(t: Tenant) {
+    if (!confirm(`确认删除组织「${t.name}（${t.code}）」？\n此操作不可撤销。`)) return;
+    const res = await fetch(`/api/admin/tenants/${t.id}`, { method: "DELETE" });
+    if (res.ok) {
+      load();
+    } else {
+      const d = await res.json();
+      alert(d.error ?? "删除失败");
+    }
+  }
   async function handleSave() {
     setFormError("");
     if (!form.name || !form.quota || !form.expiresAt) { setFormError("请填写组织名称、配额和到期日"); return; }
@@ -244,6 +255,7 @@ export default function TenantsPage() {
                     <div className="flex items-center gap-1 shrink-0">
                       <button onClick={() => openEdit(t)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Edit2 size={14} /></button>
                       <button onClick={() => toggleEnabled(t)} className={`p-1.5 rounded-[8px] transition-colors ${t.enabled ? "hover:bg-red-50 text-gray-400 hover:text-red-500" : "hover:bg-green-50 text-gray-400 hover:text-green-500"}`} title={t.enabled ? "禁用" : "启用"}>{t.enabled ? <Ban size={14} /> : <CheckCircle2 size={14} />}</button>
+                      <button onClick={() => deleteTenant(t)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={14} /></button>
                     </div>
                   </div>
 

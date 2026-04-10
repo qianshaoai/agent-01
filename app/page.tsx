@@ -37,6 +37,7 @@ const ChevronDown = dynamic(
 );
 
 type UserInfo = {
+  userId: string;
   phone: string;
   tenantCode: string;
   tenantName: string;
@@ -173,6 +174,7 @@ export default function HomePage() {
         if (!meRes.ok) {
           // Not logged in → fallback to mock
           setUser({
+            userId: "mock-user",
             phone: "138****8888",
             tenantCode: "DEMO2024",
             tenantName: "前哨科技示例企业",

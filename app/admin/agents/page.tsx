@@ -30,7 +30,7 @@ type Dept = { id: string; name: string; tenant_code: string };
 type Team = { id: string; name: string; dept_id: string };
 
 const SCOPE_TYPE_LABELS: Record<string, string> = {
-  all: "全部用户", org: "组织", dept: "部门", team: "小组", user: "用户", user_type: "用户类型",
+  all: "全部用户", org: "组织", dept: "部门", team: "小组", user: "用户", user_type: "用户类型", group: "按分组",
 };
 type CategoryDisplayConfig = {
   category_id: string;
@@ -74,6 +74,7 @@ export default function AgentsAdminPage() {
   const [addingPerm, setAddingPerm] = useState(false);
   const [depts, setDepts] = useState<Dept[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [userGroups, setUserGroups] = useState<{ id: string; name: string }[]>([]);
   const [formError, setFormError] = useState("");
   const [newCatName, setNewCatName] = useState("");
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
@@ -111,14 +112,16 @@ export default function AgentsAdminPage() {
     setPermLoading(true);
     setNewScopeType("org");
     setNewScopeId("");
-    const [permsData, deptsData, teamsData] = await Promise.all([
+    const [permsData, deptsData, teamsData, groupsData] = await Promise.all([
       fetch(`/api/admin/resource-permissions?resource_type=agent&resource_id=${a.id}`).then(r => r.json()).catch(() => []),
       fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
       fetch("/api/admin/teams").then(r => r.json()).catch(() => []),
+      fetch("/api/admin/user-groups").then(r => r.json()).catch(() => []),
     ]);
     setPermissions(Array.isArray(permsData) ? permsData : []);
     setDepts(Array.isArray(deptsData) ? deptsData : []);
     setTeams(Array.isArray(teamsData) ? teamsData : []);
+    setUserGroups(Array.isArray(groupsData) ? groupsData : []);
     setPermLoading(false);
   }
 
@@ -168,11 +171,11 @@ export default function AgentsAdminPage() {
   async function handleSaveAgent() {
     setFormError("");
     if (!form.name || !form.platform) { setFormError("请填写名称和平台"); return; }
-    if (!editing && !form.id) { setFormError("请填写智能体编号"); return; }
+    if (!form.id) { setFormError("请填写智能体编号"); return; }
     setSaving(true);
     try {
       const res = editing
-        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) })
+        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) })
         : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
@@ -386,7 +389,7 @@ export default function AgentsAdminPage() {
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
             <h2 className="font-semibold text-gray-900 mb-5">{editing ? "编辑智能体" : "新增智能体"}</h2>
             <div className="space-y-4">
-              <Input label="智能体编号（ID）" placeholder="如 AGT-009" value={form.id} disabled={!!editing} onChange={(e) => setForm({ ...form, id: e.target.value })} />
+              <Input label="智能体编号（ID）" placeholder="如 AGT-009" value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} />
               <Input label="名称" placeholder="如 营销文案助手" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">简介</label><textarea rows={3} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="简短描述功能…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">分类</label><select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">不分类</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
@@ -546,7 +549,15 @@ export default function AgentsAdminPage() {
                   <option value="dept">按部门</option>
                   <option value="team">按小组</option>
                   <option value="user">指定用户(ID)</option>
+                  <option value="group">按分组</option>
                 </select>
+                {newScopeType === "group" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择分组</option>
+                    {userGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  </select>
+                )}
                 {newScopeType === "user_type" && (
                   <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
                     className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">

@@ -20,6 +20,9 @@ import {
   Copy,
   Search,
   X,
+  Tag,
+  Pencil,
+  Check,
 } from "lucide-react";
 
 type Agent = { id: string; agent_code: string; name: string; agent_type: string; external_url: string };
@@ -59,6 +62,7 @@ export default function WorkflowsAdminPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [tenantSearch, setTenantSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<"workflows" | "categories">("workflows");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [wfSearch, setWfSearch] = useState("");
   const [wfCatFilter, setWfCatFilter] = useState("");
@@ -77,13 +81,18 @@ export default function WorkflowsAdminPage() {
   const [stepError, setStepError] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // Category management state
+  const [newCatName, setNewCatName] = useState("");
+  const [editingCatId, setEditingCatId] = useState<string | null>(null);
+  const [editingCatName, setEditingCatName] = useState("");
+
   async function load() {
     setLoading(true);
     try {
       const [wr, ar, cr, tr] = await Promise.all([
         fetch("/api/admin/workflows").then((r) => r.json()),
         fetch("/api/admin/agents").then((r) => r.json()),
-        fetch("/api/admin/categories").then((r) => r.json()),
+        fetch("/api/admin/wf-categories").then((r) => r.json()),
         fetch("/api/admin/tenants").then((r) => r.json()),
       ]);
       setWorkflows(Array.isArray(wr) ? wr : []);
@@ -238,6 +247,26 @@ export default function WorkflowsAdminPage() {
     return agents.find((a) => a.id === agentId) ?? null;
   };
 
+  // ── WF Category CRUD ──────────────────────────────────────────
+  async function addWfCategory() {
+    if (!newCatName.trim()) return;
+    await fetch("/api/admin/wf-categories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newCatName.trim() }) });
+    setNewCatName(""); load();
+  }
+
+  async function saveEditWfCat(id: string) {
+    if (!editingCatName.trim()) return;
+    await fetch(`/api/admin/wf-categories/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: editingCatName.trim() }) });
+    setEditingCatId(null); setEditingCatName(""); load();
+  }
+
+  async function deleteWfCat(cat: Category) {
+    if (!confirm(`确认删除分类「${cat.name}」？`)) return;
+    const res = await fetch(`/api/admin/wf-categories/${cat.id}`, { method: "DELETE" });
+    if (!res.ok) { const d = await res.json(); alert(d.error ?? "删除失败"); return; }
+    load();
+  }
+
   return (
     <AdminLayout>
       <div className="max-w-5xl mx-auto space-y-5">
@@ -246,8 +275,19 @@ export default function WorkflowsAdminPage() {
             <h1 className="text-xl font-bold text-gray-900">工作流管理</h1>
             <p className="text-sm text-gray-500 mt-0.5">共 {workflows.length} 个工作流</p>
           </div>
-          <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1 p-1 bg-gray-100 rounded-[12px]">
+              {(["workflows", "categories"] as const).map((tab) => (
+                <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-[10px] text-sm font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+                  {tab === "workflows" ? "工作流列表" : "分类管理"}
+                </button>
+              ))}
+            </div>
+            {activeTab === "workflows" && <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>}
+          </div>
         </div>
+
+        {activeTab === "workflows" && <>
 
         {/* 筛选栏 */}
         <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-3 flex flex-wrap gap-2 items-center">
@@ -312,7 +352,6 @@ export default function WorkflowsAdminPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-medium text-gray-900">{wf.name}</p>
-                        {wf.category && <span className="text-xs px-2 py-0.5 rounded-full bg-[#002FA7]/8 text-[#002FA7] font-medium">{wf.category}</span>}
                         {(wf.categoryIds ?? []).map((cid) => {
                           const cat = categories.find((c) => c.id === cid);
                           return cat ? <span key={cid} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">#{cat.name}</span> : null;
@@ -409,6 +448,61 @@ export default function WorkflowsAdminPage() {
           </div>
         );
         })()}
+
+        </>}
+
+        {/* 分类管理 Tab */}
+        {activeTab === "categories" && (
+          <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <input
+                className="flex-1 h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
+                placeholder="新分类名称…"
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addWfCategory()}
+              />
+              <Button size="sm" onClick={addWfCategory} className="gap-1"><Plus size={14} /> 添加</Button>
+            </div>
+            <div className="space-y-2">
+              {categories.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-6">暂无分类，在上方输入名称后回车或点击添加</p>
+              ) : categories.map((cat) => (
+                <div key={cat.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-[12px]">
+                  {editingCatId === cat.id ? (
+                    <div className="flex items-center gap-2 flex-1">
+                      <Tag size={15} className="text-[#002FA7] shrink-0" />
+                      <input
+                        autoFocus
+                        className="flex-1 h-9 border border-[#002FA7]/40 rounded-[8px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
+                        value={editingCatName}
+                        onChange={(e) => setEditingCatName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveEditWfCat(cat.id);
+                          if (e.key === "Escape") { setEditingCatId(null); setEditingCatName(""); }
+                        }}
+                      />
+                      <button onClick={() => saveEditWfCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认"><Check size={13} /></button>
+                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消"><X size={13} /></button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Tag size={15} className="text-[#002FA7]" />
+                        <span className="font-medium text-gray-800">{cat.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
+                        <button onClick={() => deleteWfCat(cat)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={13} /></button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* Workflow Modal */}
@@ -422,34 +516,37 @@ export default function WorkflowsAdminPage() {
                 <label className="text-sm font-medium text-gray-700">简介</label>
                 <textarea rows={2} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="简短描述工作流用途…" value={wfForm.description} onChange={(e) => setWfForm({ ...wfForm, description: e.target.value })} />
               </div>
-              <Input label="分类标签（可选备注）" placeholder="如 文案写作、数据分析" value={wfForm.category} onChange={(e) => setWfForm({ ...wfForm, category: e.target.value })} />
-              {categories.length > 0 && (
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-sm font-medium text-gray-700">关联分类（前台过滤用，可多选）</label>
-                  <div className="border border-gray-200 rounded-[12px] p-3 max-h-36 overflow-y-auto space-y-1.5">
-                    {categories.map((cat) => {
-                      const checked = wfForm.categoryIds.includes(cat.id);
-                      return (
-                        <label key={cat.id} className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            className="accent-[#002FA7] w-4 h-4"
-                            checked={checked}
-                            onChange={() => {
-                              const next = checked
-                                ? wfForm.categoryIds.filter((id) => id !== cat.id)
-                                : [...wfForm.categoryIds, cat.id];
-                              setWfForm({ ...wfForm, categoryIds: next });
-                            }}
-                          />
-                          <span className="text-sm text-gray-700">{cat.name}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  <p className="text-xs text-gray-400">不选则此工作流不出现在任何分类筛选下（点"全部"时仍可见）</p>
-                </div>
-              )}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-gray-700">所属分类（可多选）</label>
+                {categories.length === 0 ? (
+                  <p className="text-xs text-gray-400">暂无分类，请先在"分类管理"Tab 中创建</p>
+                ) : (
+                  <>
+                    <div className="border border-gray-200 rounded-[12px] p-3 max-h-36 overflow-y-auto space-y-1.5">
+                      {categories.map((cat) => {
+                        const checked = wfForm.categoryIds.includes(cat.id);
+                        return (
+                          <label key={cat.id} className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="accent-[#002FA7] w-4 h-4"
+                              checked={checked}
+                              onChange={() => {
+                                const next = checked
+                                  ? wfForm.categoryIds.filter((id) => id !== cat.id)
+                                  : [...wfForm.categoryIds, cat.id];
+                                setWfForm({ ...wfForm, categoryIds: next });
+                              }}
+                            />
+                            <span className="text-sm text-gray-700">{cat.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-gray-400">不选则此工作流不出现在任何分类筛选下</p>
+                  </>
+                )}
+              </div>
               <Input label="排序（数字越小越靠前）" type="number" value={String(wfForm.sortOrder)} onChange={(e) => setWfForm({ ...wfForm, sortOrder: Number(e.target.value) })} />
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">可见权限</label>

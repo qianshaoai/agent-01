@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
-import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch } from "lucide-react";
+import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus } from "lucide-react";
 
 type UserRow = {
   id: string;
@@ -77,6 +77,24 @@ export default function AdminUsersPage() {
   const [newRole, setNewRole] = useState<string>("");
   const [roleSaving, setRoleSaving] = useState(false);
 
+  // Tab
+  const [activeTab, setActiveTab] = useState<"users" | "groups">("users");
+
+  // 用户分组
+  type UserGroup = { id: string; name: string; description: string; tenant_code: string | null; member_count: number };
+  type GroupMember = { id: string; phone: string; username: string | null; real_name: string | null; nickname: string; tenant_code: string };
+  const [groups, setGroups] = useState<UserGroup[]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupName, setEditingGroupName] = useState("");
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  const [groupMembers, setGroupMembers] = useState<Record<string, GroupMember[]>>({});
+  const [addMemberGroupId, setAddMemberGroupId] = useState<string | null>(null);
+  const [addMemberSearch, setAddMemberSearch] = useState("");
+  const [addMemberResults, setAddMemberResults] = useState<UserRow[]>([]);
+  const [addMemberLoading, setAddMemberLoading] = useState(false);
+
   // 分配部门/小组弹窗
   const [deptTarget, setDeptTarget] = useState<UserRow | null>(null);
   const [deptOptions, setDeptOptions] = useState<{ id: string; name: string }[]>([]);
@@ -108,6 +126,7 @@ export default function AdminUsersPage() {
 
   useEffect(() => { fetchUsers(1); setPage(1); setSelectedIds([]); }, [search, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
   useEffect(() => { fetchUsers(page); }, [page]);
+  useEffect(() => { if (activeTab === "groups") loadGroups(); }, [activeTab]);
 
   useEffect(() => {
     Promise.all([
@@ -234,6 +253,75 @@ export default function AdminUsersPage() {
     }
   }
 
+  async function softDeleteUser(u: UserRow) {
+    if (!confirm(`确认删除用户「${u.real_name || u.nickname || u.phone}」？\n用户数据将被标记为已注销，操作不可撤销。`)) return;
+    if (!confirm(`二次确认：真的要删除用户 ${u.phone} 吗？`)) return;
+    const res = await fetch(`/api/admin/users/${u.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "soft-delete" }),
+    });
+    if (res.ok) fetchUsers(page);
+    else { const d = await res.json(); alert(d.error ?? "删除失败"); }
+  }
+
+  // ── 用户分组 ──────────────────────────────────────────────────
+  async function loadGroups() {
+    setGroupsLoading(true);
+    const res = await fetch("/api/admin/user-groups");
+    if (res.ok) setGroups(await res.json());
+    setGroupsLoading(false);
+  }
+
+  async function addGroup() {
+    if (!newGroupName.trim()) return;
+    await fetch("/api/admin/user-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newGroupName.trim() }) });
+    setNewGroupName(""); loadGroups();
+  }
+
+  async function saveEditGroup(id: string) {
+    if (!editingGroupName.trim()) return;
+    await fetch(`/api/admin/user-groups/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: editingGroupName.trim() }) });
+    setEditingGroupId(null); setEditingGroupName(""); loadGroups();
+  }
+
+  async function deleteGroup(g: UserGroup) {
+    if (!confirm(`确认删除分组「${g.name}」？成员关联也会一并删除。`)) return;
+    const res = await fetch(`/api/admin/user-groups/${g.id}`, { method: "DELETE" });
+    if (!res.ok) { const d = await res.json(); alert(d.error ?? "删除失败"); return; }
+    if (expandedGroupId === g.id) setExpandedGroupId(null);
+    loadGroups();
+  }
+
+  async function loadGroupMembers(groupId: string) {
+    const res = await fetch(`/api/admin/user-groups/${groupId}/members`);
+    if (res.ok) { const d = await res.json(); setGroupMembers((prev) => ({ ...prev, [groupId]: d })); }
+  }
+
+  async function toggleGroupExpand(groupId: string) {
+    if (expandedGroupId === groupId) { setExpandedGroupId(null); return; }
+    setExpandedGroupId(groupId);
+    await loadGroupMembers(groupId);
+  }
+
+  async function removeMember(groupId: string, userId: string) {
+    await fetch(`/api/admin/user-groups/${groupId}/members`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId }) });
+    loadGroupMembers(groupId); loadGroups();
+  }
+
+  async function searchUsersForGroup(q: string) {
+    if (!q.trim()) { setAddMemberResults([]); return; }
+    setAddMemberLoading(true);
+    const res = await fetch(`/api/admin/users?search=${encodeURIComponent(q)}&pageSize=10&page=1`);
+    if (res.ok) { const d = await res.json(); setAddMemberResults(d.users ?? []); }
+    setAddMemberLoading(false);
+  }
+
+  async function addMemberToGroup(groupId: string, userId: string) {
+    await fetch(`/api/admin/user-groups/${groupId}/members`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userIds: [userId] }) });
+    loadGroupMembers(groupId); loadGroups();
+  }
+
   const totalPages = Math.ceil(total / pageSize);
 
   function fmtDate(s: string | null) {
@@ -253,10 +341,23 @@ export default function AdminUsersPage() {
             <h1 className="text-lg font-semibold text-gray-900">用户管理</h1>
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">共 {total} 人</span>
           </div>
-          <button onClick={() => fetchUsers(page)} className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors">
-            <RefreshCw size={14} /> 刷新
-          </button>
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1 p-1 bg-gray-100 rounded-[12px]">
+              {(["users", "groups"] as const).map((tab) => (
+                <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-[10px] text-sm font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+                  {tab === "users" ? "用户列表" : "用户分组"}
+                </button>
+              ))}
+            </div>
+            {activeTab === "users" && (
+              <button onClick={() => fetchUsers(page)} className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors">
+                <RefreshCw size={14} /> 刷新
+              </button>
+            )}
+          </div>
         </div>
+
+        {activeTab === "users" && <>
 
         {/* 搜索 & 筛选 */}
         <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-4 flex flex-wrap gap-3 items-center">
@@ -466,6 +567,15 @@ export default function AdminUsersPage() {
                             {u.status === "deleted" && (
                               <span className="text-xs text-gray-300 px-2">已注销</span>
                             )}
+                            {u.status !== "deleted" && (
+                              <button
+                                onClick={() => softDeleteUser(u)}
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-red-400 hover:bg-red-50 transition-colors"
+                                title="软删除用户"
+                              >
+                                <Trash2 size={13} /> 删除
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -487,6 +597,139 @@ export default function AdminUsersPage() {
             </div>
           )}
         </div>
+
+        </>}
+
+        {/* ── 权限分组 Tab ──────────────────────────────────────── */}
+        {activeTab === "groups" && (
+          <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <input
+                className="flex-1 h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
+                placeholder="新分组名称…"
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addGroup()}
+              />
+              <button onClick={addGroup} className="flex items-center gap-1.5 px-4 h-10 rounded-[10px] text-sm font-medium bg-[#002FA7] text-white hover:bg-[#001f7a] transition-colors">
+                <Plus size={14} /> 添加分组
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mb-4">用户分组用于智能体/工作流的访问控制，与前台「我的工作任务」分组完全独立。</p>
+            {groupsLoading ? (
+              <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-12 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
+            ) : groups.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-8">暂无分组，在上方输入名称后回车或点击添加</p>
+            ) : (
+              <div className="space-y-2">
+                {groups.map((g) => (
+                  <div key={g.id} className="border border-gray-100 rounded-[12px] overflow-hidden">
+                    {/* 分组行 */}
+                    <div className="flex items-center gap-2 p-3 bg-gray-50/50">
+                      {editingGroupId === g.id ? (
+                        <div className="flex items-center gap-2 flex-1">
+                          <Tag size={14} className="text-[#002FA7] shrink-0" />
+                          <input
+                            autoFocus
+                            className="flex-1 h-8 border border-[#002FA7]/40 rounded-[8px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
+                            value={editingGroupName}
+                            onChange={(e) => setEditingGroupName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveEditGroup(g.id);
+                              if (e.key === "Escape") { setEditingGroupId(null); setEditingGroupName(""); }
+                            }}
+                          />
+                          <button onClick={() => saveEditGroup(g.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white" title="确认"><Check size={13} /></button>
+                          <button onClick={() => { setEditingGroupId(null); setEditingGroupName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400"><X size={13} /></button>
+                        </div>
+                      ) : (
+                        <>
+                          <button onClick={() => toggleGroupExpand(g.id)} className="flex items-center gap-2 flex-1 text-left">
+                            <Tag size={14} className="text-[#002FA7] shrink-0" />
+                            <span className="font-medium text-gray-800">{g.name}</span>
+                            <span className="text-xs text-gray-400 ml-1">{g.member_count} 人</span>
+                            {g.tenant_code && <span className="text-xs text-gray-400 font-mono">({g.tenant_code})</span>}
+                          </button>
+                          <button onClick={() => { setEditingGroupId(g.id); setEditingGroupName(g.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600" title="重命名"><Pencil size={13} /></button>
+                          <button onClick={() => deleteGroup(g)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500" title="删除"><Trash2 size={13} /></button>
+                        </>
+                      )}
+                    </div>
+                    {/* 展开：成员列表 */}
+                    {expandedGroupId === g.id && (
+                      <div className="p-3 border-t border-gray-100">
+                        {/* 添加成员 */}
+                        {addMemberGroupId === g.id ? (
+                          <div className="mb-3">
+                            <div className="flex gap-2 mb-2">
+                              <input
+                                autoFocus
+                                className="flex-1 h-9 border border-gray-200 rounded-[8px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
+                                placeholder="搜索用户（手机号/用户名/姓名）…"
+                                value={addMemberSearch}
+                                onChange={(e) => { setAddMemberSearch(e.target.value); searchUsersForGroup(e.target.value); }}
+                              />
+                              <button onClick={() => { setAddMemberGroupId(null); setAddMemberSearch(""); setAddMemberResults([]); }} className="px-3 h-9 rounded-[8px] text-xs text-gray-400 hover:bg-gray-100 border border-gray-200">取消</button>
+                            </div>
+                            {addMemberLoading && <p className="text-xs text-gray-400 py-2">搜索中…</p>}
+                            {addMemberResults.length > 0 && (
+                              <div className="border border-gray-100 rounded-[8px] divide-y divide-gray-50 max-h-48 overflow-y-auto">
+                                {addMemberResults.map((u) => {
+                                  const alreadyIn = (groupMembers[g.id] ?? []).some((m) => m.id === u.id);
+                                  return (
+                                    <div key={u.id} className="flex items-center justify-between px-3 py-2">
+                                      <div>
+                                        <p className="text-sm text-gray-800">{u.real_name || u.nickname || "—"}</p>
+                                        <p className="text-xs text-gray-400 font-mono">{u.phone}</p>
+                                      </div>
+                                      <button
+                                        onClick={() => !alreadyIn && addMemberToGroup(g.id, u.id)}
+                                        disabled={alreadyIn}
+                                        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs font-medium transition-colors ${alreadyIn ? "text-gray-300 cursor-not-allowed" : "text-[#002FA7] hover:bg-[#002FA7]/10"}`}
+                                      >
+                                        <UserPlus size={12} /> {alreadyIn ? "已在分组" : "添加"}
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <button onClick={() => { setAddMemberGroupId(g.id); setAddMemberSearch(""); setAddMemberResults([]); }} className="flex items-center gap-1 text-xs text-[#002FA7] hover:underline mb-2">
+                            <UserPlus size={12} /> 添加成员
+                          </button>
+                        )}
+                        {/* 成员列表 */}
+                        {(groupMembers[g.id] ?? []).length === 0 ? (
+                          <p className="text-xs text-gray-400 py-2 text-center">暂无成员</p>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {(groupMembers[g.id] ?? []).map((m) => (
+                              <div key={m.id} className="flex items-center justify-between px-2 py-1.5 rounded-[8px] hover:bg-gray-50">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-6 h-6 rounded-full bg-[#002FA7]/10 text-[#002FA7] text-xs font-bold flex items-center justify-center shrink-0">
+                                    {(m.real_name || m.nickname || m.phone).charAt(0)}
+                                  </div>
+                                  <div>
+                                    <p className="text-sm text-gray-800">{m.real_name || m.nickname || "—"}</p>
+                                    <p className="text-xs text-gray-400 font-mono">{m.phone}</p>
+                                  </div>
+                                </div>
+                                <button onClick={() => removeMember(g.id, m.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors" title="移出分组"><UserMinus size={12} /></button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
 
       {/* ── 重置密码弹窗 ─────────────────────────────────────── */}

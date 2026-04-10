@@ -11,6 +11,7 @@ function getScopeLabel(scopeType: string, scopeId: string | null, maps: any) {
     case "dept": return maps.dept[scopeId ?? ""] ?? scopeId ?? "";
     case "team": return maps.team[scopeId ?? ""] ?? scopeId ?? "";
     case "user": return maps.user[scopeId ?? ""] ?? scopeId ?? "";
+    case "group": return maps.group[scopeId ?? ""] ?? scopeId ?? "";
     default: return scopeId ?? "";
   }
 }
@@ -37,16 +38,18 @@ export async function GET(req: NextRequest) {
   const perms = data ?? [];
 
   // Batch fetch display labels
-  const orgCodes = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "org").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
-  const deptIds  = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "dept").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
-  const teamIds  = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "team").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
-  const userIds  = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "user").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
+  const orgCodes  = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "org").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
+  const deptIds   = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "dept").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
+  const teamIds   = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "team").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
+  const userIds   = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "user").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
+  const groupIds  = [...new Set(perms.filter((p: { scope_type: string; scope_id: string }) => p.scope_type === "group").map((p: { scope_id: string }) => p.scope_id).filter(Boolean))] as string[];
 
-  const [tenantRes, deptRes, teamRes, userRes] = await Promise.all([
-    orgCodes.length  > 0 ? db.from("tenants").select("code, name").in("code", orgCodes)       : Promise.resolve({ data: [] }),
-    deptIds.length   > 0 ? db.from("departments").select("id, name").in("id", deptIds)        : Promise.resolve({ data: [] }),
-    teamIds.length   > 0 ? db.from("teams").select("id, name").in("id", teamIds)              : Promise.resolve({ data: [] }),
-    userIds.length   > 0 ? db.from("users").select("id, nickname").in("id", userIds)          : Promise.resolve({ data: [] }),
+  const [tenantRes, deptRes, teamRes, userRes, groupRes] = await Promise.all([
+    orgCodes.length  > 0 ? db.from("tenants").select("code, name").in("code", orgCodes)          : Promise.resolve({ data: [] }),
+    deptIds.length   > 0 ? db.from("departments").select("id, name").in("id", deptIds)           : Promise.resolve({ data: [] }),
+    teamIds.length   > 0 ? db.from("teams").select("id, name").in("id", teamIds)                 : Promise.resolve({ data: [] }),
+    userIds.length   > 0 ? db.from("users").select("id, nickname").in("id", userIds)             : Promise.resolve({ data: [] }),
+    groupIds.length  > 0 ? db.from("user_groups").select("id, name").in("id", groupIds)          : Promise.resolve({ data: [] }),
   ]);
 
   const maps = {
@@ -54,6 +57,7 @@ export async function GET(req: NextRequest) {
     dept:   Object.fromEntries((deptRes.data  ?? []).map((d: { id: string; name: string })   => [d.id, d.name])),
     team:   Object.fromEntries((teamRes.data  ?? []).map((t: { id: string; name: string })   => [t.id, t.name])),
     user:   Object.fromEntries((userRes.data  ?? []).map((u: { id: string; nickname: string }) => [u.id, u.nickname])),
+    group:  Object.fromEntries((groupRes.data ?? []).map((g: { id: string; name: string })   => [g.id, g.name])),
   };
 
   const enriched = perms.map((p: { scope_type: string; scope_id: string | null }) => ({

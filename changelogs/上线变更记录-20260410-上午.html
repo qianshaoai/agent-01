@@ -162,9 +162,36 @@
         <ul class="item-list">
 
           <li class="item">
-            <div class="title"><span class="badge badge-new">P1 #11</span>用户列表批量操作</div>
-            表格第一列新增复选框，表头支持当页全选；勾选后顶部出现操作工具栏，可批量启用/禁用用户。
-            切换筛选条件时已选项自动清空。
+            <div class="title"><span class="badge badge-new">P0 #7</span>工作流步骤类型扩展</div>
+            <code>exec_type</code> 由 2 种扩展为 4 种：智能体执行 / 人工执行 / 人工审核 / 其他（外部AI工具）。
+            前台步骤卡片新增对应颜色标签，数据库 migration_v9.sql 同步扩展枚举值。
+          </li>
+
+          <li class="item">
+            <div class="title"><span class="badge badge-new">P0 #8</span>工作流可见范围交互优化</div>
+            旧版需手动输入组织码字符串（如 <code>DEMO,ACME</code>）。改为四模式下拉：全部 / 仅组织用户 / 仅个人用户 / 指定组织（支持搜索+复选框多选）。
+          </li>
+
+          <li class="item">
+            <div class="title"><span class="badge badge-new">P0 #9</span>首页联系二维码后台配置</div>
+            品牌设置页新增二维码上传区域，支持上传/预览/删除。前台"联系我们"弹窗实时读取。
+            图片存于 Supabase Storage <code>uploads</code> 桶，需手动创建该桶（Public 开启）。
+          </li>
+
+          <li class="item">
+            <div class="title"><span class="badge badge-new">P0 #10</span>列表页多条件筛选</div>
+            <ul>
+              <li>用户管理：按组织/类型/角色/状态/部门筛选，搜索支持手机号/用户名/真实姓名</li>
+              <li>智能体管理：按类型/分类/状态筛选</li>
+              <li>工作流管理：按分类/可见范围/状态筛选</li>
+            </ul>
+            全部支持一键清除筛选。
+          </li>
+
+          <li class="item">
+            <div class="title"><span class="badge badge-new">P1 #11</span>批量操作</div>
+            用户列表表格新增复选框列，表头支持当页全选；勾选后顶部出现工具栏，可批量启用/禁用。
+            智能体分配弹窗新增一键全选/全部取消。切换筛选条件时已选项自动清空。
           </li>
 
         </ul>
