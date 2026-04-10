@@ -37,11 +37,34 @@ export async function GET(req: NextRequest) {
   }
   if (deptFilter) query = query.eq("dept_id", deptFilter);
 
-  const { data, count, error } = await query
-    .order("created_at", { ascending: false })
-    .range((page - 1) * pageSize, page * pageSize - 1);
+  // 先取全部符合过滤的记录，在内存中按 状态+角色+时间 排序后手动分页
+  // （用户量在后台管理场景下可控，通常 < 数千，这里取上限 5000 作为安全护栏）
+  const { data, count, error } = await query.limit(5000);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ users: data ?? [], total: count ?? 0, page, pageSize });
+  const roleRank: Record<string, number> = {
+    super_admin: 0,
+    system_admin: 1,
+    org_admin: 2,
+    user: 3,
+  };
+  const sorted = (data ?? []).slice().sort((a, b) => {
+    // 1. 已注销沉底
+    const aDel = a.status === "deleted" ? 1 : 0;
+    const bDel = b.status === "deleted" ? 1 : 0;
+    if (aDel !== bDel) return aDel - bDel;
+    // 2. 按角色排序
+    const ar = roleRank[a.role] ?? 99;
+    const br = roleRank[b.role] ?? 99;
+    if (ar !== br) return ar - br;
+    // 3. 时间倒序
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+
+  const total = count ?? sorted.length;
+  const start = (page - 1) * pageSize;
+  const pageData = sorted.slice(start, start + pageSize);
+
+  return NextResponse.json({ users: pageData, total, page, pageSize });
 }

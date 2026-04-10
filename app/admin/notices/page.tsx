@@ -3,6 +3,8 @@ import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card } from "@/components/ui/card";
 import { Globe, Building2, Plus, Edit2, Eye, EyeOff, Trash2 } from "lucide-react";
 
 type Notice = { id: string; tenant_code: string | null; content: string; enabled: boolean };
@@ -58,41 +60,43 @@ export default function NoticesPage() {
 
   return (
     <AdminLayout>
-      <div className="max-w-3xl mx-auto space-y-5">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-xl font-bold text-gray-900">公告管理</h1><p className="text-sm text-gray-500 mt-0.5">全局公告对所有用户可见；组织公告仅对指定组织可见</p></div>
-          <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增公告</Button>
-        </div>
+      <div className="space-y-6 max-w-4xl">
+        <PageHeader
+          icon={<Megaphone size={20} />}
+          title="公告管理"
+          subtitle="全局公告对所有用户可见；组织公告仅对指定组织可见"
+          actions={<Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增公告</Button>}
+        />
 
         {loading ? (
-          <div className="space-y-3">{[...Array(2)].map((_, i) => <div key={i} className="h-24 bg-white rounded-[16px] animate-pulse shadow-[0_1px_4px_rgba(0,0,0,0.06)]" />)}</div>
+          <div className="space-y-3">{[...Array(2)].map((_, i) => <Card key={i} padding="md"><div className="h-16 bg-gray-50 rounded-[10px] animate-pulse" /></Card>)}</div>
         ) : notices.length === 0 ? (
-          <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] py-16 text-center text-gray-400"><Megaphone size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">暂无公告</p></div>
+          <Card padding="lg" className="py-16 text-center text-gray-400"><Megaphone size={36} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">暂无公告</p></Card>
         ) : (
           <div className="space-y-3">
             {notices.map((n) => (
-              <div key={n.id} className={`bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-5 transition-opacity ${!n.enabled ? "opacity-50" : ""}`}>
+              <Card key={n.id} padding="md" hover className={`transition-opacity ${!n.enabled ? "opacity-60" : ""}`}>
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-3 flex-1 min-w-0">
-                    <div className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${n.tenant_code ? "bg-[#f0f4ff]" : "bg-amber-50"}`}>
-                      {n.tenant_code ? <Building2 size={18} className="text-[#002FA7]" /> : <Globe size={18} className="text-amber-500" />}
+                  <div className="flex items-start gap-4 flex-1 min-w-0">
+                    <div className={`w-11 h-11 rounded-[12px] flex items-center justify-center shrink-0 ${n.tenant_code ? "bg-[#002FA7]/8" : "bg-amber-50"}`}>
+                      {n.tenant_code ? <Building2 size={20} className="text-[#002FA7]" /> : <Globe size={20} className="text-amber-500" />}
                     </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
                         <Badge variant={n.tenant_code ? "default" : "warning"}>{n.tenant_code ? "组织专属" : "全局公告"}</Badge>
-                        {n.tenant_code && <span className="text-xs text-gray-400">{tenants.find((t) => t.code === n.tenant_code)?.name ?? n.tenant_code}</span>}
+                        {n.tenant_code && <span className="text-[12px] text-gray-500">{tenants.find((t) => t.code === n.tenant_code)?.name ?? n.tenant_code}</span>}
                         <Badge variant={n.enabled ? "success" : "muted"}>{n.enabled ? "已启用" : "已禁用"}</Badge>
                       </div>
                       <p className="text-sm text-gray-700 leading-relaxed">{n.content}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => openEdit(n)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Edit2 size={14} /></button>
-                    <button onClick={() => toggleEnabled(n)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title={n.enabled ? "禁用" : "启用"}>{n.enabled ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-                    <button onClick={() => deleteNotice(n.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={14} /></button>
+                    <button onClick={() => openEdit(n)} className="p-2 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Edit2 size={15} /></button>
+                    <button onClick={() => toggleEnabled(n)} className="p-2 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title={n.enabled ? "禁用" : "启用"}>{n.enabled ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+                    <button onClick={() => deleteNotice(n.id)} className="p-2 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={15} /></button>
                   </div>
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
         )}

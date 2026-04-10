@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>人机协同工作舱 · 补丁 V2.0 交付进度报告</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: #f4f6fb;
+      color: #1a2035;
+      line-height: 1.6;
+      font-size: 15px;
+    }
+
+    /* ── 顶部 Banner ── */
+    .header {
+      background: linear-gradient(135deg, #001d6e 0%, #002FA7 60%, #1a56e8 100%);
+      color: #fff;
+      padding: 52px 0 44px;
+      text-align: center;
+    }
+    .header .badge {
+      display: inline-block;
+      background: rgba(255,255,255,.15);
+      border: 1px solid rgba(255,255,255,.25);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 12px;
+      letter-spacing: .05em;
+      margin-bottom: 16px;
+    }
+    .header h1 { font-size: 28px; font-weight: 700; letter-spacing: .02em; }
+    .header p  { margin-top: 8px; font-size: 14px; color: rgba(255,255,255,.75); }
+
+    /* ── 总体进度卡 ── */
+    .progress-wrap {
+      max-width: 860px;
+      margin: -28px auto 0;
+      padding: 0 20px;
+    }
+    .progress-card {
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 8px 32px rgba(0,47,167,.12);
+      padding: 32px 36px;
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      flex-wrap: wrap;
+    }
+    .progress-ring-wrap {
+      position: relative;
+      width: 96px;
+      height: 96px;
+      flex-shrink: 0;
+    }
+    .progress-ring-wrap svg { transform: rotate(-90deg); }
+    .progress-ring-wrap .ring-bg { fill: none; stroke: #e8edf8; stroke-width: 8; }
+    .progress-ring-wrap .ring-fg { fill: none; stroke: #002FA7; stroke-width: 8; stroke-linecap: round;
+      stroke-dasharray: 251.2; stroke-dashoffset: 16.75; /* (1-15/16)*251.2 */ }
+    .ring-label {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+    .ring-label span:first-child { font-size: 22px; font-weight: 700; color: #002FA7; }
+    .ring-label span:last-child  { font-size: 11px; color: #8a96b0; }
+    .progress-info { flex: 1; min-width: 200px; }
+    .progress-info h2 { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+    .progress-info p  { font-size: 13px; color: #5a6480; }
+    .stat-group { display: flex; gap: 20px; flex-wrap: wrap; }
+    .stat { text-align: center; background: #f4f6fb; border-radius: 12px; padding: 14px 20px; min-width: 90px; }
+    .stat .num { font-size: 24px; font-weight: 700; }
+    .stat .lbl { font-size: 12px; color: #8a96b0; margin-top: 2px; }
+    .stat.done .num { color: #16a34a; }
+    .stat.pend .num { color: #f59e0b; }
+    .stat.total .num { color: #002FA7; }
+
+    /* ── 主内容 ── */
+    .main { max-width: 860px; margin: 32px auto 60px; padding: 0 20px; }
+
+    /* ── 版块标题 ── */
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      color: #8a96b0;
+      text-transform: uppercase;
+      margin: 40px 0 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-title::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: #e4e8f2;
+    }
+
+    /* ── 需求卡片 ── */
+    .req-list { display: flex; flex-direction: column; gap: 10px; }
+
+    .req-card {
+      background: #fff;
+      border-radius: 14px;
+      border: 1.5px solid #e8edf8;
+      padding: 18px 22px;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      transition: box-shadow .2s;
+    }
+    .req-card:hover { box-shadow: 0 4px 20px rgba(0,47,167,.08); }
+    .req-card.done  { border-color: #d1fae5; }
+    .req-card.pending { border-color: #fef3c7; }
+
+    .req-icon {
+      width: 36px; height: 36px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; flex-shrink: 0; margin-top: 1px;
+    }
+    .req-card.done    .req-icon { background: #dcfce7; }
+    .req-card.pending .req-icon { background: #fef9c3; }
+
+    .req-body { flex: 1; min-width: 0; }
+    .req-top  { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .req-title { font-size: 15px; font-weight: 600; }
+    .req-card.pending .req-title { color: #92400e; }
+
+    .tag {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; font-weight: 600; padding: 2px 8px;
+      border-radius: 6px; letter-spacing: .02em;
+    }
+    .tag-p0    { background: #fee2e2; color: #b91c1c; }
+    .tag-p1    { background: #ede9fe; color: #6d28d9; }
+    .tag-p2    { background: #f3f4f6; color: #6b7280; }
+    .tag-done  { background: #dcfce7; color: #15803d; }
+    .tag-wip   { background: #fef9c3; color: #a16207; }
+
+    .req-desc {
+      margin-top: 6px;
+      font-size: 13px;
+      color: #5a6480;
+      line-height: 1.65;
+    }
+    .req-desc ul { padding-left: 16px; margin-top: 4px; }
+    .req-desc li { margin-bottom: 2px; }
+
+    .req-date {
+      font-size: 11px;
+      color: #a0aec0;
+      margin-top: 6px;
+    }
+
+    /* ── 尾部 ── */
+    footer {
+      text-align: center;
+      font-size: 12px;
+      color: #a0aec0;
+      padding: 24px 0 40px;
+    }
+    footer strong { color: #5a6480; }
+  </style>
+</head>
+<body>
+
+<!-- ── 顶部 Banner ── -->
+<header class="header">
+  <div class="badge">人机协同工作舱 · 系统开发补丁</div>
+  <h1>V2.0 补丁交付进度报告</h1>
+  <p>统计截至 2026-04-10 · 基于《260408 智能体舱优化需求文档（补丁）V2.0》</p>
+</header>
+
+<!-- ── 总体进度 ── -->
+<div class="progress-wrap">
+  <div class="progress-card">
+    <div class="progress-ring-wrap">
+      <svg width="96" height="96" viewBox="0 0 96 96">
+        <circle class="ring-bg" cx="48" cy="48" r="40"/>
+        <circle class="ring-fg" cx="48" cy="48" r="40"/>
+      </svg>
+      <div class="ring-label">
+        <span>94%</span>
+        <span>完成</span>
+      </div>
+    </div>
+    <div class="progress-info">
+      <h2>P0 + P1 全量交付，仅 UI/UX 重设计待后续迭代</h2>
+      <p>本次补丁共 16 项需求，涵盖术语体系、账号权限、组织结构、工作流、智能体、品牌配置等核心模块。</p>
+    </div>
+    <div class="stat-group">
+      <div class="stat total"><div class="num">16</div><div class="lbl">总需求</div></div>
+      <div class="stat done"> <div class="num">15</div><div class="lbl">已完成</div></div>
+      <div class="stat pend"> <div class="num">1</div> <div class="lbl">待迭代</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 主内容 ── -->
+<main class="main">
+
+  <!-- P0 -->
+  <div class="section-title">P0 &nbsp;·&nbsp; 核心必做（本轮全部完成）</div>
+  <div class="req-list">
+
+    <div class="req-card done">
+      <div class="req-icon">🔤</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">术语全量替换</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          全站"企业"相关表述统一替换为"组织"，覆盖侧边栏导航、控制台、租户管理、智能体管理、公告管理、用量看板、操作日志、工作流管理、用户设置及所有 API 错误文案与代码注释。
+        </div>
+        <div class="req-date">完成日期：2026-04-09</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">🔑</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">组织码规则升级</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li>4～8 位英文字母，大小写不敏感，展示统一大写</li>
+            <li>前端注册页实时过滤 + 后端注册 API 校验</li>
+            <li>管理员新增组织前端 + 租户 API 后端双重校验</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-09</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">👤</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">用户类型与角色体系重构</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li>数据库新增 <code>user_type</code>（个人 / 组织）和 <code>role</code>（超级管理员 / 系统管理员 / 组织管理员 / 普通用户）字段</li>
+            <li>用户管理页新增用户类型、系统角色两列，支持按类型 / 角色筛选</li>
+            <li>管理员可点击角色标签直接修改用户角色</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-09</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">🏢</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">固定三级组织结构</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li>新建 <code>departments</code>（部门）、<code>teams</code>（小组）表，<code>users</code> 表新增 <code>dept_id</code>、<code>team_id</code> 字段</li>
+            <li>租户管理页支持展开组织结构，可内联增删改部门和小组</li>
+            <li>用户管理页新增"分配部门"按钮，可将组织用户分配至指定部门 / 小组</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-09</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">📝</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">注册入口与登录方式升级</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li>新增 <code>/register</code> 注册页，支持个人 / 组织用户类型切换</li>
+            <li>注册字段：用户名（全局唯一）、真实姓名、手机号、密码（≥8位）、组织码（组织用户）</li>
+            <li>登录简化为账号 + 密码，支持手机号或用户名两种方式登录</li>
+            <li>移除登录自动建号逻辑，新用户必须通过注册页注册</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-09</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">🔒</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">权限与可见性模型升级</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li>新建 <code>resource_permissions</code> 统一权限表，替代原 <code>tenant_agents</code></li>
+            <li>支持按：全部用户 / 组织 / 部门 / 小组 / 用户类型 / 指定用户 / 用户分组控制智能体可见范围</li>
+            <li>智能体管理页增加权限设置弹窗，支持增删权限条目与标签展示</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-09</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">⚙️</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">工作流步骤类型扩展</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          原有"智能体执行"和"人工执行"两种类型，扩展为四种：
+          <ul>
+            <li>🤖 智能体执行</li>
+            <li>👤 人工执行</li>
+            <li>🟣 人工审核</li>
+            <li>⚡ 其他（外部 AI 工具）</li>
+          </ul>
+          前台步骤标签通过颜色区分四种类型。
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">📋</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">工作流可见权限操作优化</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          原来只能手动输入组织码字符串（如 <code>DEMO,ACME</code>），体验差。改为下拉多选组织，支持名称 / 组织码搜索过滤，勾选即完成配置。
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">📷</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">首页联系二维码后台配置</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          品牌设置页新增二维码上传区域，支持上传、替换、删除操作；首页自动读取后台配置内容展示。
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">🔍</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">列表页筛选功能补齐</span>
+          <span class="tag tag-p0">P0</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li><strong>用户管理：</strong>按组织、用户类型、角色、状态、部门、分组筛选</li>
+            <li><strong>工作流管理：</strong>按分类、可见范围、组织、状态筛选</li>
+            <li><strong>智能体管理：</strong>按类型、分类、可见范围、分配组织、状态筛选</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+  </div><!-- /P0 list -->
+
+  <!-- P1 -->
+  <div class="section-title">P1 &nbsp;·&nbsp; 本轮建议完成（全部完成）</div>
+  <div class="req-list">
+
+    <div class="req-card done">
+      <div class="req-icon">✅</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">批量操作</span>
+          <span class="tag tag-p1">P1</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li>智能体分类分配弹窗：一键全选 / 取消</li>
+            <li>智能体组织分配弹窗：一键全选 / 全部取消</li>
+            <li>用户列表：批量启用 / 禁用（Checkbox 多选 + 工具栏）</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">🗂️</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">工作流后台分类管理</span>
+          <span class="tag tag-p1">P1</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          建立独立的工作流分类模块（独立 <code>wf_categories</code> 表），与智能体分类完全分离，支持按部门、业务线、场景等分类管理，工作流可多选分类。
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">🏗️</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">组织删除逻辑</span>
+          <span class="tag tag-p1">P1</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li>有关联数据（用户、权限配置等）时禁止删除，并给出明确提示</li>
+            <li>无关联数据时允许删除，删除前弹出二次确认</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">🗑️</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">超级管理员删除用户</span>
+          <span class="tag tag-p1">P1</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          超级管理员可软删除用户，状态标记为"已注销"（不物理删除），操作前需通过两次确认弹窗。已注销用户在列表中显示特殊状态标签，禁用 / 删除按钮自动隐藏。
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+    <div class="req-card done">
+      <div class="req-icon">🏷️</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">用户分组（权限分组）</span>
+          <span class="tag tag-p1">P1</span>
+          <span class="tag tag-done">✓ 已完成</span>
+        </div>
+        <div class="req-desc">
+          <ul>
+            <li>后台新增"用户分组"管理模块，支持增删改分组、展开查看成员、搜索添加 / 移出成员</li>
+            <li>分组作为权限标签，可在智能体权限设置中按"按分组"控制可见范围</li>
+            <li>与前台"我的工作任务"分组严格区分，互不干扰</li>
+          </ul>
+        </div>
+        <div class="req-date">完成日期：2026-04-10</div>
+      </div>
+    </div>
+
+  </div><!-- /P1 list -->
+
+  <!-- P2 -->
+  <div class="section-title">P2 &nbsp;·&nbsp; 后续迭代</div>
+  <div class="req-list">
+
+    <div class="req-card pending">
+      <div class="req-icon">🎨</div>
+      <div class="req-body">
+        <div class="req-top">
+          <span class="req-title">UI / UX 中度重设计</span>
+          <span class="tag tag-p2">P2</span>
+          <span class="tag tag-wip">待迭代</span>
+        </div>
+        <div class="req-desc">
+          列入后续迭代计划。重点方向：
+          <ul>
+            <li>提升字号与信息层级可读性</li>
+            <li>统一图标风格，强化按钮体系</li>
+            <li>后台向"高效操作台"风格靠拢</li>
+            <li>前台工作流区更紧凑、步骤卡片更易读</li>
+            <li>智能体展示模块与"我的智能体"折叠区更清晰</li>
+          </ul>
+        </div>
+        <div class="req-date">计划：后续版本</div>
+      </div>
+    </div>
+
+  </div><!-- /P2 list -->
+
+  <!-- 数据库迁移说明 -->
+  <div class="section-title">数据库迁移文件</div>
+  <div class="req-list">
+    <div class="req-card done" style="flex-direction:column; gap:10px;">
+      <div style="display:flex; gap:16px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:200px; background:#f4f6fb; border-radius:10px; padding:14px 18px;">
+          <div style="font-size:13px; font-weight:600; color:#002FA7; margin-bottom:4px;">migration_v11.sql</div>
+          <div style="font-size:12px; color:#5a6480;">创建 <code>wf_categories</code> 工作流分类表；重建 <code>workflow_categories</code> 关联表（指向新分类表）</div>
+        </div>
+        <div style="flex:1; min-width:200px; background:#f4f6fb; border-radius:10px; padding:14px 18px;">
+          <div style="font-size:13px; font-weight:600; color:#002FA7; margin-bottom:4px;">migration_v12.sql</div>
+          <div style="font-size:12px; color:#5a6480;">创建 <code>user_groups</code> 和 <code>user_group_members</code> 表；为 <code>resource_permissions</code> 新增 <code>group</code> scope 类型约束</div>
+        </div>
+      </div>
+      <div style="font-size:12px; color:#f59e0b; background:#fef9c3; border-radius:8px; padding:10px 14px;">
+        ⚠️ 以上两个迁移文件需在 Supabase Dashboard → SQL Editor 中执行后，用户分组与工作流分类功能方可正常使用。
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <strong>人机协同工作舱 · 补丁 V2.0</strong> &nbsp;|&nbsp; 生成日期：2026-04-10 &nbsp;|&nbsp; P0 × 10 + P1 × 5 全部交付完成
+</footer>
+
+</body>
+</html>

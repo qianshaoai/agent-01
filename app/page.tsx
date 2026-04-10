@@ -21,6 +21,9 @@ import {
   GitBranch,
   Bot,
   User,
+  Building2,
+  Eye,
+  Wrench,
   ArrowRight,
   Plus,
   Trash2,
@@ -390,23 +393,26 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#f8f9fc]">
-      <header className="bg-white border-b border-gray-100 sticky top-0 z-40 shadow-[0_1px_4px_rgba(0,0,0,0.06)]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      <header className="bg-white border-b border-gray-100 sticky top-0 z-40 shadow-[0_2px_10px_rgba(17,24,39,0.04)]">
+        <div className="max-w-[1600px] mx-auto px-5 sm:px-8 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-4">
             <button className="lg:hidden p-2 rounded-[10px] hover:bg-gray-100" onClick={() => setSidebarOpen(!sidebarOpen)}>
-              <Menu size={20} className="text-gray-600" />
+              <Menu size={22} className="text-gray-600" />
             </button>
-            <div className="flex items-center gap-2">
-              <div className="w-10 h-10 rounded-[10px] overflow-hidden shrink-0 flex items-center justify-center bg-[#002FA7]">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-[12px] overflow-hidden shrink-0 flex items-center justify-center bg-gradient-to-br from-[#002FA7] to-[#1a47c0] shadow-[0_4px_12px_rgba(0,47,167,0.25)]">
                 {siteSettings.logo_url ? (
                   <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" />
                 ) : (
-                  <span className="text-white text-xs font-bold">AI</span>
+                  <span className="text-white text-sm font-bold">AI</span>
                 )}
               </div>
-              <span className="font-semibold text-gray-900 hidden sm:block">
-                {siteSettings.platform_name || "AI 智能体平台"}
-              </span>
+              <div className="hidden sm:block">
+                <p className="text-[18px] font-bold text-gray-900 leading-tight tracking-tight">
+                  {siteSettings.platform_name || "AI 智能体平台"}
+                </p>
+                <p className="text-[12px] text-gray-400 mt-0.5 leading-none">AI-Powered Collaboration Platform</p>
+              </div>
             </div>
           </div>
 
@@ -416,8 +422,8 @@ export default function HomePage() {
                 {user.role === "super_admin" && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">超级管理员</span>}
                 {user.role === "system_admin" && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600 font-medium">系统管理员</span>}
                 {user.role === "org_admin" && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-600 font-medium">组织管理员</span>}
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-[#f0f4ff] rounded-[10px]">
-                  <div className="w-2 h-2 rounded-full bg-[#002FA7]" />
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#002FA7]/8 rounded-[10px]">
+                  {user.isPersonal ? <User size={14} className="text-[#002FA7]" /> : <Building2 size={14} className="text-[#002FA7]" />}
                   <span className="text-xs font-medium text-[#002FA7]">
                     {user.isPersonal ? "个人空间" : user.tenantName}
                   </span>
@@ -434,38 +440,41 @@ export default function HomePage() {
               </div>
             )}
 
-            {siteSettings.help_doc_url && (
-              <a href={siteSettings.help_doc_url} target="_blank" rel="noopener noreferrer" className="p-2 rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="帮助文档">
-                <BookOpen size={18} />
-              </a>
-            )}
-            <button onClick={() => setContactOpen(true)} className="p-2 rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="联系我们">
-              <QrCode size={18} />
-            </button>
-            <Link href="/settings" className="p-2 rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
-              <Settings size={18} />
-            </Link>
-            <button onClick={handleLogout} className="p-2 rounded-[10px] hover:bg-red-50 text-gray-500 hover:text-red-500 transition-colors" title="退出登录">
-              <LogOut size={18} />
-            </button>
+            <div className="flex items-center gap-1 ml-1">
+              {siteSettings.help_doc_url && (
+                <a href={siteSettings.help_doc_url} target="_blank" rel="noopener noreferrer" className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="帮助文档">
+                  <BookOpen size={20} />
+                </a>
+              )}
+              <button onClick={() => setContactOpen(true)} className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="联系我们">
+                <QrCode size={20} />
+              </button>
+              <Link href="/settings" className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="账号设置">
+                <Settings size={20} />
+              </Link>
+              <button onClick={handleLogout} className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-red-50 text-gray-500 hover:text-red-500 transition-colors" title="退出登录">
+                <LogOut size={20} />
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
-      <div className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6 flex gap-6">
+      <div className="flex-1 max-w-[1600px] mx-auto w-full px-5 sm:px-8 py-6 flex gap-7">
         {/* 分类侧边栏 */}
-        <aside className={`fixed inset-y-0 left-0 z-50 w-60 bg-white shadow-xl p-6 flex flex-col gap-4 transform transition-transform duration-200 lg:static lg:z-auto lg:w-48 lg:shadow-none lg:bg-transparent lg:p-0 lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
+        <aside className={`fixed inset-y-0 left-0 z-50 w-60 bg-white shadow-xl p-6 flex flex-col gap-4 transform transition-transform duration-200 lg:static lg:z-auto lg:w-56 lg:shadow-none lg:bg-transparent lg:p-0 lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
           <div className="flex items-center justify-between lg:hidden mb-2">
             <span className="font-semibold text-gray-900">我的工作任务</span>
             <button onClick={() => setSidebarOpen(false)}><X size={20} className="text-gray-500" /></button>
           </div>
           <div className="hidden lg:block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">我的工作任务</div>
-          <nav className="flex flex-col gap-0.5">
+          <nav className="flex flex-col gap-1">
             {/* 全部 */}
             <button
               onClick={() => switchCategory("__all__")}
-              className={`flex items-center px-3 py-2.5 rounded-[10px] text-sm font-medium transition-all duration-150 ${activeCategory === "__all__" ? "bg-[#002FA7] text-white" : "text-gray-600 hover:bg-gray-100"}`}
+              className={`group/item relative flex items-center px-3.5 py-2.5 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === "__all__" ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
             >
+              <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-[#002FA7] rounded-r transition-all duration-200 ${activeCategory === "__all__" ? "h-5" : "h-0 group-hover/item:h-5"}`} />
               全部
             </button>
 
@@ -501,8 +510,9 @@ export default function HomePage() {
                     <button
                       key={cat.id}
                       onClick={() => switchCategory(cat.id)}
-                      className={`w-full flex items-center px-3 py-2 pl-7 rounded-[10px] text-sm font-medium transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7] text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                      className={`group/item relative w-full flex items-center px-3.5 py-2 pl-7 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
                     >
+                      <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-[#002FA7] rounded-r transition-all duration-200 ${activeCategory === cat.id ? "h-5" : "h-0 group-hover/item:h-5"}`} />
                       {cat.name}
                     </button>
                   ))}
@@ -548,8 +558,9 @@ export default function HomePage() {
               <button
                 key={cat.id}
                 onClick={() => switchCategory(cat.id)}
-                className={`flex items-center px-3 py-2.5 rounded-[10px] text-sm font-medium transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7] text-white" : "text-gray-600 hover:bg-gray-100"}`}
+                className={`group/item relative flex items-center px-3.5 py-2.5 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
               >
+                <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-[#002FA7] rounded-r transition-all duration-200 ${activeCategory === cat.id ? "h-5" : "h-0 group-hover/item:h-5"}`} />
                 {cat.name}
               </button>
             ))}
@@ -589,44 +600,48 @@ export default function HomePage() {
                   setWorkflowCollapsed(next);
                   try { localStorage.setItem("wf_collapsed", next ? "1" : "0"); } catch {}
                 }}
-                className="w-full flex items-center gap-2 px-5 py-3.5 border-b border-gray-50 hover:bg-gray-50/50 transition-colors text-left"
+                className="w-full flex items-center gap-3.5 px-7 py-5 border-b border-gray-50 hover:bg-gray-50/60 transition-colors text-left"
               >
-                <GitBranch size={15} className="text-[#002FA7] shrink-0" />
-                <span className="text-sm font-semibold text-gray-800">工作流引导</span>
-                <span className="text-xs text-gray-400 ml-1 flex-1">按流程操作，事半功倍</span>
-                <ChevronDown size={15} className={`text-gray-400 transition-transform duration-200 ${workflowCollapsed ? "-rotate-90" : ""}`} />
+                <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] shrink-0">
+                  <GitBranch size={22} className="text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[18px] font-semibold text-gray-900 leading-tight">工作流引导</p>
+                  <p className="text-[13px] text-gray-500 mt-1">按流程操作，事半功倍</p>
+                </div>
+                <ChevronDown size={18} className={`text-gray-400 transition-transform duration-200 ${workflowCollapsed ? "-rotate-90" : ""}`} />
               </button>
 
               {!workflowCollapsed && (
                 workflows.length === 0 ? (
-                  <div className="py-10 flex items-center justify-center text-gray-400 text-sm">
+                  <div className="py-14 flex items-center justify-center text-gray-400 text-sm">
                     当前分类暂无工作流
                   </div>
                 ) : (
                   /* 移动端：横向工作流标签条；桌面端：左右结构 */
-                  <div className="flex flex-col sm:flex-row min-h-[200px] sm:min-h-[240px]">
+                  <div className="flex flex-col sm:flex-row min-h-[240px] sm:min-h-[300px]">
                     {/* 工作流列表：移动端横向滚动，桌面端纵向左侧 */}
-                    <div className="flex sm:flex-col sm:w-52 sm:shrink-0 sm:border-r border-b sm:border-b-0 border-gray-50 overflow-x-auto sm:overflow-x-visible sm:overflow-y-auto sm:py-2">
+                    <div className="flex sm:flex-col sm:w-56 sm:shrink-0 sm:border-r border-b sm:border-b-0 border-gray-50 overflow-x-auto sm:overflow-x-visible sm:overflow-y-auto sm:py-2">
                       {workflows.map((wf) => (
                         <button
                           key={wf.id}
                           onClick={() => setActiveWorkflowId(wf.id)}
-                          className={`shrink-0 sm:shrink text-left px-4 py-3 transition-all duration-150 whitespace-nowrap sm:whitespace-normal sm:border-l-2 border-b-2 sm:border-b-0 ${
+                          className={`shrink-0 sm:shrink text-left px-5 py-4 transition-all duration-150 whitespace-nowrap sm:whitespace-normal sm:border-l-[3px] border-b-2 sm:border-b-0 ${
                             activeWorkflowId === wf.id
-                              ? "border-[#002FA7] bg-[#002FA7]/4 text-[#002FA7]"
-                              : "border-transparent text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                              ? "border-[#002FA7] bg-[#002FA7]/5 text-[#002FA7]"
+                              : "border-transparent text-gray-700 hover:bg-gray-50 hover:text-gray-900"
                           }`}
                         >
-                          <p className={`text-sm font-medium leading-tight ${activeWorkflowId === wf.id ? "text-[#002FA7]" : ""}`}>{wf.name}</p>
+                          <p className={`text-[14px] font-medium leading-snug ${activeWorkflowId === wf.id ? "text-[#002FA7]" : ""}`}>{wf.name}</p>
                           {wf.category && (
-                            <p className="hidden sm:block text-[10px] mt-0.5 text-gray-400">{wf.category}</p>
+                            <p className="hidden sm:block text-[11px] mt-1 text-gray-400">{wf.category}</p>
                           )}
                         </button>
                       ))}
                     </div>
 
                     {/* 右侧：步骤时间轴 */}
-                    <div className="flex-1 px-5 py-4 overflow-y-auto">
+                    <div className="flex-1 px-7 py-6 overflow-y-auto">
                       {!activeWorkflow ? (
                         <div className="h-full flex items-center justify-center text-gray-400 text-sm">请选择工作流</div>
                       ) : activeWorkflow.workflow_steps.length === 0 ? (
@@ -634,46 +649,46 @@ export default function HomePage() {
                       ) : (
                         <>
                           {activeWorkflow.description && (
-                            <p className="text-xs text-gray-400 mb-4 leading-relaxed">{activeWorkflow.description}</p>
+                            <p className="text-[13px] text-gray-500 mb-6 leading-relaxed">{activeWorkflow.description}</p>
                           )}
                           <div className="relative">
-                            <div className="absolute left-[13px] top-6 bottom-2 w-px bg-gray-100" />
-                            <div className="space-y-1.5">
+                            <div className="absolute left-[15px] top-8 bottom-3 w-px bg-gray-100" />
+                            <div className="space-y-5">
                               {activeWorkflow.workflow_steps.map((step, idx) => (
-                                <div key={step.id} className="flex gap-3 items-start relative">
-                                  <div className="w-7 h-7 rounded-full bg-[#002FA7]/10 border-2 border-white ring-1 ring-gray-100 flex items-center justify-center shrink-0 z-10 mt-0.5">
-                                    <span className="text-[11px] font-bold text-[#002FA7]">{idx + 1}</span>
+                                <div key={step.id} className="flex gap-4 items-start relative">
+                                  <div className="w-8 h-8 rounded-full bg-[#002FA7]/10 border-2 border-white ring-1 ring-gray-100 flex items-center justify-center shrink-0 z-10 mt-0.5">
+                                    <span className="text-[12px] font-bold text-[#002FA7]">{idx + 1}</span>
                                   </div>
                                   {/* 两列固定布局：左侧标题+说明，右侧操作按钮始终对齐 */}
-                                  <div className="flex-1 min-w-0 flex items-start gap-2 py-0.5 pb-2.5">
+                                  <div className="flex-1 min-w-0 flex items-start gap-3 py-0.5">
                                     <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                        <span className="text-sm font-semibold text-gray-900">{step.title}</span>
-                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5 shrink-0 ${
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-[15px] font-semibold text-gray-900">{step.title}</span>
+                                        <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1 shrink-0 ${
                                           step.exec_type === "agent" ? "bg-blue-50 text-blue-600" :
                                           step.exec_type === "manual" ? "bg-amber-50 text-amber-600" :
                                           step.exec_type === "review" ? "bg-purple-50 text-purple-600" :
                                           "bg-gray-50 text-gray-600"
                                         }`}>
-                                          {step.exec_type === "agent" && <><Bot size={9} />智能体</>}
-                                          {step.exec_type === "manual" && <><User size={9} />人工执行</>}
-                                          {step.exec_type === "review" && <><User size={9} />人工审核</>}
-                                          {step.exec_type === "external" && <>⚡外部工具</>}
+                                          {step.exec_type === "agent" && <><Bot size={11} />智能体</>}
+                                          {step.exec_type === "manual" && <><User size={11} />人工执行</>}
+                                          {step.exec_type === "review" && <><Eye size={11} />人工审核</>}
+                                          {step.exec_type === "external" && <><Wrench size={11} />外部工具</>}
                                         </span>
                                       </div>
                                       {step.description && (
-                                        <p className="text-xs text-gray-400 leading-relaxed mt-0.5">{step.description}</p>
+                                        <p className="text-[13px] text-gray-500 leading-relaxed mt-1.5">{step.description}</p>
                                       )}
                                     </div>
                                     <div className="shrink-0 flex justify-end" style={{ minWidth: 148 }}>
                                       {step.exec_type === "agent" ? (
                                         <WorkflowStepButton step={step} />
                                       ) : step.exec_type === "manual" ? (
-                                        <span className="text-xs text-amber-600 bg-amber-50 px-2.5 py-1 rounded-[8px]">此步骤需人工处理</span>
+                                        <span className="text-[12px] text-amber-600 bg-amber-50 px-3 py-1.5 rounded-[8px]">此步骤需人工处理</span>
                                       ) : step.exec_type === "review" ? (
-                                        <span className="text-xs text-purple-600 bg-purple-50 px-2.5 py-1 rounded-[8px]">此步骤需人工审核</span>
+                                        <span className="text-[12px] text-purple-600 bg-purple-50 px-3 py-1.5 rounded-[8px]">此步骤需人工审核</span>
                                       ) : (
-                                        <span className="text-xs text-gray-600 bg-gray-50 px-2.5 py-1 rounded-[8px]">使用外部工具处理</span>
+                                        <span className="text-[12px] text-gray-600 bg-gray-50 px-3 py-1.5 rounded-[8px]">使用外部工具处理</span>
                                       )}
                                     </div>
                                   </div>
@@ -699,12 +714,16 @@ export default function HomePage() {
                 setAgentCollapsed(next);
                 try { localStorage.setItem("agent_collapsed", next ? "1" : "0"); } catch {}
               }}
-              className="w-full flex items-center gap-2 px-5 py-3.5 border-b border-gray-50 hover:bg-gray-50/50 transition-colors text-left"
+              className="w-full flex items-center gap-3.5 px-7 py-5 border-b border-gray-50 hover:bg-gray-50/60 transition-colors text-left"
             >
-              <MessageSquare size={15} className="text-[#002FA7] shrink-0" />
-              <span className="text-sm font-semibold text-gray-800">智能体展示</span>
-              <span className="flex-1" />
-              <ChevronDown size={15} className={`text-gray-400 transition-transform duration-200 ${agentCollapsed ? "-rotate-90" : ""}`} />
+              <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] shrink-0">
+                <MessageSquare size={22} className="text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[18px] font-semibold text-gray-900 leading-tight">智能体展示</p>
+                <p className="text-[13px] text-gray-500 mt-1">选择对应智能体开始对话</p>
+              </div>
+              <ChevronDown size={18} className={`text-gray-400 transition-transform duration-200 ${agentCollapsed ? "-rotate-90" : ""}`} />
             </button>
 
             {!agentCollapsed && (
@@ -746,24 +765,28 @@ export default function HomePage() {
           {/* ── 我的智能体 ──────────────────────────────────────────── */}
           <div className="mt-6 bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
             <div
-              className="w-full flex items-center gap-2 px-5 py-3.5 border-b border-gray-50 hover:bg-gray-50/50 transition-colors cursor-pointer"
+              className="w-full flex items-center gap-3.5 px-7 py-5 border-b border-gray-50 hover:bg-gray-50/60 transition-colors cursor-pointer"
               onClick={() => {
                 const next = !myAgentsCollapsed;
                 setMyAgentsCollapsed(next);
                 try { localStorage.setItem("my_agents_collapsed", next ? "1" : "0"); } catch {}
               }}
             >
-              <Bot size={15} className="text-[#002FA7] shrink-0" />
-              <span className="text-sm font-semibold text-gray-800">我的智能体</span>
-              <span className="flex-1" />
+              <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] shrink-0">
+                <Bot size={22} className="text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[18px] font-semibold text-gray-900 leading-tight">我的智能体</p>
+                <p className="text-[13px] text-gray-500 mt-1">自建的专属智能体，仅自己可见</p>
+              </div>
               <button
                 onClick={(e) => { e.stopPropagation(); openAddUA(); setShowMyAgentsSettings(true); }}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-[8px] text-xs font-medium text-[#002FA7] hover:bg-[#002FA7]/8 transition-colors"
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-[10px] text-[13px] font-medium text-[#002FA7] hover:bg-[#002FA7]/8 transition-colors"
               >
-                <Settings size={12} />
+                <Settings size={14} />
                 设置
               </button>
-              <ChevronDown size={15} className={`text-gray-400 transition-transform duration-200 ${myAgentsCollapsed ? "-rotate-90" : ""}`} />
+              <ChevronDown size={18} className={`text-gray-400 transition-transform duration-200 ${myAgentsCollapsed ? "-rotate-90" : ""}`} />
             </div>
 
             {!myAgentsCollapsed && (
@@ -958,7 +981,7 @@ export default function HomePage() {
       )}
 
       <footer className="border-t border-gray-100 bg-white mt-auto">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-[1600px] mx-auto px-5 sm:px-8 py-4 flex items-center justify-between">
           <p className="text-xs text-gray-400">© 2026 前哨科技（QianShao.AI）保留所有权利</p>
           <div className="flex items-center gap-4">
             <button onClick={() => setContactOpen(true)} className="text-xs text-gray-400 hover:text-[#002FA7] transition-colors">联系我们</button>
@@ -994,26 +1017,26 @@ function AgentCard({ agent }: { agent: AgentItem }) {
   const isExternal = agent.agent_type === "external";
 
   const cardClass =
-    "group bg-white rounded-[16px] p-5 shadow-[0_1px_4px_rgba(0,0,0,0.06)] hover:shadow-[0_8px_24px_rgba(0,47,167,0.12)] hover:-translate-y-0.5 transition-all duration-200 flex flex-col gap-3 cursor-pointer";
+    "group bg-white rounded-[16px] p-5 shadow-[0_1px_4px_rgba(0,0,0,0.06)] border border-gray-100/60 hover:shadow-[0_10px_28px_rgba(0,47,167,0.12)] hover:-translate-y-0.5 hover:border-[#002FA7]/20 transition-all duration-200 flex flex-col gap-4 cursor-pointer";
 
   const cardContent = (
     <>
       <div className="flex items-start justify-between">
-        <div className={`w-11 h-11 rounded-[12px] flex items-center justify-center ${isExternal ? "bg-orange-50" : "bg-[#002FA7]/8"}`}>
+        <div className={`w-12 h-12 rounded-[12px] flex items-center justify-center ${isExternal ? "bg-orange-50" : "bg-[#002FA7]/8"}`}>
           {isExternal
-            ? <ExternalLink size={20} className="text-orange-500" />
-            : <MessageSquare size={22} className="text-[#002FA7]" />}
+            ? <ExternalLink size={22} className="text-orange-500" />
+            : <MessageSquare size={24} className="text-[#002FA7]" />}
         </div>
-        <span className="text-[10px] text-gray-400 font-mono mt-1">{agent.agent_code}</span>
+        <span className="text-[11px] text-gray-400 font-mono mt-1.5">{agent.agent_code}</span>
       </div>
-      <div className="flex-1">
-        <h3 className={`font-semibold text-gray-900 mb-1 transition-colors ${isExternal ? "group-hover:text-orange-500" : "group-hover:text-[#002FA7]"}`}>{agent.name}</h3>
-        <p className="text-xs text-gray-500 leading-relaxed line-clamp-2">{agent.description}</p>
+      <div className="flex-1 min-h-0">
+        <h3 className={`text-[15px] font-semibold text-gray-900 mb-1.5 transition-colors ${isExternal ? "group-hover:text-orange-500" : "group-hover:text-[#002FA7]"}`}>{agent.name}</h3>
+        <p className="text-[13px] text-gray-500 leading-relaxed line-clamp-2">{agent.description}</p>
       </div>
       <div className="flex items-center justify-between pt-1">
         <Badge variant="muted">{agent.categories?.name ?? "通用"}</Badge>
-        <div className={`flex items-center gap-1 text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity ${isExternal ? "text-orange-500" : "text-[#002FA7]"}`}>
-          {isExternal ? <>外链跳转 <ExternalLink size={12} /></> : <>开始对话 <ChevronRight size={14} /></>}
+        <div className={`flex items-center gap-1 text-[12px] font-medium opacity-0 group-hover:opacity-100 transition-opacity ${isExternal ? "text-orange-500" : "text-[#002FA7]"}`}>
+          {isExternal ? <>外链跳转 <ExternalLink size={13} /></> : <>开始对话 <ChevronRight size={14} /></>}
         </div>
       </div>
     </>

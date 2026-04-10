@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -13,6 +15,8 @@ import {
   ChevronRight,
   Bot,
   User,
+  Eye,
+  Wrench,
   ExternalLink,
   ToggleLeft,
   ToggleRight,
@@ -269,54 +273,56 @@ export default function WorkflowsAdminPage() {
 
   return (
     <AdminLayout>
-      <div className="max-w-5xl mx-auto space-y-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">工作流管理</h1>
-            <p className="text-sm text-gray-500 mt-0.5">共 {workflows.length} 个工作流</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex gap-1 p-1 bg-gray-100 rounded-[12px]">
-              {(["workflows", "categories"] as const).map((tab) => (
-                <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-[10px] text-sm font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                  {tab === "workflows" ? "工作流列表" : "分类管理"}
-                </button>
-              ))}
-            </div>
-            {activeTab === "workflows" && <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>}
-          </div>
-        </div>
+      <div className="space-y-6">
+        <PageHeader
+          icon={<GitBranch size={20} />}
+          title="工作流管理"
+          subtitle="管理工作流、步骤与分类"
+          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {workflows.length} 个</span>}
+          actions={
+            <>
+              <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">
+                {(["workflows", "categories"] as const).map((tab) => (
+                  <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-1.5 rounded-[8px] text-[13px] font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+                    {tab === "workflows" ? "工作流列表" : "分类管理"}
+                  </button>
+                ))}
+              </div>
+              {activeTab === "workflows" && <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>}
+            </>
+          }
+        />
 
         {activeTab === "workflows" && <>
 
         {/* 筛选栏 */}
-        <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-3 flex flex-wrap gap-2 items-center">
-          <div className="relative">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input className="h-8 border border-gray-200 rounded-[8px] pl-7 pr-3 text-xs focus:outline-none focus:border-[#002FA7] w-44" placeholder="搜索工作流名称…" value={wfSearch} onChange={e => setWfSearch(e.target.value)} />
+        <Card padding="md" className="flex flex-wrap gap-3 items-center">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input className="w-full h-10 border border-gray-200 rounded-[10px] pl-9 pr-3 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" placeholder="搜索工作流名称…" value={wfSearch} onChange={e => setWfSearch(e.target.value)} />
           </div>
-          <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={wfCatFilter} onChange={e => setWfCatFilter(e.target.value)}>
+          <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfCatFilter} onChange={e => setWfCatFilter(e.target.value)}>
             <option value="">全部分类</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={wfVisibleFilter} onChange={e => setWfVisibleFilter(e.target.value)}>
+          <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfVisibleFilter} onChange={e => setWfVisibleFilter(e.target.value)}>
             <option value="">全部可见范围</option>
             <option value="all">全部用户</option>
             <option value="org_only">仅组织用户</option>
             <option value="personal_only">仅个人用户</option>
             <option value="custom">指定组织</option>
           </select>
-          <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={wfStatusFilter} onChange={e => setWfStatusFilter(e.target.value)}>
+          <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfStatusFilter} onChange={e => setWfStatusFilter(e.target.value)}>
             <option value="">全部状态</option>
             <option value="enabled">已启用</option>
             <option value="disabled">已停用</option>
           </select>
           {(wfSearch || wfCatFilter || wfVisibleFilter || wfStatusFilter) && (
-            <button onClick={() => { setWfSearch(""); setWfCatFilter(""); setWfVisibleFilter(""); setWfStatusFilter(""); }} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
-              <X size={12} /> 清除
+            <button onClick={() => { setWfSearch(""); setWfCatFilter(""); setWfVisibleFilter(""); setWfStatusFilter(""); }} className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2">
+              <X size={13} /> 清除
             </button>
           )}
-        </div>
+        </Card>
 
         {loading ? (
           <div className="space-y-3">{[...Array(3)].map((_, i) => <div key={i} className="h-20 bg-white rounded-[16px] animate-pulse" />)}</div>
@@ -333,17 +339,17 @@ export default function WorkflowsAdminPage() {
             return true;
           });
           return filteredWorkflows.length === 0 ? (
-          <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] py-16 text-center text-gray-400">
-            <GitBranch size={32} className="mx-auto mb-3 text-gray-200" />
+          <Card padding="lg" className="py-16 text-center text-gray-400">
+            <GitBranch size={36} className="mx-auto mb-3 text-gray-200" />
             <p className="text-sm">{workflows.length === 0 ? "暂无工作流，点击右上角新增" : "没有符合筛选条件的工作流"}</p>
-          </div>
+          </Card>
         ) : (
           <div className="space-y-3">
             {filteredWorkflows.map((wf) => {
               const isExpanded = expandedId === wf.id;
               const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
               return (
-                <div key={wf.id} className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
+                <div key={wf.id} className="card overflow-hidden">
                   {/* Workflow header */}
                   <div className="flex items-center gap-3 px-5 py-4">
                     <button onClick={() => setExpandedId(isExpanded ? null : wf.id)} className="p-1 rounded-[8px] hover:bg-gray-100 text-gray-400">
@@ -398,16 +404,16 @@ export default function WorkflowsAdminPage() {
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2">
                                   <p className="text-sm font-medium text-gray-800">{step.title}</p>
-                                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex items-center gap-0.5 ${
+                                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${
                                     step.exec_type === "agent" ? "bg-blue-50 text-blue-600" :
                                     step.exec_type === "manual" ? "bg-amber-50 text-amber-600" :
                                     step.exec_type === "review" ? "bg-purple-50 text-purple-600" :
-                                    "bg-green-50 text-green-600"
+                                    "bg-gray-50 text-gray-600"
                                   }`}>
-                                    {step.exec_type === "agent" && <><Bot size={10} />智能体</>}
-                                    {step.exec_type === "manual" && <><User size={10} />人工执行</>}
-                                    {step.exec_type === "review" && <><User size={10} />人工审核</>}
-                                    {step.exec_type === "external" && <>⚡外部工具</>}
+                                    {step.exec_type === "agent" && <><Bot size={11} />智能体</>}
+                                    {step.exec_type === "manual" && <><User size={11} />人工执行</>}
+                                    {step.exec_type === "review" && <><Eye size={11} />人工审核</>}
+                                    {step.exec_type === "external" && <><Wrench size={11} />外部工具</>}
                                   </span>
                                 </div>
                                 {step.description && <p className="text-xs text-gray-400 mt-0.5">{step.description}</p>}
@@ -453,7 +459,7 @@ export default function WorkflowsAdminPage() {
 
         {/* 分类管理 Tab */}
         {activeTab === "categories" && (
-          <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
+          <Card padding="lg">
             <div className="flex items-center gap-2 mb-4">
               <input
                 className="flex-1 h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
@@ -500,7 +506,7 @@ export default function WorkflowsAdminPage() {
                 </div>
               ))}
             </div>
-          </div>
+          </Card>
         )}
 
       </div>

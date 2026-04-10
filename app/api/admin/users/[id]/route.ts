@@ -30,6 +30,10 @@ export async function PATCH(
     if (!["super_admin", "system_admin", "org_admin", "user"].includes(role)) {
       return NextResponse.json({ error: "角色值无效" }, { status: 400 });
     }
+    const { data: cur } = await db.from("users").select("status").eq("id", id).single();
+    if (cur?.status === "deleted") {
+      return NextResponse.json({ error: "该用户已注销，不能修改角色" }, { status: 400 });
+    }
     const { error } = await db.from("users").update({ role }).eq("id", id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });

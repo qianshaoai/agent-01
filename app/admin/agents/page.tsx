@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -235,22 +237,25 @@ export default function AgentsAdminPage() {
 
   return (
     <AdminLayout>
-      <div className="max-w-5xl mx-auto space-y-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">智能体管理</h1>
-            <p className="text-sm text-gray-500 mt-0.5">共 {agents.length} 个智能体</p>
-          </div>
-          <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
-        </div>
-
-        <div className="flex gap-1 p-1 bg-gray-100 rounded-[12px] w-fit">
-          {(["agents", "categories"] as const).map((tab) => (
-            <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-[10px] text-sm font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-              {tab === "agents" ? "智能体列表" : "分类管理"}
-            </button>
-          ))}
-        </div>
+      <div className="space-y-6">
+        <PageHeader
+          icon={<Bot size={20} />}
+          title="智能体管理"
+          subtitle="管理所有智能体、分类与权限配置"
+          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {agents.length} 个</span>}
+          actions={
+            <>
+              <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">
+                {(["agents", "categories"] as const).map((tab) => (
+                  <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-1.5 rounded-[8px] text-[13px] font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+                    {tab === "agents" ? "智能体列表" : "分类管理"}
+                  </button>
+                ))}
+              </div>
+              <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
+            </>
+          }
+        />
 
         {activeTab === "agents" && (() => {
           const filteredAgents = agents.filter(a => {
@@ -263,39 +268,39 @@ export default function AgentsAdminPage() {
           const hasAgentFilter = agentTypeFilter || agentCategoryFilter || agentStatusFilter;
           return (
           <>
-          <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-3 flex flex-wrap gap-2 items-center">
-            <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={agentTypeFilter} onChange={e => setAgentTypeFilter(e.target.value)}>
+          <Card padding="md" className="flex flex-wrap gap-3 items-center">
+            <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentTypeFilter} onChange={e => setAgentTypeFilter(e.target.value)}>
               <option value="">全部类型</option>
               <option value="chat">对话型</option>
               <option value="external">外链型</option>
             </select>
-            <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={agentCategoryFilter} onChange={e => setAgentCategoryFilter(e.target.value)}>
+            <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentCategoryFilter} onChange={e => setAgentCategoryFilter(e.target.value)}>
               <option value="">全部分类</option>
               {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-            <select className="h-8 border border-gray-200 rounded-[8px] px-2 text-xs focus:outline-none focus:border-[#002FA7]" value={agentStatusFilter} onChange={e => setAgentStatusFilter(e.target.value)}>
+            <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentStatusFilter} onChange={e => setAgentStatusFilter(e.target.value)}>
               <option value="">全部状态</option>
               <option value="enabled">已启用</option>
               <option value="disabled">已停用</option>
             </select>
             {hasAgentFilter && (
-              <button onClick={() => { setAgentTypeFilter(""); setAgentCategoryFilter(""); setAgentStatusFilter(""); }} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
-                <X size={12} /> 清除
+              <button onClick={() => { setAgentTypeFilter(""); setAgentCategoryFilter(""); setAgentStatusFilter(""); }} className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2">
+                <X size={13} /> 清除
               </button>
             )}
-            <span className="ml-auto text-xs text-gray-400">{filteredAgents.length} / {agents.length} 个</span>
-          </div>
-          <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
+            <span className="ml-auto text-[12px] text-gray-500">{filteredAgents.length} / {agents.length} 个</span>
+          </Card>
+          <Card padding="none" className="overflow-hidden">
             {loading ? (
               <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
             ) : filteredAgents.length === 0 ? (
               <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体，点击右上角新增" : "没有符合筛选条件的智能体"}</p></div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm table-sticky-head">
                   <thead>
-                    <tr className="border-b border-gray-100 text-left">
-                      {["编号/名称", "分类", "类型/平台", "操作"].map((h) => <th key={h} className="px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">{h}</th>)}
+                    <tr>
+                      {["编号/名称", "分类", "类型/平台", "操作"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -337,13 +342,13 @@ export default function AgentsAdminPage() {
                 </table>
               </div>
             )}
-          </div>
+          </Card>
           </>
           );
         })()}
 
         {activeTab === "categories" && (
-          <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
+          <Card padding="lg">
             <div className="flex items-center gap-2 mb-4">
               <input className="flex-1 h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" placeholder="新分类名称…" value={newCatName} onChange={(e) => setNewCatName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addCategory()} />
               <Button size="sm" onClick={addCategory} className="gap-1"><Plus size={14} /> 添加</Button>
@@ -379,7 +384,7 @@ export default function AgentsAdminPage() {
                 </div>
               ))}
             </div>
-          </div>
+          </Card>
         )}
       </div>
 

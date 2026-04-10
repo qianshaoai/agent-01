@@ -4,6 +4,8 @@ import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card } from "@/components/ui/card";
 import {
   Plus, Search, Edit2, Ban, Calendar, Zap, CheckCircle2, Building2,
   ChevronRight, ChevronDown, GitBranch, Users, Pencil, Trash2, X, Check,
@@ -200,27 +202,29 @@ export default function TenantsPage() {
 
   return (
     <AdminLayout>
-      <div className="max-w-5xl mx-auto space-y-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">组织码管理</h1>
-            <p className="text-sm text-gray-500 mt-0.5">共 {tenants.length} 家组织</p>
-          </div>
-          <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增组织码</Button>
-        </div>
+      <div className="space-y-6">
+        <PageHeader
+          icon={<Building2 size={20} />}
+          title="组织码管理"
+          subtitle="管理所有组织、部门与小组"
+          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {tenants.length} 家</span>}
+          actions={<Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增组织码</Button>}
+        />
 
-        <div className="relative max-w-sm">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input className="w-full h-10 pl-9 pr-4 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" placeholder="搜索组织名称或组织码…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
+        <Card padding="sm">
+          <div className="relative max-w-md">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input className="w-full h-10 pl-9 pr-4 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" placeholder="搜索组织名称或组织码…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+        </Card>
 
         <div className="space-y-3">
           {loading ? (
-            <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6 space-y-3">
+            <div className="card p-6 space-y-3">
               {[...Array(4)].map((_, i) => <div key={i} className="h-12 bg-gray-50 rounded-[10px] animate-pulse" />)}
             </div>
           ) : filtered.length === 0 ? (
-            <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] py-16 text-center text-gray-400">
+            <div className="card py-16 text-center text-gray-400">
               <Building2 size={32} className="mx-auto mb-3 text-gray-200" />
               <p className="text-sm">{search ? "没有匹配的组织" : "暂无组织，点击右上角新增"}</p>
             </div>
@@ -232,7 +236,7 @@ export default function TenantsPage() {
               const depts = departments[t.code] ?? [];
 
               return (
-                <div key={t.id} className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
+                <div key={t.id} className="card overflow-hidden">
                   {/* 主行 */}
                   <div className="flex items-center gap-3 px-5 py-4">
                     <button onClick={() => toggleExpand(t)} className="p-1 rounded-[8px] hover:bg-gray-100 text-gray-400 shrink-0">

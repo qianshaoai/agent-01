@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card } from "@/components/ui/card";
 import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus } from "lucide-react";
 
 type UserRow = {
@@ -47,7 +49,7 @@ const ROLE_OPTIONS = [
   { value: "super_admin",  label: "超级管理员" },
 ];
 
-const inputCls = "h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all";
+const inputCls = "h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all";
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -333,35 +335,35 @@ export default function AdminUsersPage() {
 
   return (
     <AdminLayout>
-      <div className="space-y-5">
-        {/* 页头 */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Users size={20} className="text-[#002FA7]" />
-            <h1 className="text-lg font-semibold text-gray-900">用户管理</h1>
-            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">共 {total} 人</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex gap-1 p-1 bg-gray-100 rounded-[12px]">
-              {(["users", "groups"] as const).map((tab) => (
-                <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-[10px] text-sm font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                  {tab === "users" ? "用户列表" : "用户分组"}
+      <div className="space-y-6">
+        <PageHeader
+          icon={<Users size={20} />}
+          title="用户管理"
+          subtitle="管理平台所有用户账号、角色及分组归属"
+          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {total} 人</span>}
+          actions={
+            <>
+              <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">
+                {(["users", "groups"] as const).map((tab) => (
+                  <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-1.5 rounded-[8px] text-[13px] font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+                    {tab === "users" ? "用户列表" : "用户分组"}
+                  </button>
+                ))}
+              </div>
+              {activeTab === "users" && (
+                <button onClick={() => fetchUsers(page)} className="flex items-center gap-1.5 px-3 h-9 rounded-[10px] text-[13px] text-gray-500 hover:bg-gray-100 transition-colors">
+                  <RefreshCw size={14} /> 刷新
                 </button>
-              ))}
-            </div>
-            {activeTab === "users" && (
-              <button onClick={() => fetchUsers(page)} className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors">
-                <RefreshCw size={14} /> 刷新
-              </button>
-            )}
-          </div>
-        </div>
+              )}
+            </>
+          }
+        />
 
         {activeTab === "users" && <>
 
-        {/* 搜索 & 筛选 */}
-        <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-4 flex flex-wrap gap-3 items-center">
-          <div className="relative flex-1 min-w-[180px]">
+        {/* 搜索 & 筛选栏 */}
+        <Card padding="md" className="flex flex-wrap gap-3 items-center">
+          <div className="relative flex-1 min-w-[220px]">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               className={`${inputCls} pl-8 w-full`}
@@ -399,12 +401,12 @@ export default function AdminUsersPage() {
           {hasFilter && (
             <button
               onClick={() => { setSearch(""); setStatusFilter(""); setUserTypeFilter(""); setRoleFilter(""); setDeptFilter(""); setOrgFilter(""); }}
-              className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
+              className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2 transition-colors"
             >
-              <X size={13} /> 清除筛选
+              <X size={13} /> 清除
             </button>
           )}
-        </div>
+        </Card>
 
         {/* 批量操作工具栏 */}
         {selectedIds.length > 0 && (
@@ -434,12 +436,12 @@ export default function AdminUsersPage() {
         )}
 
         {/* 表格 */}
-        <div className="bg-white rounded-[14px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
+        <Card padding="none" className="overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-sticky-head">
               <thead>
-                <tr className="border-b border-gray-100 bg-gray-50/50">
-                  <th className="px-4 py-3 w-10">
+                <tr>
+                  <th className="px-4 py-2.5 w-10 text-left">
                     <input
                       type="checkbox"
                       className="rounded border-gray-300 text-[#002FA7] focus:ring-[#002FA7]/30"
@@ -447,16 +449,16 @@ export default function AdminUsersPage() {
                       onChange={(e) => setSelectedIds(e.target.checked ? users.map(u => u.id) : [])}
                     />
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">用户</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">手机号</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">用户类型</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">系统角色</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">组织码</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">部门 / 小组</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">状态</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">注册时间</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">最近登录</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500">操作</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">用户</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">手机号</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">类型</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">角色</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">组织码</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">部门 / 小组</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">状态</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">注册时间</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">最近登录</th>
+                  <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -464,7 +466,7 @@ export default function AdminUsersPage() {
                   [...Array(5)].map((_, i) => (
                     <tr key={i} className="border-b border-gray-50">
                       {[...Array(10)].map((_, j) => (
-                        <td key={j} className="px-4 py-3">
+                        <td key={j} className="px-4 py-3.5">
                           <div className="h-4 bg-gray-100 rounded animate-pulse w-20" />
                         </td>
                       ))}
@@ -482,7 +484,7 @@ export default function AdminUsersPage() {
                     const rl = ROLE_MAP[u.role] ?? ROLE_MAP.user;
                     return (
                       <tr key={u.id} className={`border-b border-gray-50 hover:bg-gray-50/50 transition-colors ${selectedIds.includes(u.id) ? "bg-blue-50/40" : ""}`}>
-                        <td className="px-4 py-3 w-10">
+                        <td className="px-4 py-3.5 w-10">
                           <input
                             type="checkbox"
                             className="rounded border-gray-300 text-[#002FA7] focus:ring-[#002FA7]/30"
@@ -490,7 +492,7 @@ export default function AdminUsersPage() {
                             onChange={(e) => setSelectedIds(e.target.checked ? [...selectedIds, u.id] : selectedIds.filter(id => id !== u.id))}
                           />
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3.5">
                           <p className="font-medium text-gray-800">{u.real_name || u.nickname || "—"}</p>
                           {u.username && (
                             <p className="text-[11px] text-gray-400">@{u.username}</p>
@@ -499,82 +501,89 @@ export default function AdminUsersPage() {
                             <span className="text-[10px] text-amber-500">未改初始密码</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-gray-600 font-mono text-xs">{u.phone}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3.5 text-gray-600 font-mono text-xs">{u.phone}</td>
+                        <td className="px-4 py-3.5">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${ut.cls}`}>
                             {ut.label}
                           </span>
                         </td>
-                        <td className="px-4 py-3">
-                          <button
-                            onClick={() => openRoleModal(u)}
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border cursor-pointer hover:opacity-80 transition-opacity ${rl.cls}`}
-                            title="点击修改角色"
-                          >
-                            {rl.label}
-                            <ChevronDown size={10} />
-                          </button>
+                        <td className="px-4 py-3.5">
+                          {u.status === "deleted" ? (
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${rl.cls} opacity-50`}>
+                              {rl.label}
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => openRoleModal(u)}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border cursor-pointer hover:opacity-80 transition-opacity ${rl.cls}`}
+                              title="点击修改角色"
+                            >
+                              {rl.label}
+                              <ChevronDown size={10} />
+                            </button>
+                          )}
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-400 font-mono">
+                        <td className="px-4 py-3.5 text-xs text-gray-400 font-mono">
                           {isPersonal ? "—" : u.tenant_code}
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-500">
+                        <td className="px-4 py-3.5 text-xs text-gray-500">
                           {u.departments?.name
                             ? <span>{u.departments.name}{u.teams?.name ? <span className="text-gray-400"> / {u.teams.name}</span> : null}</span>
                             : <span className="text-gray-300">—</span>}
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3.5">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${st.cls}`}>
                             {st.label}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(u.created_at)}</td>
-                        <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(u.last_login_at)}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3.5 text-xs text-gray-500">{fmtDate(u.created_at)}</td>
+                        <td className="px-4 py-3.5 text-xs text-gray-500">{fmtDate(u.last_login_at)}</td>
+                        <td className="px-4 py-3.5">
                           <div className="flex items-center justify-end gap-1">
-                            {!isPersonal && (
-                              <button
-                                onClick={() => openDeptModal(u)}
-                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-indigo-600 hover:bg-indigo-50 transition-colors"
-                                title="分配部门/小组"
-                              >
-                                <GitBranch size={13} /> 分配部门
-                              </button>
-                            )}
-                            <button
-                              onClick={() => { setResetTarget(u); setResetPwd(""); setResetError(""); setResetOk(false); }}
-                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
-                              title="重置密码"
-                            >
-                              <KeyRound size={13} /> 重置密码
-                            </button>
-                            {u.status === "active" && (
-                              <button
-                                onClick={() => setStatus(u, "disabled")}
-                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-amber-600 hover:bg-amber-50 transition-colors"
-                              >
-                                <ShieldOff size={13} /> 禁用
-                              </button>
-                            )}
-                            {u.status === "disabled" && (
-                              <button
-                                onClick={() => setStatus(u, "active")}
-                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-green-600 hover:bg-green-50 transition-colors"
-                              >
-                                <ShieldCheck size={13} /> 恢复
-                              </button>
-                            )}
-                            {u.status === "deleted" && (
+                            {u.status === "deleted" ? (
                               <span className="text-xs text-gray-300 px-2">已注销</span>
-                            )}
-                            {u.status !== "deleted" && (
-                              <button
-                                onClick={() => softDeleteUser(u)}
-                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-red-400 hover:bg-red-50 transition-colors"
-                                title="软删除用户"
-                              >
-                                <Trash2 size={13} /> 删除
-                              </button>
+                            ) : (
+                              <>
+                                {!isPersonal && (
+                                  <button
+                                    onClick={() => openDeptModal(u)}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-indigo-600 hover:bg-indigo-50 transition-colors"
+                                    title="分配部门/小组"
+                                  >
+                                    <GitBranch size={13} /> 分配部门
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => { setResetTarget(u); setResetPwd(""); setResetError(""); setResetOk(false); }}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                                  title="重置密码"
+                                >
+                                  <KeyRound size={13} /> 重置密码
+                                </button>
+                                {u.status === "active" && (
+                                  <button
+                                    onClick={() => setStatus(u, "disabled")}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-amber-600 hover:bg-amber-50 transition-colors"
+                                  >
+                                    <ShieldOff size={13} /> 禁用
+                                  </button>
+                                )}
+                                {u.status === "disabled" && (
+                                  <button
+                                    onClick={() => setStatus(u, "active")}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-green-600 hover:bg-green-50 transition-colors"
+                                  >
+                                    <ShieldCheck size={13} /> 恢复
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => softDeleteUser(u)}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-red-400 hover:bg-red-50 transition-colors"
+                                  title="软删除用户"
+                                >
+                                  <Trash2 size={13} /> 删除
+                                </button>
+                              </>
                             )}
                           </div>
                         </td>
@@ -588,15 +597,15 @@ export default function AdminUsersPage() {
 
           {/* 分页 */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
-              <span className="text-xs text-gray-400">第 {page} / {totalPages} 页，共 {total} 条</span>
-              <div className="flex gap-1">
-                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1.5 rounded-[8px] text-xs border border-gray-200 disabled:opacity-40 hover:bg-gray-50 transition-colors">上一页</button>
-                <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="px-3 py-1.5 rounded-[8px] text-xs border border-gray-200 disabled:opacity-40 hover:bg-gray-50 transition-colors">下一页</button>
+            <div className="flex items-center justify-between px-4 py-3.5 border-t border-gray-100 bg-gray-50/30">
+              <span className="text-[12px] text-gray-500">第 {page} / {totalPages} 页，共 {total} 条</span>
+              <div className="flex gap-1.5">
+                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="px-3 h-8 rounded-[8px] text-[12px] border border-gray-200 bg-white disabled:opacity-40 hover:bg-gray-50 transition-colors">上一页</button>
+                <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="px-3 h-8 rounded-[8px] text-[12px] border border-gray-200 bg-white disabled:opacity-40 hover:bg-gray-50 transition-colors">下一页</button>
               </div>
             </div>
           )}
-        </div>
+        </Card>
 
         </>}
 

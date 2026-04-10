@@ -2,7 +2,9 @@
 import { useState, useEffect, useRef } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
-import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon, BookOpen, QrCode } from "lucide-react";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card } from "@/components/ui/card";
+import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon, BookOpen, QrCode, Settings as SettingsIcon } from "lucide-react";
 
 type Settings = { logo_url: string; platform_name: string; help_doc_url: string; contact_qr_url: string; contact_qr_text: string };
 
@@ -129,11 +131,12 @@ export default function AdminSettingsPage() {
 
   return (
     <AdminLayout>
-      <div className="max-w-2xl space-y-6">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">品牌设置</h1>
-          <p className="text-sm text-gray-500 mt-1">配置平台 Logo 和名称，变更后全站生效</p>
-        </div>
+      <div className="max-w-3xl space-y-6">
+        <PageHeader
+          icon={<SettingsIcon size={20} />}
+          title="品牌设置"
+          subtitle="配置平台 Logo、名称、帮助文档与联系方式，变更后全站生效"
+        />
 
         {msg && (
           <div className={`flex items-center gap-2 px-4 py-3 rounded-[10px] text-sm ${msg.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
@@ -143,8 +146,8 @@ export default function AdminSettingsPage() {
         )}
 
         {/* Logo 配置 */}
-        <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
-          <h2 className="text-sm font-semibold text-gray-900 mb-1">平台 Logo</h2>
+        <div className="card p-6">
+          <h2 className="text-[15px] font-semibold text-gray-900 mb-1">平台 Logo</h2>
           <p className="text-xs text-gray-500 mb-5">
             建议上传 <strong>1:1 正方形</strong> Logo · 推荐尺寸 <strong>256 × 256 px</strong> · 格式 <strong>PNG / SVG</strong> · 建议透明背景
           </p>
@@ -206,8 +209,8 @@ export default function AdminSettingsPage() {
         </div>
 
         {/* 平台名称 */}
-        <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
-          <h2 className="text-sm font-semibold text-gray-900 mb-1">平台名称</h2>
+        <div className="card p-6">
+          <h2 className="text-[15px] font-semibold text-gray-900 mb-1">平台名称</h2>
           <p className="text-xs text-gray-500 mb-5">显示在页头左上角和登录页，留空则使用默认名称</p>
 
           <div className="flex gap-3">
@@ -228,8 +231,8 @@ export default function AdminSettingsPage() {
         </div>
 
         {/* 帮助文档 */}
-        <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
-          <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
+        <div className="card p-6">
+          <h2 className="text-[15px] font-semibold text-gray-900 mb-1 flex items-center gap-2">
             <BookOpen size={15} className="text-[#002FA7]" /> 帮助文档链接
           </h2>
           <p className="text-xs text-gray-500 mb-5">配置后用户端顶部会显示「帮助文档」按钮，点击在新标签页打开。支持飞书文档、语雀等任意 URL，留空则不显示按钮。</p>
@@ -273,8 +276,8 @@ export default function AdminSettingsPage() {
         </div>
 
         {/* 联系二维码 */}
-        <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
-          <h2 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
+        <div className="card p-6">
+          <h2 className="text-[15px] font-semibold text-gray-900 mb-1 flex items-center gap-2">
             <QrCode size={15} className="text-[#002FA7]" /> 二维码上传
           </h2>
           <p className="text-xs text-gray-500 mb-5">配置后首页「联系我们」弹窗显示真实二维码图片，留空则显示占位图标。支持 PNG / JPG / WEBP。</p>
