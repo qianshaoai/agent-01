@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
-import { signToken, buildAdminSetCookieHeader } from "@/lib/auth";
+import { signToken, buildAdminSetCookieHeader, AdminRole } from "@/lib/auth";
 
-// Create /app/api/admin/login directory
 export async function POST(req: NextRequest) {
   const { username, password } = await req.json();
   if (!username || !password) {
@@ -29,6 +28,8 @@ export async function POST(req: NextRequest) {
     type: "admin",
     adminId: admin.id,
     username: admin.username,
+    role: (admin.role as AdminRole) ?? "super_admin",
+    tenantCode: admin.tenant_code ?? null,
   });
 
   return NextResponse.json(

@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { signToken, buildSetCookieHeader } from "@/lib/auth";
 
 function statusError(status: string) {
-  if (status === "deleted") return "该账号已注销，无法登录";
+  if (status === "cancelled") return "该账号已注销，无法登录";
+  if (status === "deleted") return "账号不存在";
   if (status === "disabled") return "该账号已被禁用，请联系管理员";
   return "账号状态异常";
 }

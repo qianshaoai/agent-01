@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getCurrentAdmin } from "@/lib/auth";
+import { getCurrentAdmin, canAssignRole, canManageTarget } from "@/lib/auth";
 import { db } from "@/lib/db";
 
 export async function PATCH(
@@ -12,6 +12,29 @@ export async function PATCH(
 
   const { id } = await params;
   const body = await req.json();
+
+  // 加载目标用户当前信息，用于权限校验
+  const { data: target } = await db
+    .from("users")
+    .select("id, role, status, tenant_code")
+    .eq("id", id)
+    .single();
+  if (!target) return NextResponse.json({ error: "用户不存在" }, { status: 404 });
+
+  // 组织管理员只能管理自己组织内的用户
+  if (admin.role === "org_admin") {
+    if (!admin.tenantCode || target.tenant_code !== admin.tenantCode) {
+      return NextResponse.json({ error: "无权操作该用户（不在你的组织内）" }, { status: 403 });
+    }
+  }
+
+  // 对"管理"类动作：需要 actor 层级高于 target 当前角色
+  const MANAGE_ACTIONS = ["set-status", "set-dept", "reset-password", "soft-delete", "delete"];
+  if (MANAGE_ACTIONS.includes(body.action)) {
+    if (!canManageTarget(admin.role, target.role)) {
+      return NextResponse.json({ error: "无权管理该用户（对方等级不低于你）" }, { status: 403 });
+    }
+  }
 
   // ── 修改账号状态 ────────────────────────────────────────
   if (body.action === "set-status") {
@@ -30,9 +53,17 @@ export async function PATCH(
     if (!["super_admin", "system_admin", "org_admin", "user"].includes(role)) {
       return NextResponse.json({ error: "角色值无效" }, { status: 400 });
     }
-    const { data: cur } = await db.from("users").select("status").eq("id", id).single();
-    if (cur?.status === "deleted") {
-      return NextResponse.json({ error: "该用户已注销，不能修改角色" }, { status: 400 });
+    if (target.status === "deleted") {
+      return NextResponse.json({ error: "该用户已删除，不能修改角色" }, { status: 400 });
+    }
+    // 越权校验：
+    //   1) 不能修改跟自己同级或更高级别的人
+    //   2) 不能把别人改成 >= 自己的角色
+    if (!canManageTarget(admin.role, target.role)) {
+      return NextResponse.json({ error: "无权修改该用户的角色（对方等级不低于你）" }, { status: 403 });
+    }
+    if (!canAssignRole(admin.role, role, admin.adminId === id)) {
+      return NextResponse.json({ error: "无权将用户设置为该角色（不能高于或等于自己）" }, { status: 403 });
     }
     const { error } = await db.from("users").update({ role }).eq("id", id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -66,8 +97,10 @@ export async function PATCH(
     return NextResponse.json({ ok: true });
   }
 
-  // ── 软删除用户 ──────────────────────────────────────────────
-  if (body.action === "soft-delete") {
+  // ── 删除用户（硬删除，不再沿用"已注销"语义）──────────────
+  //   为了保证数据安全，仍采用 status=deleted 软删除，
+  //   但列表查询会过滤掉这些行，对上层等同于"删除"。
+  if (body.action === "soft-delete" || body.action === "delete") {
     const { error } = await db.from("users").update({ status: "deleted" }).eq("id", id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });

@@ -16,6 +16,8 @@ export async function GET(req: NextRequest) {
   const roleFilter = searchParams.get("role") ?? "";
   const deptFilter = searchParams.get("dept_id") ?? "";
   const orgFilter = searchParams.get("org") ?? "";
+  // 是否包含已删除用户（默认不包含）。只有当管理员主动筛选"已删除"时才显示
+  const includeDeleted = searchParams.get("includeDeleted") === "1";
 
   let query = db
     .from("users")
@@ -26,9 +28,17 @@ export async function GET(req: NextRequest) {
 
   if (search) query = query.or(`phone.ilike.%${search}%,username.ilike.%${search}%,real_name.ilike.%${search}%`);
   if (orgFilter) query = query.eq("tenant_code", orgFilter.toUpperCase());
-  if (statusFilter && ["active", "disabled", "deleted"].includes(statusFilter)) {
+
+  // 状态过滤：
+  //   - 指定 statusFilter 时按它过滤
+  //   - 未指定且未明确 includeDeleted 时，自动排除已删除（deleted）
+  //     保留已注销（cancelled）在列表中以便管理员感知用户主动注销
+  if (statusFilter && ["active", "disabled", "deleted", "cancelled"].includes(statusFilter)) {
     query = query.eq("status", statusFilter);
+  } else if (!includeDeleted) {
+    query = query.neq("status", "deleted");
   }
+
   if (userTypeFilter && ["personal", "organization"].includes(userTypeFilter)) {
     query = query.eq("user_type", userTypeFilter);
   }
@@ -37,7 +47,12 @@ export async function GET(req: NextRequest) {
   }
   if (deptFilter) query = query.eq("dept_id", deptFilter);
 
-  // 先取全部符合过滤的记录，在内存中按 状态+角色+时间 排序后手动分页
+  // 组织管理员只能看自己组织的用户
+  if (admin.role === "org_admin" && admin.tenantCode) {
+    query = query.eq("tenant_code", admin.tenantCode);
+  }
+
+  // 先取全部符合过滤的记录，在内存中按 角色+时间 排序后手动分页
   // （用户量在后台管理场景下可控，通常 < 数千，这里取上限 5000 作为安全护栏）
   const { data, count, error } = await query.limit(5000);
 
@@ -50,10 +65,10 @@ export async function GET(req: NextRequest) {
     user: 3,
   };
   const sorted = (data ?? []).slice().sort((a, b) => {
-    // 1. 已注销沉底
-    const aDel = a.status === "deleted" ? 1 : 0;
-    const bDel = b.status === "deleted" ? 1 : 0;
-    if (aDel !== bDel) return aDel - bDel;
+    // 1. 已注销（cancelled）/ 已删除（deleted）沉底
+    const aBad = (a.status === "cancelled" || a.status === "deleted") ? 1 : 0;
+    const bBad = (b.status === "cancelled" || b.status === "deleted") ? 1 : 0;
+    if (aBad !== bBad) return aBad - bBad;
     // 2. 按角色排序
     const ar = roleRank[a.role] ?? 99;
     const br = roleRank[b.role] ?? 99;

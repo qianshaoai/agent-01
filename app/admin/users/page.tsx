@@ -12,7 +12,7 @@ type UserRow = {
   real_name: string | null;
   nickname: string;
   tenant_code: string;
-  status: "active" | "disabled" | "deleted";
+  status: "active" | "disabled" | "deleted" | "cancelled";
   first_login: boolean;
   created_at: string;
   last_login_at: string | null;
@@ -24,10 +24,20 @@ type UserRow = {
   teams?: { name: string } | null;
 };
 
+type AdminMeta = {
+  role: "super_admin" | "system_admin" | "org_admin";
+  tenantCode: string | null;
+};
+
 const STATUS_MAP = {
-  active:   { label: "正常",   cls: "bg-green-50 text-green-600 border-green-100" },
-  disabled: { label: "已禁用", cls: "bg-amber-50 text-amber-600 border-amber-100" },
-  deleted:  { label: "已注销", cls: "bg-red-50 text-red-400 border-red-100" },
+  active:    { label: "正常",   cls: "bg-green-50 text-green-600 border-green-100" },
+  disabled:  { label: "已禁用", cls: "bg-amber-50 text-amber-600 border-amber-100" },
+  cancelled: { label: "已注销", cls: "bg-red-50 text-red-400 border-red-100" },
+  deleted:   { label: "已删除", cls: "bg-gray-100 text-gray-400 border-gray-200" },
+} as const;
+
+const ROLE_RANK: Record<string, number> = {
+  super_admin: 0, system_admin: 1, org_admin: 2, user: 3,
 };
 
 const USER_TYPE_MAP = {
@@ -42,16 +52,10 @@ const ROLE_MAP = {
   user:         { label: "普通用户",   cls: "bg-gray-50 text-gray-500 border-gray-200" },
 };
 
-const ROLE_OPTIONS = [
-  { value: "user",         label: "普通用户" },
-  { value: "org_admin",    label: "组织管理员" },
-  { value: "system_admin", label: "系统管理员" },
-  { value: "super_admin",  label: "超级管理员" },
-];
-
 const inputCls = "h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all";
 
 export default function AdminUsersPage() {
+  const [adminMeta, setAdminMeta] = useState<AdminMeta | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -105,6 +109,26 @@ export default function AdminUsersPage() {
   const [selectedTeam, setSelectedTeam] = useState("");
   const [deptSaving, setDeptSaving] = useState(false);
 
+  // 用户详情抽屉
+  const [detailUser, setDetailUser] = useState<UserRow | null>(null);
+  const [detailVisibility, setDetailVisibility] = useState<{
+    workflows: { id: string; name: string; category: string | null }[];
+    agents: { id: string; name: string; category: string | null }[];
+  } | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  async function openDetail(u: UserRow) {
+    setDetailUser(u);
+    setDetailVisibility(null);
+    setDetailLoading(true);
+    try {
+      const res = await fetch(`/api/admin/users/${u.id}/visibility`);
+      if (res.ok) setDetailVisibility(await res.json());
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   const pageSize = 20;
 
   const fetchUsers = useCallback(async (p = page) => {
@@ -134,11 +158,40 @@ export default function AdminUsersPage() {
     Promise.all([
       fetch("/api/admin/tenants").then(r => r.json()).catch(() => []),
       fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
-    ]).then(([tr, dr]) => {
+      fetch("/api/admin/me").then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([tr, dr, me]) => {
       setTenants(Array.isArray(tr) ? tr : []);
       setAllDepts(Array.isArray(dr) ? dr : []);
+      if (me && me.role) setAdminMeta({ role: me.role, tenantCode: me.tenantCode ?? null });
     });
   }, []);
+
+  // 根据当前管理员等级判断是否可管理某个目标用户
+  function canManage(u: UserRow): boolean {
+    if (!adminMeta) return false;
+    if (u.status === "deleted") return false;
+    // 组织管理员只能管自己组织内的
+    if (adminMeta.role === "org_admin") {
+      if (!adminMeta.tenantCode || u.tenant_code !== adminMeta.tenantCode) return false;
+    }
+    // super 可以管所有人；其它角色需严格高于目标
+    if (adminMeta.role === "super_admin") return true;
+    const actorRank = ROLE_RANK[adminMeta.role] ?? 99;
+    const targetRank = ROLE_RANK[u.role] ?? 99;
+    return targetRank > actorRank;
+  }
+
+  // 根据当前管理员等级筛选可分配的角色选项（严格低于自己）
+  function assignableRoles() {
+    if (!adminMeta) return [];
+    const actorRank = ROLE_RANK[adminMeta.role] ?? 99;
+    return [
+      { value: "user",         label: "普通用户",     rank: 3 },
+      { value: "org_admin",    label: "组织管理员",   rank: 2 },
+      { value: "system_admin", label: "系统管理员",   rank: 1 },
+      { value: "super_admin",  label: "超级管理员",   rank: 0 },
+    ].filter(r => r.rank > actorRank);
+  }
 
   async function setStatus(user: UserRow, status: "active" | "disabled") {
     const label = status === "active" ? "恢复正常" : "禁用";
@@ -256,12 +309,12 @@ export default function AdminUsersPage() {
   }
 
   async function softDeleteUser(u: UserRow) {
-    if (!confirm(`确认删除用户「${u.real_name || u.nickname || u.phone}」？\n用户数据将被标记为已注销，操作不可撤销。`)) return;
+    if (!confirm(`确认删除用户「${u.real_name || u.nickname || u.phone}」？\n删除后将从列表中移除，操作不可撤销。`)) return;
     if (!confirm(`二次确认：真的要删除用户 ${u.phone} 吗？`)) return;
     const res = await fetch(`/api/admin/users/${u.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "soft-delete" }),
+      body: JSON.stringify({ action: "delete" }),
     });
     if (res.ok) fetchUsers(page);
     else { const d = await res.json(); alert(d.error ?? "删除失败"); }
@@ -449,14 +502,13 @@ export default function AdminUsersPage() {
                       onChange={(e) => setSelectedIds(e.target.checked ? users.map(u => u.id) : [])}
                     />
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">用户</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">用户名</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">真实姓名</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">手机号</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">类型</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">角色</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">组织码</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">部门 / 小组</th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">所属组织</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">状态</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">注册时间</th>
                   <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">最近登录</th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
@@ -465,7 +517,7 @@ export default function AdminUsersPage() {
                 {loading ? (
                   [...Array(5)].map((_, i) => (
                     <tr key={i} className="border-b border-gray-50">
-                      {[...Array(10)].map((_, j) => (
+                      {[...Array(9)].map((_, j) => (
                         <td key={j} className="px-4 py-3.5">
                           <div className="h-4 bg-gray-100 rounded animate-pulse w-20" />
                         </td>
@@ -482,6 +534,8 @@ export default function AdminUsersPage() {
                     const st = STATUS_MAP[u.status] ?? STATUS_MAP.active;
                     const ut = USER_TYPE_MAP[u.user_type] ?? USER_TYPE_MAP.organization;
                     const rl = ROLE_MAP[u.role] ?? ROLE_MAP.user;
+                    const tenant = tenants.find(t => t.code === u.tenant_code);
+                    const canOperate = canManage(u);
                     return (
                       <tr key={u.id} className={`border-b border-gray-50 hover:bg-gray-50/50 transition-colors ${selectedIds.includes(u.id) ? "bg-blue-50/40" : ""}`}>
                         <td className="px-4 py-3.5 w-10">
@@ -493,26 +547,28 @@ export default function AdminUsersPage() {
                           />
                         </td>
                         <td className="px-4 py-3.5">
-                          <p className="font-medium text-gray-800">{u.real_name || u.nickname || "—"}</p>
-                          {u.username && (
-                            <p className="text-[11px] text-gray-400">@{u.username}</p>
-                          )}
+                          <button
+                            onClick={() => openDetail(u)}
+                            className="text-[#002FA7] hover:underline font-medium text-left"
+                            title="查看详情"
+                          >
+                            {u.username || <span className="text-gray-300">—</span>}
+                          </button>
                           {u.first_login && (
-                            <span className="text-[10px] text-amber-500">未改初始密码</span>
+                            <p className="text-[10px] text-amber-500 mt-0.5">未改初始密码</p>
                           )}
                         </td>
-                        <td className="px-4 py-3.5 text-gray-600 font-mono text-xs">{u.phone}</td>
+                        <td className="px-4 py-3.5 text-gray-800">
+                          {u.real_name || u.nickname || <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3.5 text-gray-600 font-mono text-[13px]">{u.phone}</td>
                         <td className="px-4 py-3.5">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${ut.cls}`}>
                             {ut.label}
                           </span>
                         </td>
                         <td className="px-4 py-3.5">
-                          {u.status === "deleted" ? (
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${rl.cls} opacity-50`}>
-                              {rl.label}
-                            </span>
-                          ) : (
+                          {canOperate ? (
                             <button
                               onClick={() => openRoleModal(u)}
                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border cursor-pointer hover:opacity-80 transition-opacity ${rl.cls}`}
@@ -521,38 +577,39 @@ export default function AdminUsersPage() {
                               {rl.label}
                               <ChevronDown size={10} />
                             </button>
+                          ) : (
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${rl.cls} ${u.status === "deleted" ? "opacity-40" : ""}`}>
+                              {rl.label}
+                            </span>
                           )}
                         </td>
-                        <td className="px-4 py-3.5 text-xs text-gray-400 font-mono">
-                          {isPersonal ? "—" : u.tenant_code}
-                        </td>
                         <td className="px-4 py-3.5 text-xs text-gray-500">
-                          {u.departments?.name
-                            ? <span>{u.departments.name}{u.teams?.name ? <span className="text-gray-400"> / {u.teams.name}</span> : null}</span>
-                            : <span className="text-gray-300">—</span>}
+                          {isPersonal ? <span className="text-gray-300">个人</span> : (
+                            <>
+                              <span className="text-gray-700">{tenant?.name ?? u.tenant_code}</span>
+                              <span className="text-gray-400 font-mono ml-1">{u.tenant_code}</span>
+                            </>
+                          )}
                         </td>
                         <td className="px-4 py-3.5">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${st.cls}`}>
                             {st.label}
                           </span>
                         </td>
-                        <td className="px-4 py-3.5 text-xs text-gray-500">{fmtDate(u.created_at)}</td>
                         <td className="px-4 py-3.5 text-xs text-gray-500">{fmtDate(u.last_login_at)}</td>
                         <td className="px-4 py-3.5">
                           <div className="flex items-center justify-end gap-1">
-                            {u.status === "deleted" ? (
-                              <span className="text-xs text-gray-300 px-2">已注销</span>
+                            {!canOperate ? (
+                              <span className="text-xs text-gray-300 px-2">—</span>
                             ) : (
                               <>
-                                {!isPersonal && (
-                                  <button
-                                    onClick={() => openDeptModal(u)}
-                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-indigo-600 hover:bg-indigo-50 transition-colors"
-                                    title="分配部门/小组"
-                                  >
-                                    <GitBranch size={13} /> 分配部门
-                                  </button>
-                                )}
+                                <button
+                                  onClick={() => openDetail(u)}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                                  title="查看详情"
+                                >
+                                  详情
+                                </button>
                                 <button
                                   onClick={() => { setResetTarget(u); setResetPwd(""); setResetError(""); setResetOk(false); }}
                                   className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
@@ -579,7 +636,7 @@ export default function AdminUsersPage() {
                                 <button
                                   onClick={() => softDeleteUser(u)}
                                   className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-red-400 hover:bg-red-50 transition-colors"
-                                  title="软删除用户"
+                                  title="删除用户"
                                 >
                                   <Trash2 size={13} /> 删除
                                 </button>
@@ -802,16 +859,17 @@ export default function AdminUsersPage() {
                   value={newRole}
                   onChange={(e) => setNewRole(e.target.value)}
                 >
-                  {ROLE_OPTIONS.map((r) => (
+                  {assignableRoles().map((r) => (
                     <option key={r.value} value={r.value}>{r.label}</option>
                   ))}
                 </select>
+                {assignableRoles().length === 0 && (
+                  <p className="text-xs text-red-500">你的权限不足以分配任何系统角色</p>
+                )}
               </div>
-              <div className="p-3 bg-gray-50 rounded-[10px] text-xs text-gray-500 space-y-1">
-                <p><span className="font-medium text-red-600">超级管理员</span>：最高权限，可管理一切</p>
-                <p><span className="font-medium text-orange-600">系统管理员</span>：平台日常管理权限</p>
-                <p><span className="font-medium text-indigo-600">组织管理员</span>：仅管理所属组织</p>
-                <p><span className="font-medium text-gray-600">普通用户</span>：仅使用平台功能</p>
+              <div className="p-3 bg-amber-50 rounded-[10px] text-xs text-amber-700 space-y-1">
+                <p>只能分配**严格低于**你自己的角色。</p>
+                <p>当前你是：<span className="font-semibold">{ROLE_MAP[adminMeta?.role ?? "user"]?.label ?? "未知"}</span></p>
               </div>
               <div className="flex gap-2 pt-1">
                 <button onClick={() => setRoleTarget(null)} className="flex-1 h-10 rounded-[10px] text-sm text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors">取消</button>
@@ -873,6 +931,152 @@ export default function AdminUsersPage() {
                   {deptSaving ? "保存中…" : "确认分配"}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 用户详情抽屉 ──────────────────────────────────────── */}
+      {detailUser && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setDetailUser(null)} />
+          <div className="relative w-full max-w-[560px] bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
+            {/* 头部 */}
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-12 h-12 rounded-[12px] bg-[#002FA7]/8 text-[#002FA7] flex items-center justify-center font-bold text-lg shrink-0">
+                  {(detailUser.real_name || detailUser.nickname || detailUser.phone).charAt(0)}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-[18px] font-semibold text-gray-900 truncate">{detailUser.real_name || detailUser.nickname || "—"}</h2>
+                  <p className="text-[13px] text-gray-500 mt-0.5">
+                    @{detailUser.username || "—"}
+                    <span className="mx-2 text-gray-300">·</span>
+                    {detailUser.phone}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setDetailUser(null)} className="p-2 rounded-[8px] hover:bg-gray-100 text-gray-400"><X size={18} /></button>
+            </div>
+
+            {/* 内容 */}
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+              {/* 基础资料 */}
+              <section>
+                <h3 className="text-[13px] font-semibold text-gray-500 uppercase tracking-wider mb-3">基础资料</h3>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">用户类型</p>
+                    <p className="text-gray-800">{USER_TYPE_MAP[detailUser.user_type]?.label ?? "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">系统角色</p>
+                    <p className="text-gray-800">{ROLE_MAP[detailUser.role]?.label ?? "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">账号状态</p>
+                    <p className="text-gray-800">{STATUS_MAP[detailUser.status]?.label ?? "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">注册时间</p>
+                    <p className="text-gray-800">{fmtDate(detailUser.created_at)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">最近登录</p>
+                    <p className="text-gray-800">{fmtDate(detailUser.last_login_at)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">初始密码</p>
+                    <p className="text-gray-800">{detailUser.first_login ? <span className="text-amber-600">未修改</span> : "已修改"}</p>
+                  </div>
+                </div>
+              </section>
+
+              {/* 组织归属 */}
+              <section>
+                <h3 className="text-[13px] font-semibold text-gray-500 uppercase tracking-wider mb-3">组织归属</h3>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">所属组织</p>
+                    <p className="text-gray-800">
+                      {detailUser.tenant_code === "PERSONAL" ? "个人" : (tenants.find(t => t.code === detailUser.tenant_code)?.name ?? detailUser.tenant_code)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">组织码</p>
+                    <p className="text-gray-800 font-mono text-[13px]">{detailUser.tenant_code === "PERSONAL" ? "—" : detailUser.tenant_code}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">部门</p>
+                    <p className="text-gray-800">{detailUser.departments?.name ?? <span className="text-gray-300">未分配</span>}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">小组</p>
+                    <p className="text-gray-800">{detailUser.teams?.name ?? <span className="text-gray-300">未分配</span>}</p>
+                  </div>
+                </div>
+              </section>
+
+              {/* 可见工作流 */}
+              <section>
+                <h3 className="text-[13px] font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <GitBranch size={14} className="text-[#002FA7]" /> 可见工作流
+                  {detailVisibility && <span className="text-gray-400 font-normal">（{detailVisibility.workflows.length}）</span>}
+                </h3>
+                {detailLoading ? (
+                  <div className="space-y-2">
+                    {[...Array(3)].map((_, i) => <div key={i} className="h-8 bg-gray-50 rounded-[8px] animate-pulse" />)}
+                  </div>
+                ) : !detailVisibility || detailVisibility.workflows.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-3 text-center bg-gray-50 rounded-[10px]">该用户暂无可见工作流</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {detailVisibility.workflows.map(w => (
+                      <div key={w.id} className="flex items-center justify-between px-3 py-2 rounded-[8px] bg-gray-50/70">
+                        <span className="text-sm text-gray-800 truncate">{w.name}</span>
+                        {w.category && <span className="text-[11px] text-gray-400 shrink-0 ml-2">{w.category}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {/* 可见智能体 */}
+              <section>
+                <h3 className="text-[13px] font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <Users size={14} className="text-[#002FA7]" /> 可见智能体
+                  {detailVisibility && <span className="text-gray-400 font-normal">（{detailVisibility.agents.length}）</span>}
+                </h3>
+                {detailLoading ? (
+                  <div className="space-y-2">
+                    {[...Array(3)].map((_, i) => <div key={i} className="h-8 bg-gray-50 rounded-[8px] animate-pulse" />)}
+                  </div>
+                ) : !detailVisibility || detailVisibility.agents.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-3 text-center bg-gray-50 rounded-[10px]">该用户暂无可见智能体</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {detailVisibility.agents.map(a => (
+                      <div key={a.id} className="flex items-center justify-between px-3 py-2 rounded-[8px] bg-gray-50/70">
+                        <span className="text-sm text-gray-800 truncate">{a.name}</span>
+                        {a.category && <span className="text-[11px] text-gray-400 shrink-0 ml-2">{a.category}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+
+            {/* 底部快捷操作 */}
+            <div className="border-t border-gray-100 px-6 py-4 flex items-center gap-2">
+              {canManage(detailUser) && detailUser.tenant_code !== "PERSONAL" && (
+                <button
+                  onClick={() => { openDeptModal(detailUser); setDetailUser(null); }}
+                  className="flex items-center gap-1.5 px-3 h-9 rounded-[10px] text-sm text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                >
+                  <GitBranch size={14} /> 分配部门
+                </button>
+              )}
+              <button onClick={() => setDetailUser(null)} className="ml-auto px-4 h-9 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors">关闭</button>
             </div>
           </div>
         </div>
