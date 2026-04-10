@@ -9,31 +9,85 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "请填写用户名和密码" }, { status: 400 });
   }
 
+  const identifier = username.trim();
+
+  // ── 方式 1：admins 表（系统内置管理员，例如默认 admin 账号）──────
   const { data: admin } = await db
     .from("admins")
     .select("*")
-    .eq("username", username)
+    .eq("username", identifier)
     .single();
 
-  if (!admin) {
+  if (admin) {
+    const ok = await bcrypt.compare(password, admin.pwd_hash);
+    if (!ok) return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
+
+    const token = await signToken({
+      type: "admin",
+      adminId: admin.id,
+      username: admin.username,
+      role: (admin.role as AdminRole) ?? "super_admin",
+      tenantCode: admin.tenant_code ?? null,
+    });
+    return NextResponse.json(
+      { ok: true },
+      { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
+    );
+  }
+
+  // ── 方式 2：users 表（普通用户中被赋予了管理员角色的）────────────
+  //   支持手机号 / 用户名登录，角色必须 ≠ 'user' 才能进后台
+  const { data: userMatches } = await db
+    .from("users")
+    .select("*")
+    .or(`phone.eq.${identifier},username.eq.${identifier}`);
+
+  if (!userMatches || userMatches.length === 0) {
     return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
   }
 
-  const ok = await bcrypt.compare(password, admin.pwd_hash);
-  if (!ok) {
+  // 手机号可能跨组织重复，尝试匹配所有候选
+  let matchedUser = null;
+  for (const u of userMatches) {
+    if (await bcrypt.compare(password, u.pwd_hash)) {
+      matchedUser = u;
+      break;
+    }
+  }
+  if (!matchedUser) {
     return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
+  }
+
+  // 状态检查
+  if (matchedUser.status === "deleted") {
+    return NextResponse.json({ error: "账号不存在" }, { status: 401 });
+  }
+  if (matchedUser.status === "cancelled") {
+    return NextResponse.json({ error: "该账号已注销，无法登录" }, { status: 401 });
+  }
+  if (matchedUser.status === "disabled") {
+    return NextResponse.json({ error: "该账号已被禁用" }, { status: 401 });
+  }
+
+  // 角色检查：必须是 super_admin / system_admin / org_admin 才能进后台
+  const role = matchedUser.role as string;
+  if (!["super_admin", "system_admin", "org_admin"].includes(role)) {
+    return NextResponse.json({ error: "该账号无后台访问权限" }, { status: 403 });
   }
 
   const token = await signToken({
     type: "admin",
-    adminId: admin.id,
-    username: admin.username,
-    role: (admin.role as AdminRole) ?? "super_admin",
-    tenantCode: admin.tenant_code ?? null,
+    adminId: matchedUser.id,
+    username: matchedUser.username ?? matchedUser.phone,
+    role: role as AdminRole,
+    tenantCode: role === "org_admin" ? matchedUser.tenant_code : null,
   });
 
+  // 非超管在首次登录（仍使用初始密码）时必须修改密码
+  const mustChangePassword = role !== "super_admin" && matchedUser.first_login === true;
+
   return NextResponse.json(
-    { ok: true },
+    { ok: true, mustChangePassword },
     { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
   );
 }

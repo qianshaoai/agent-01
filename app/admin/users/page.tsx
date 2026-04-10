@@ -158,7 +158,7 @@ export default function AdminUsersPage() {
     Promise.all([
       fetch("/api/admin/tenants").then(r => r.json()).catch(() => []),
       fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
-      fetch("/api/admin/me").then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch("/api/admin/me", { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([tr, dr, me]) => {
       setTenants(Array.isArray(tr) ? tr : []);
       setAllDepts(Array.isArray(dr) ? dr : []);
@@ -181,16 +181,26 @@ export default function AdminUsersPage() {
     return targetRank > actorRank;
   }
 
-  // 根据当前管理员等级筛选可分配的角色选项（严格低于自己）
-  function assignableRoles() {
+  // 根据当前管理员等级筛选可分配的角色选项
+  // 1) 严格低于自己
+  // 2) 个人用户不能被设为组织管理员（组织管理员必须归属某个组织）
+  function assignableRoles(target?: UserRow) {
     if (!adminMeta) return [];
     const actorRank = ROLE_RANK[adminMeta.role] ?? 99;
+    const isPersonal =
+      target?.user_type === "personal" ||
+      !target?.tenant_code ||
+      target?.tenant_code === "PERSONAL";
     return [
       { value: "user",         label: "普通用户",     rank: 3 },
       { value: "org_admin",    label: "组织管理员",   rank: 2 },
       { value: "system_admin", label: "系统管理员",   rank: 1 },
       { value: "super_admin",  label: "超级管理员",   rank: 0 },
-    ].filter(r => r.rank > actorRank);
+    ].filter(r => {
+      if (r.rank <= actorRank) return false;          // 不能高于或等于自己
+      if (r.value === "org_admin" && isPersonal) return false;  // 个人用户无法当组管
+      return true;
+    });
   }
 
   async function setStatus(user: UserRow, status: "active" | "disabled") {
@@ -859,12 +869,15 @@ export default function AdminUsersPage() {
                   value={newRole}
                   onChange={(e) => setNewRole(e.target.value)}
                 >
-                  {assignableRoles().map((r) => (
+                  {assignableRoles(roleTarget ?? undefined).map((r) => (
                     <option key={r.value} value={r.value}>{r.label}</option>
                   ))}
                 </select>
-                {assignableRoles().length === 0 && (
-                  <p className="text-xs text-red-500">你的权限不足以分配任何系统角色</p>
+                {assignableRoles(roleTarget ?? undefined).length === 0 && (
+                  <p className="text-xs text-red-500">无可分配角色（权限不足或个人用户无法作为组织管理员）</p>
+                )}
+                {(roleTarget?.user_type === "personal" || !roleTarget?.tenant_code || roleTarget?.tenant_code === "PERSONAL") && (
+                  <p className="text-xs text-amber-600">该用户为个人用户，无法设为「组织管理员」</p>
                 )}
               </div>
               <div className="p-3 bg-amber-50 rounded-[10px] text-xs text-amber-700 space-y-1">

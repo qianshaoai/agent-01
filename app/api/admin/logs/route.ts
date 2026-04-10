@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAdmin } from "@/lib/auth";
+import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
-  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  const admin = await getActiveAdmin();
+  if (!admin) return NextResponse.json({ error: "未授权或权限已变更" }, { status: 401 });
 
   const search = req.nextUrl.searchParams.get("search") ?? "";
   const status = req.nextUrl.searchParams.get("status") ?? "";
@@ -16,8 +19,15 @@ export async function GET(req: NextRequest) {
     .order("created_at", { ascending: false })
     .limit(limit);
 
+  // 组织管理员只能看自己组织的日志
+  if (admin.role === "org_admin") {
+    if (!admin.tenantCode) return NextResponse.json([]);
+    query = query.eq("tenant_code", admin.tenantCode);
+  } else if (tenantCode) {
+    query = query.eq("tenant_code", tenantCode);
+  }
+
   if (status) query = query.eq("status", status);
-  if (tenantCode) query = query.eq("tenant_code", tenantCode);
   if (search) {
     query = query.or(
       `user_phone.ilike.%${search}%,tenant_code.ilike.%${search}%,agent_name.ilike.%${search}%`

@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getActiveUser } from "@/lib/session";
 import { db } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET() {
   const user = await getActiveUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });

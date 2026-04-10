@@ -170,7 +170,7 @@ export default function HomePage() {
 
       try {
         const [meRes, agentsRes] = await Promise.all([
-          fetch("/api/me"),
+          fetch("/api/me", { cache: "no-store" }),
           fetch("/api/agents"),
         ]);
 

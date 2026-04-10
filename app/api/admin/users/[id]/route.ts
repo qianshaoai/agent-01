@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getCurrentAdmin, canAssignRole, canManageTarget } from "@/lib/auth";
+import { canAssignRole, canManageTarget } from "@/lib/auth";
+import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await getCurrentAdmin();
-  if (!admin) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const admin = await getActiveAdmin();
+  if (!admin) return NextResponse.json({ error: "未登录或权限已变更" }, { status: 401 });
 
   const { id } = await params;
   const body = await req.json();
@@ -16,7 +17,7 @@ export async function PATCH(
   // 加载目标用户当前信息，用于权限校验
   const { data: target } = await db
     .from("users")
-    .select("id, role, status, tenant_code")
+    .select("id, role, status, tenant_code, user_type")
     .eq("id", id)
     .single();
   if (!target) return NextResponse.json({ error: "用户不存在" }, { status: 404 });
@@ -55,6 +56,15 @@ export async function PATCH(
     }
     if (target.status === "deleted") {
       return NextResponse.json({ error: "该用户已删除，不能修改角色" }, { status: 400 });
+    }
+    // 业务校验：个人用户不能被设为组织管理员（组织管理员必须归属某个组织）
+    if (role === "org_admin") {
+      if (target.user_type === "personal" || !target.tenant_code || target.tenant_code === "PERSONAL") {
+        return NextResponse.json(
+          { error: "个人用户不能被设为组织管理员，请先将该用户加入组织" },
+          { status: 400 }
+        );
+      }
     }
     // 越权校验：
     //   1) 不能修改跟自己同级或更高级别的人
