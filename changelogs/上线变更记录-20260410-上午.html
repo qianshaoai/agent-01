@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>变更记录 · 2026-04-10 上午</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #f4f6f9;
+      color: #1a1a2e;
+      padding: 40px 20px;
+      line-height: 1.7;
+    }
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      padding: 36px 40px;
+    }
+    .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .header p { font-size: 13px; color: rgba(255,255,255,0.5); }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .meta-item {
+      background: rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 10px 14px;
+    }
+    .meta-item .label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.45);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 4px;
+    }
+    .meta-item .value {
+      font-size: 13px;
+      font-weight: 600;
+      color: #fff;
+      font-family: "SF Mono", "Consolas", monospace;
+    }
+    .body { padding: 36px 40px; }
+    .section { margin-bottom: 32px; }
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #f0f0f0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-title .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px; height: 22px;
+      background: #1a1a2e;
+      color: #fff;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .item-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .item {
+      border: 1px solid #eee;
+      border-radius: 8px;
+      padding: 12px 16px;
+      background: #fafbfc;
+      font-size: 13px;
+      color: #444;
+    }
+    .item .title {
+      font-weight: 700;
+      font-size: 13px;
+      color: #1a1a2e;
+      margin-bottom: 5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-new    { background: #e8f5e9; color: #2e7d32; }
+    .badge-fix    { background: #fff3e0; color: #e65100; }
+    .badge-update { background: #e3f2fd; color: #1565c0; }
+    .badge-del    { background: #fce4ec; color: #c62828; }
+    code {
+      background: #f2f4f7;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: "SF Mono", "Consolas", monospace;
+      font-size: 12px;
+      color: #c7254e;
+    }
+    ul { padding-left: 18px; margin-top: 4px; }
+    li { margin-top: 3px; }
+    .footer {
+      background: #f8f9fb;
+      border-top: 1px solid #eee;
+      padding: 16px 40px;
+      font-size: 12px;
+      color: #999;
+      display: flex;
+      justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <div class="header">
+      <h1>智能体舱 · 变更记录</h1>
+      <p>2026-04-10 上午 · 内部开发记录</p>
+      <div class="meta-grid">
+        <div class="meta-item">
+          <div class="label">日期</div>
+          <div class="value">2026-04-10 AM</div>
+        </div>
+        <div class="meta-item">
+          <div class="label">Commit</div>
+          <div class="value">89af7e0</div>
+        </div>
+        <div class="meta-item">
+          <div class="label">数据库变更</div>
+          <div class="value">无</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="body">
+
+      <!-- 一、完成需求 -->
+      <div class="section">
+        <div class="section-title"><span class="num">一</span>完成需求</div>
+        <ul class="item-list">
+
+          <li class="item">
+            <div class="title"><span class="badge badge-new">P1 #11</span>用户列表批量操作</div>
+            表格第一列新增复选框，表头支持当页全选；勾选后顶部出现操作工具栏，可批量启用/禁用用户。
+            切换筛选条件时已选项自动清空。
+          </li>
+
+        </ul>
+      </div>
+
+      <!-- 二、Bug 修复 -->
+      <div class="section">
+        <div class="section-title"><span class="num">二</span>Bug 修复</div>
+        <ul class="item-list">
+
+          <li class="item">
+            <div class="title"><span class="badge badge-fix">修复</span>注册接口 Token 缺字段</div>
+            <code>register/route.ts</code> 的 <code>signToken</code> 调用缺少 <code>role</code> 和 <code>userType</code>，TypeScript 编译报错，生产构建失败。已补全。
+          </li>
+
+          <li class="item">
+            <div class="title"><span class="badge badge-fix">修复</span>agent_code 含中文时对话/历史失效</div>
+            agent_code 为中文时经 URL 编码后，前台、聊天 API、会话 API 三处均未做 decode，导致：
+            <ul>
+              <li>对话页标题显示为 <code>%E6%B5%8B...</code></li>
+              <li>聊天 API 找不到智能体，返回 404</li>
+              <li>历史会话列表加载为空</li>
+            </ul>
+            三处统一加 <code>decodeURIComponent</code>。
+          </li>
+
+          <li class="item">
+            <div class="title"><span class="badge badge-fix">修复</span>多账号分组数据互串</div>
+            前台"我的工作任务"分组数据存于固定 key <code>cat_groups_v1</code>，同一浏览器多账号共用同一份数据。
+            改为 <code>cat_groups_v1_&lt;userId&gt;</code>，按用户隔离。旧数据不迁移，需重建分组。
+          </li>
+
+        </ul>
+      </div>
+
+      <!-- 三、过程事故 -->
+      <div class="section">
+        <div class="section-title"><span class="num">三</span>过程事故</div>
+        <ul class="item-list">
+
+          <li class="item">
+            <div class="title"><span class="badge badge-del">事故</span>误建 middleware.ts 导致全站 404</div>
+            误以为 Next.js 16 需要 <code>middleware.ts</code> 做路由保护，实际该项目已在 <code>proxy.ts</code> 中实现（Next.js 16 专有机制）。两文件共存导致冲突，所有页面返回 404，约 5 分钟后删除 <code>middleware.ts</code> 恢复正常。
+          </li>
+
+        </ul>
+      </div>
+
+      <!-- 四、其他 -->
+      <div class="section">
+        <div class="section-title"><span class="num">四</span>其他</div>
+        <ul class="item-list">
+          <li class="item">
+            <div class="title"><span class="badge badge-new">新增</span>changelogs 目录</div>
+            新建 <code>changelogs/</code> 目录，用于存放每次上线变更记录 HTML 文件，本次首次建档。
+          </li>
+        </ul>
+      </div>
+
+    </div>
+
+    <div class="footer">
+      <span>智能体舱 · 内部开发记录</span>
+      <span>2026-04-10 上午</span>
+    </div>
+
+  </div>
+</body>
+</html>
