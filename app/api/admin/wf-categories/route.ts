@@ -7,7 +7,7 @@ export async function GET() {
 
   const { data } = await db
     .from("wf_categories")
-    .select("id, name, sort_order")
+    .select("id, name, sort_order, icon_url")
     .order("sort_order");
 
   return NextResponse.json(data ?? []);

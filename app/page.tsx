@@ -58,10 +58,11 @@ type AgentItem = {
   platform: string;
   agent_type?: string;
   external_url?: string;
-  categories?: { name: string };
+  categories?: { name: string; icon_url?: string | null };
+  categoriesAll?: { id: string; name: string; icon_url: string | null }[];
 };
 
-type CategoryItem = { id: string; name: string };
+type CategoryItem = { id: string; name: string; icon_url?: string | null };
 type NoticeItem = { id: string; tenant_code: string | null; content: string; enabled: boolean };
 type UserAgentItem = {
   id: string;
@@ -510,9 +511,10 @@ export default function HomePage() {
                     <button
                       key={cat.id}
                       onClick={() => switchCategory(cat.id)}
-                      className={`group/item relative w-full flex items-center px-3.5 py-2 pl-7 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
+                      className={`group/item relative w-full flex items-center gap-2 px-3.5 py-2 pl-7 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
                     >
                       <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-[#002FA7] rounded-r transition-all duration-200 ${activeCategory === cat.id ? "h-5" : "h-0 group-hover/item:h-5"}`} />
+                      {cat.icon_url && <img src={cat.icon_url} alt="" className="w-4 h-4 object-contain shrink-0" />}
                       {cat.name}
                     </button>
                   ))}
@@ -558,9 +560,10 @@ export default function HomePage() {
               <button
                 key={cat.id}
                 onClick={() => switchCategory(cat.id)}
-                className={`group/item relative flex items-center px-3.5 py-2.5 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
+                className={`group/item relative flex items-center gap-2 px-3.5 py-2.5 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
               >
                 <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-[#002FA7] rounded-r transition-all duration-200 ${activeCategory === cat.id ? "h-5" : "h-0 group-hover/item:h-5"}`} />
+                {cat.icon_url && <img src={cat.icon_url} alt="" className="w-4 h-4 object-contain shrink-0" />}
                 {cat.name}
               </button>
             ))}
@@ -1033,9 +1036,20 @@ function AgentCard({ agent }: { agent: AgentItem }) {
         <h3 className={`text-[15px] font-semibold text-gray-900 mb-1.5 transition-colors ${isExternal ? "group-hover:text-orange-500" : "group-hover:text-[#002FA7]"}`}>{agent.name}</h3>
         <p className="text-[13px] text-gray-500 leading-relaxed line-clamp-2">{agent.description}</p>
       </div>
-      <div className="flex items-center justify-between pt-1">
-        <Badge variant="muted">{agent.categories?.name ?? "通用"}</Badge>
-        <div className={`flex items-center gap-1 text-[12px] font-medium opacity-0 group-hover:opacity-100 transition-opacity ${isExternal ? "text-orange-500" : "text-[#002FA7]"}`}>
+      <div className="flex items-center justify-between pt-1 gap-2">
+        <div className="flex flex-wrap gap-1 min-w-0">
+          {agent.categoriesAll && agent.categoriesAll.length > 0 ? (
+            agent.categoriesAll.map((c) => (
+              <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                {c.icon_url ? <img src={c.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : null}
+                {c.name}
+              </span>
+            ))
+          ) : (
+            <Badge variant="muted">{agent.categories?.name ?? "通用"}</Badge>
+          )}
+        </div>
+        <div className={`flex items-center gap-1 text-[12px] font-medium opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ${isExternal ? "text-orange-500" : "text-[#002FA7]"}`}>
           {isExternal ? <>外链跳转 <ExternalLink size={13} /></> : <>开始对话 <ChevronRight size={14} /></>}
         </div>
       </div>

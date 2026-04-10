@@ -27,10 +27,11 @@ import {
   Tag,
   Pencil,
   Check,
+  Image as ImageIcon,
 } from "lucide-react";
 
 type Agent = { id: string; agent_code: string; name: string; agent_type: string; external_url: string };
-type Category = { id: string; name: string };
+type Category = { id: string; name: string; icon_url?: string | null };
 type Tenant = { id: string; code: string; name: string; enabled: boolean };
 
 type WorkflowStep = {
@@ -271,6 +272,30 @@ export default function WorkflowsAdminPage() {
     load();
   }
 
+  async function handleWfCatIcon(catId: string, e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/admin/wf-categories/${catId}/icon`, { method: "POST", body: fd });
+    if (res.ok) {
+      const data = await res.json();
+      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: data.url } : c));
+    } else {
+      const d = await res.json();
+      alert(d.error ?? "图标上传失败");
+    }
+    e.target.value = "";
+  }
+
+  async function removeWfCatIcon(catId: string) {
+    if (!confirm("确认删除此分类的图标？")) return;
+    const res = await fetch(`/api/admin/wf-categories/${catId}/icon`, { method: "DELETE" });
+    if (res.ok) {
+      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: null } : c));
+    }
+  }
+
   return (
     <AdminLayout>
       <div className="space-y-6">
@@ -360,7 +385,13 @@ export default function WorkflowsAdminPage() {
                         <p className="font-medium text-gray-900">{wf.name}</p>
                         {(wf.categoryIds ?? []).map((cid) => {
                           const cat = categories.find((c) => c.id === cid);
-                          return cat ? <span key={cid} className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">#{cat.name}</span> : null;
+                          if (!cat) return null;
+                          return (
+                            <span key={cid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
+                              {cat.icon_url ? <img src={cat.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
+                              {cat.name}
+                            </span>
+                          );
                         })}
                         {wf.visible_to === "org_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>}
                         {wf.visible_to === "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>}
@@ -493,11 +524,26 @@ export default function WorkflowsAdminPage() {
                     </div>
                   ) : (
                     <>
-                      <div className="flex items-center gap-2">
-                        <Tag size={15} className="text-[#002FA7]" />
+                      <div className="flex items-center gap-3">
+                        {cat.icon_url ? (
+                          <div className="w-8 h-8 rounded-[8px] overflow-hidden bg-white border border-gray-200 flex items-center justify-center">
+                            <img src={cat.icon_url} alt={cat.name} className="w-full h-full object-contain" />
+                          </div>
+                        ) : (
+                          <div className="w-8 h-8 rounded-[8px] bg-[#002FA7]/8 flex items-center justify-center">
+                            <Tag size={15} className="text-[#002FA7]" />
+                          </div>
+                        )}
                         <span className="font-medium text-gray-800">{cat.name}</span>
                       </div>
                       <div className="flex items-center gap-1">
+                        <label className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors cursor-pointer" title={cat.icon_url ? "替换图标" : "上传图标"}>
+                          <input type="file" accept=".png,.jpg,.jpeg,.svg,.webp" className="hidden" onChange={(e) => handleWfCatIcon(cat.id, e)} />
+                          <ImageIcon size={13} />
+                        </label>
+                        {cat.icon_url && (
+                          <button onClick={() => removeWfCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标"><X size={13} /></button>
+                        )}
                         <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
                         <button onClick={() => deleteWfCat(cat)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={13} /></button>
                       </div>

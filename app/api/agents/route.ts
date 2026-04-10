@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     user.isPersonal
       ? db.from("agents").select("id").eq("enabled", true)
       : buildOrgAccessQuery(),
-    db.from("categories").select("id, name").order("sort_order"),
+    db.from("categories").select("id, name, icon_url").order("sort_order"),
     user.isPersonal
       ? Promise.resolve({ data: [] as { category_id: string; tenant_code: string }[] })
       : db.from("tenant_categories").select("category_id, tenant_code"),
@@ -54,6 +54,40 @@ export async function GET(req: NextRequest) {
     ? allCategories
     : allCategories.filter((cat) => allowedCatIds.has(cat.id));
 
+  // ── 附加：为返回的智能体挂上 categoriesAll（多对多）────────────
+  async function enrichWithCategories(agentList: Array<{ id: string; [k: string]: unknown }>) {
+    if (agentList.length === 0) return agentList;
+    const ids = agentList.map((a) => a.id);
+    const { data: acRows } = await db
+      .from("agent_categories")
+      .select("agent_id, category_id")
+      .in("agent_id", ids);
+    const catMap = new Map<string, { id: string; name: string; icon_url: string | null }>();
+    for (const c of (allCategories ?? []) as { id: string; name: string; icon_url: string | null }[]) {
+      catMap.set(c.id, c);
+    }
+    const agentCatMap = new Map<string, string[]>();
+    for (const row of ((acRows ?? []) as { agent_id: string; category_id: string }[])) {
+      const arr = agentCatMap.get(row.agent_id) ?? [];
+      arr.push(row.category_id);
+      agentCatMap.set(row.agent_id, arr);
+    }
+    return agentList.map((a) => {
+      const cids = agentCatMap.get(a.id) ?? [];
+      const catsAll = cids.map((cid) => catMap.get(cid)).filter(Boolean) as { id: string; name: string; icon_url: string | null }[];
+      // 如果连接表里没有，回退到旧字段 category_id
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const fallback: { id: string; name: string; icon_url: string | null } | undefined = (a as any).category_id ? catMap.get((a as any).category_id) : undefined;
+      const finalCats = catsAll.length > 0 ? catsAll : (fallback ? [fallback] : []);
+      return {
+        ...a,
+        categoriesAll: finalCats,
+        // 兼容旧 .categories.name 读取方式
+        categories: finalCats[0] ? { name: finalCats[0].name, icon_url: finalCats[0].icon_url } : null,
+      };
+    });
+  }
+
   // ── 3. 无 categoryId → 保持原有行为（全部可访问智能体）────────────
   if (!categoryId || categoryId === "__all__") {
     if (accessibleIds.length === 0) {
@@ -61,10 +95,11 @@ export async function GET(req: NextRequest) {
     }
     const { data: agents } = await db
       .from("agents")
-      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, categories!agents_category_id_fkey(name)")
+      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id")
       .in("id", accessibleIds)
       .eq("enabled", true);
-    return NextResponse.json({ categories: categories ?? [], agents: agents ?? [] });
+    const enriched = await enrichWithCategories(agents ?? []);
+    return NextResponse.json({ categories: categories ?? [], agents: enriched });
   }
 
   // ── 4. 指定 categoryId → 动态计算展示集合 ──────────────────────────
@@ -124,6 +159,13 @@ export async function GET(req: NextRequest) {
     .filter((o: { is_manual: boolean }) => o.is_manual)
     .map((o: { agent_id: string }) => o.agent_id);
 
+  // 4c.1 读取 agent_categories 多对多连接表（需求 #10）
+  const { data: directLinks } = await db
+    .from("agent_categories")
+    .select("agent_id")
+    .eq("category_id", categoryId);
+  const directIds = (directLinks ?? []).map((l: { agent_id: string }) => l.agent_id);
+
   const hiddenSet = new Set(
     (overrides ?? [])
       .filter((o: { is_hidden: boolean }) => o.is_hidden)
@@ -148,7 +190,7 @@ export async function GET(req: NextRequest) {
   }
 
   const finalIds = [
-    ...new Set([...autoAgentIds, ...manualIds]),
+    ...new Set([...autoAgentIds, ...manualIds, ...directIds]),
   ].filter((id) => !hiddenSet.has(id) && (accessibleSet.has(id) || externalAutoSet.has(id)));
 
   if (finalIds.length === 0) {
@@ -157,9 +199,10 @@ export async function GET(req: NextRequest) {
 
   const { data: agents } = await db
     .from("agents")
-    .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, categories!agents_category_id_fkey(name)")
+    .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id")
     .in("id", finalIds)
     .eq("enabled", true);
 
-  return NextResponse.json({ categories: categories ?? [], agents: agents ?? [] });
+  const enriched = await enrichWithCategories(agents ?? []);
+  return NextResponse.json({ categories: categories ?? [], agents: enriched });
 }

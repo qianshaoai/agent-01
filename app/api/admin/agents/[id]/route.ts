@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAdmin } from "@/lib/auth";
+import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+
+export const dynamic = "force-dynamic";
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  const admin = await getActiveAdmin();
+  if (!admin) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
   const { id } = await params;
   const body = await req.json();
@@ -15,7 +18,6 @@ export async function PATCH(
   if (body.agentCode !== undefined) updates.agent_code = body.agentCode;
   if (body.name !== undefined) updates.name = body.name;
   if (body.description !== undefined) updates.description = body.description;
-  if (body.categoryId !== undefined) updates.category_id = body.categoryId || null;
   if (body.platform !== undefined) updates.platform = body.platform;
   if (body.agentType !== undefined) updates.agent_type = body.agentType;
   if (body.externalUrl !== undefined) updates.external_url = body.externalUrl;
@@ -24,11 +26,24 @@ export async function PATCH(
   if (body.modelParams !== undefined) updates.model_params = body.modelParams;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
 
+  // 多分类：全量替换 agent_categories 表中的关联
+  if (body.categoryIds !== undefined || body.categoryId !== undefined) {
+    const catIds: string[] = Array.isArray(body.categoryIds)
+      ? body.categoryIds
+      : body.categoryId
+        ? [body.categoryId]
+        : [];
+    await db.from("agent_categories").delete().eq("agent_id", id);
+    if (catIds.length > 0) {
+      await db.from("agent_categories").insert(catIds.map((cid) => ({ agent_id: id, category_id: cid })));
+    }
+    // 兼容旧字段：把第一个分类作为主分类写到 agents.category_id
+    updates.category_id = catIds[0] ?? null;
+  }
+
   // 组织分配
   if (body.tenantCodes !== undefined) {
-    // 先删除旧分配
     await db.from("tenant_agents").delete().eq("agent_id", id);
-    // 插入新分配
     if (body.tenantCodes.length > 0) {
       await db.from("tenant_agents").insert(
         body.tenantCodes.map((code: string) => ({ tenant_code: code, agent_id: id }))
@@ -36,16 +51,16 @@ export async function PATCH(
     }
   }
 
-  const { data, error } = await db
-    .from("agents")
-    .update(updates)
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (error) {
-    if (error.code === "23505") return NextResponse.json({ error: "该编号已被其他智能体使用，请换一个编号" }, { status: 409 });
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (Object.keys(updates).length > 0) {
+    const { error } = await db
+      .from("agents")
+      .update(updates)
+      .eq("id", id);
+    if (error) {
+      if (error.code === "23505") return NextResponse.json({ error: "该编号已被其他智能体使用，请换一个编号" }, { status: 409 });
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
   }
-  return NextResponse.json(data);
+
+  return NextResponse.json({ ok: true });
 }

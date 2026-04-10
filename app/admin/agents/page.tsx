@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2 } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon } from "lucide-react";
 
 type Agent = {
   id: string;
@@ -18,14 +18,16 @@ type Agent = {
   external_url: string;
   enabled: boolean;
   category_id: string | null;
+  categoryIds?: string[];
   api_key_masked?: string;
   api_endpoint?: string;
   model_params?: Record<string, unknown>;
-  categories?: { name: string };
+  categories?: { name: string; icon_url?: string | null };
+  categoriesAll?: { id: string; name: string; icon_url: string | null }[];
   tenant_codes?: string[];
   permissions?: { scope_type: string; scope_id: string | null }[];
 };
-type Category = { id: string; name: string };
+type Category = { id: string; name: string; icon_url?: string | null };
 type Tenant = { id: string; code: string; name: string };
 type Permission = { id: string; scope_type: string; scope_id: string | null; scope_label: string };
 type Dept = { id: string; name: string; tenant_code: string };
@@ -43,7 +45,7 @@ type CategoryDisplayConfig = {
 };
 
 const PLATFORMS = ["coze", "dify", "qingyan", "yuanqi", "openai", "other"];
-const EMPTY_AGENT = { id: "", name: "", description: "", categoryId: "", platform: "coze", agentType: "chat", externalUrl: "" };
+const EMPTY_AGENT = { id: "", name: "", description: "", categoryIds: [] as string[], platform: "coze", agentType: "chat", externalUrl: "" };
 const EMPTY_API = { endpoint: "", apiKey: "", modelParams: '{"temperature": 0.7, "max_tokens": 2000}' };
 
 export default function AgentsAdminPage() {
@@ -105,7 +107,7 @@ export default function AgentsAdminPage() {
   useEffect(() => { load(); }, []);
 
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
-  function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryId: a.category_id ?? "", platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
+  function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   function openApi(a: Agent) { setShowApiModal(a); setApiForm({ endpoint: a.api_endpoint ?? "", apiKey: "", modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}' }); }
   function openAssign(a: Agent) { setShowAssignModal(a); setSelectedTenants(a.tenant_codes ?? []); }
 
@@ -177,8 +179,8 @@ export default function AgentsAdminPage() {
     setSaving(true);
     try {
       const res = editing
-        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) })
-        : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryId: form.categoryId || null, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) });
+        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) })
+        : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
       setShowAgentModal(false); load();
@@ -231,6 +233,30 @@ export default function AgentsAdminPage() {
     }
     setEditingCatId(null);
     setEditingCatName("");
+  }
+
+  async function handleCatIcon(catId: string, e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/admin/categories/${catId}/icon`, { method: "POST", body: fd });
+    if (res.ok) {
+      const data = await res.json();
+      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: data.url } : c));
+    } else {
+      const d = await res.json();
+      alert(d.error ?? "图标上传失败");
+    }
+    e.target.value = "";
+  }
+
+  async function removeCatIcon(catId: string) {
+    if (!confirm("确认删除此分类的图标？")) return;
+    const res = await fetch(`/api/admin/categories/${catId}/icon`, { method: "DELETE" });
+    if (res.ok) {
+      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: null } : c));
+    }
   }
 
   const platformColor: Record<string, string> = { coze: "bg-blue-100 text-blue-700", dify: "bg-purple-100 text-purple-700", zhipu: "bg-green-100 text-green-700", openai: "bg-gray-100 text-gray-600", other: "bg-gray-100 text-gray-600" };
@@ -316,7 +342,20 @@ export default function AgentsAdminPage() {
                             <div><p className="font-medium text-gray-800">{a.name}</p><code className="text-[10px] text-gray-400 font-mono">{a.agent_code}</code></div>
                           </div>
                         </td>
-                        <td className="px-5 py-4"><Badge variant="muted">{a.categories?.name ?? "未分类"}</Badge></td>
+                        <td className="px-5 py-4">
+                          {a.categoriesAll && a.categoriesAll.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {a.categoriesAll.map((c) => (
+                                <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                                  {c.icon_url ? <img src={c.icon_url} alt={c.name} className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
+                                  {c.name}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <Badge variant="muted">未分类</Badge>
+                          )}
+                        </td>
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {a.agent_type === "external" ? (
@@ -374,8 +413,28 @@ export default function AgentsAdminPage() {
                     </div>
                   ) : (
                     <>
-                      <div className="flex items-center gap-2"><Tag size={15} className="text-[#002FA7]" /><span className="font-medium text-gray-800">{cat.name}</span></div>
+                      <div className="flex items-center gap-3">
+                        {cat.icon_url ? (
+                          <div className="w-8 h-8 rounded-[8px] overflow-hidden bg-white border border-gray-200 flex items-center justify-center">
+                            <img src={cat.icon_url} alt={cat.name} className="w-full h-full object-contain" />
+                          </div>
+                        ) : (
+                          <div className="w-8 h-8 rounded-[8px] bg-[#002FA7]/8 flex items-center justify-center">
+                            <Tag size={15} className="text-[#002FA7]" />
+                          </div>
+                        )}
+                        <span className="font-medium text-gray-800">{cat.name}</span>
+                      </div>
                       <div className="flex items-center gap-1">
+                        <label className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors cursor-pointer" title={cat.icon_url ? "替换图标" : "上传图标"}>
+                          <input type="file" accept=".png,.jpg,.jpeg,.svg,.webp" className="hidden" onChange={(e) => handleCatIcon(cat.id, e)} />
+                          <ImageIcon size={13} />
+                        </label>
+                        {cat.icon_url && (
+                          <button onClick={() => removeCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标">
+                            <X size={13} />
+                          </button>
+                        )}
                         <button onClick={() => openCatAssign(cat)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="组织分配"><Building2 size={13} /></button>
                         <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
                       </div>
@@ -397,7 +456,42 @@ export default function AgentsAdminPage() {
               <Input label="智能体编号（ID）" placeholder="如 AGT-009" value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} />
               <Input label="名称" placeholder="如 营销文案助手" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">简介</label><textarea rows={3} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="简短描述功能…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-              <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">分类</label><select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">不分类</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-gray-700">所属分类（可多选）</label>
+                {categories.length === 0 ? (
+                  <p className="text-xs text-gray-400">暂无分类，请先在&quot;分类管理&quot;Tab 中创建</p>
+                ) : (
+                  <>
+                    <div className="border border-gray-200 rounded-[12px] p-3 max-h-40 overflow-y-auto space-y-1.5">
+                      {categories.map((cat) => {
+                        const checked = form.categoryIds.includes(cat.id);
+                        return (
+                          <label key={cat.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 rounded px-1 py-1">
+                            <input
+                              type="checkbox"
+                              className="accent-[#002FA7] w-4 h-4"
+                              checked={checked}
+                              onChange={() => {
+                                const next = checked
+                                  ? form.categoryIds.filter((id) => id !== cat.id)
+                                  : [...form.categoryIds, cat.id];
+                                setForm({ ...form, categoryIds: next });
+                              }}
+                            />
+                            {cat.icon_url ? (
+                              <img src={cat.icon_url} alt={cat.name} className="w-5 h-5 rounded-[4px] object-contain" />
+                            ) : (
+                              <Tag size={14} className="text-gray-400" />
+                            )}
+                            <span className="text-sm text-gray-700">{cat.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-gray-400">可为智能体勾选多个分类，便于在多个分类下显示。不选则不出现在任何分类下。</p>
+                  </>
+                )}
+              </div>
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">智能体类型</label>
                 <div className="flex gap-3">
