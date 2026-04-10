@@ -47,6 +47,7 @@ pipeline {
                 echo "==> 构建 Next.js（standalone 模式）"
                 // NEXT_PUBLIC_* 变量在构建时内联到客户端 JS，必须在 build 阶段注入
                 sh """
+                    NODE_OPTIONS='--max-old-space-size=1536' \
                     NEXT_PUBLIC_SUPABASE_URL=${env.SUPABASE_URL} \
                     NEXT_PUBLIC_SUPABASE_ANON_KEY=${env.SUPABASE_ANON_KEY} \
                     npm run build
