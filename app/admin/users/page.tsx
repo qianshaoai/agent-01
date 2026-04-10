@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
-import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus } from "lucide-react";
+import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus, Eye, Bell } from "lucide-react";
 
 type UserRow = {
   id: string;
@@ -29,10 +29,16 @@ type AdminMeta = {
   tenantCode: string | null;
 };
 
+// 三档配色：中性灰（普通信息）/ 品牌蓝（需关注）/ 警示（异常）
+const NEUTRAL = "bg-gray-50 text-gray-600 border-gray-200";
+const BRAND   = "bg-[#002FA7]/8 text-[#002FA7] border-[#002FA7]/15";
+const WARN    = "bg-amber-50 text-amber-700 border-amber-200";
+const DANGER  = "bg-red-50 text-red-600 border-red-200";
+
 const STATUS_MAP = {
-  active:    { label: "正常",   cls: "bg-green-50 text-green-600 border-green-100" },
-  disabled:  { label: "已禁用", cls: "bg-amber-50 text-amber-600 border-amber-100" },
-  cancelled: { label: "已注销", cls: "bg-red-50 text-red-400 border-red-100" },
+  active:    { label: "正常",   cls: NEUTRAL },
+  disabled:  { label: "已禁用", cls: WARN },
+  cancelled: { label: "已注销", cls: DANGER },
   deleted:   { label: "已删除", cls: "bg-gray-100 text-gray-400 border-gray-200" },
 } as const;
 
@@ -41,15 +47,16 @@ const ROLE_RANK: Record<string, number> = {
 };
 
 const USER_TYPE_MAP = {
-  personal:     { label: "个人用户", cls: "bg-purple-50 text-purple-600 border-purple-100" },
-  organization: { label: "组织用户", cls: "bg-blue-50 text-blue-600 border-blue-100" },
+  personal:     { label: "个人用户", cls: NEUTRAL },
+  organization: { label: "组织用户", cls: NEUTRAL },
 };
 
+// 角色：普通用户用中性灰，任何管理员角色用品牌蓝
 const ROLE_MAP = {
-  super_admin:  { label: "超级管理员", cls: "bg-red-50 text-red-600 border-red-100" },
-  system_admin: { label: "系统管理员", cls: "bg-orange-50 text-orange-600 border-orange-100" },
-  org_admin:    { label: "组织管理员", cls: "bg-indigo-50 text-indigo-600 border-indigo-100" },
-  user:         { label: "普通用户",   cls: "bg-gray-50 text-gray-500 border-gray-200" },
+  super_admin:  { label: "超级管理员", cls: BRAND },
+  system_admin: { label: "系统管理员", cls: BRAND },
+  org_admin:    { label: "组织管理员", cls: BRAND },
+  user:         { label: "普通用户",   cls: NEUTRAL },
 };
 
 const inputCls = "h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all";
@@ -512,15 +519,14 @@ export default function AdminUsersPage() {
                       onChange={(e) => setSelectedIds(e.target.checked ? users.map(u => u.id) : [])}
                     />
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">用户名</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">真实姓名</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">手机号</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">类型</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">角色</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">所属组织</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">状态</th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">最近登录</th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wider">操作</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">用户名</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">真实姓名</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">手机号</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">类型 / 角色</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">所属组织</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">状态</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">最近登录</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -536,7 +542,7 @@ export default function AdminUsersPage() {
                   ))
                 ) : users.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-14 text-center text-sm text-gray-400">暂无用户数据</td>
+                    <td colSpan={9} className="px-4 py-14 text-center text-sm text-gray-400">暂无用户数据</td>
                   </tr>
                 ) : (
                   users.map((u) => {
@@ -548,7 +554,7 @@ export default function AdminUsersPage() {
                     const canOperate = canManage(u);
                     return (
                       <tr key={u.id} className={`border-b border-gray-50 hover:bg-gray-50/50 transition-colors ${selectedIds.includes(u.id) ? "bg-blue-50/40" : ""}`}>
-                        <td className="px-4 py-3.5 w-10">
+                        <td className="px-4 py-4 w-10">
                           <input
                             type="checkbox"
                             className="rounded border-gray-300 text-[#002FA7] focus:ring-[#002FA7]/30"
@@ -556,99 +562,107 @@ export default function AdminUsersPage() {
                             onChange={(e) => setSelectedIds(e.target.checked ? [...selectedIds, u.id] : selectedIds.filter(id => id !== u.id))}
                           />
                         </td>
-                        <td className="px-4 py-3.5">
-                          <button
-                            onClick={() => openDetail(u)}
-                            className="text-[#002FA7] hover:underline font-medium text-left"
-                            title="查看详情"
-                          >
-                            {u.username || <span className="text-gray-300">—</span>}
-                          </button>
-                          {u.first_login && (
-                            <p className="text-[10px] text-amber-500 mt-0.5">未改初始密码</p>
-                          )}
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => openDetail(u)}
+                              className="text-[#002FA7] hover:underline font-medium text-left text-[14px]"
+                              title="查看详情"
+                            >
+                              {u.username || <span className="text-gray-300">—</span>}
+                            </button>
+                            {u.first_login && (
+                              <span title="未改初始密码" className="inline-flex">
+                                <Bell size={12} className="text-amber-500 shrink-0" />
+                              </span>
+                            )}
+                          </div>
                         </td>
-                        <td className="px-4 py-3.5 text-gray-800">
+                        <td className="px-4 py-4 text-gray-800 text-[14px]">
                           {u.real_name || u.nickname || <span className="text-gray-300">—</span>}
                         </td>
-                        <td className="px-4 py-3.5 text-gray-600 font-mono text-[13px]">{u.phone}</td>
-                        <td className="px-4 py-3.5">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${ut.cls}`}>
-                            {ut.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          {canOperate ? (
-                            <button
-                              onClick={() => openRoleModal(u)}
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border cursor-pointer hover:opacity-80 transition-opacity ${rl.cls}`}
-                              title="点击修改角色"
-                            >
-                              {rl.label}
-                              <ChevronDown size={10} />
-                            </button>
-                          ) : (
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${rl.cls} ${u.status === "deleted" ? "opacity-40" : ""}`}>
-                              {rl.label}
+                        <td className="px-4 py-4 text-gray-600 font-mono text-[13px]">{u.phone}</td>
+                        <td className="px-4 py-4">
+                          <div className="flex flex-col gap-1 items-start">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${ut.cls}`}>
+                              {ut.label}
                             </span>
+                            {canOperate ? (
+                              <button
+                                onClick={() => openRoleModal(u)}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border cursor-pointer hover:opacity-80 transition-opacity ${rl.cls}`}
+                                title="点击修改角色"
+                              >
+                                {rl.label}
+                                <ChevronDown size={10} />
+                              </button>
+                            ) : (
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${rl.cls} ${u.status === "deleted" ? "opacity-40" : ""}`}>
+                                {rl.label}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          {isPersonal ? (
+                            <span className="text-[13px] text-gray-300">个人</span>
+                          ) : (
+                            <div className="flex flex-col">
+                              <span className="text-[13px] text-gray-800">{tenant?.name ?? u.tenant_code}</span>
+                              <span className="text-[11px] text-gray-400 font-mono">{u.tenant_code}</span>
+                            </div>
                           )}
                         </td>
-                        <td className="px-4 py-3.5 text-xs text-gray-500">
-                          {isPersonal ? <span className="text-gray-300">个人</span> : (
-                            <>
-                              <span className="text-gray-700">{tenant?.name ?? u.tenant_code}</span>
-                              <span className="text-gray-400 font-mono ml-1">{u.tenant_code}</span>
-                            </>
-                          )}
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${st.cls}`}>
+                        <td className="px-4 py-4">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${st.cls}`}>
                             {st.label}
                           </span>
                         </td>
-                        <td className="px-4 py-3.5 text-xs text-gray-500">{fmtDate(u.last_login_at)}</td>
-                        <td className="px-4 py-3.5">
-                          <div className="flex items-center justify-end gap-1">
+                        <td className="px-4 py-4 text-[12px] text-gray-500 whitespace-nowrap">{fmtDate(u.last_login_at)}</td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center justify-end gap-0.5">
                             {!canOperate ? (
                               <span className="text-xs text-gray-300 px-2">—</span>
                             ) : (
                               <>
                                 <button
                                   onClick={() => openDetail(u)}
-                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                                  className="w-8 h-8 flex items-center justify-center rounded-[8px] text-gray-400 hover:text-[#002FA7] hover:bg-[#002FA7]/8 transition-colors"
                                   title="查看详情"
                                 >
-                                  详情
+                                  <Eye size={15} />
                                 </button>
                                 <button
                                   onClick={() => { setResetTarget(u); setResetPwd(""); setResetError(""); setResetOk(false); }}
-                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                                  className="w-8 h-8 flex items-center justify-center rounded-[8px] text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
                                   title="重置密码"
                                 >
-                                  <KeyRound size={13} /> 重置密码
+                                  <KeyRound size={15} />
                                 </button>
                                 {u.status === "active" && (
                                   <button
                                     onClick={() => setStatus(u, "disabled")}
-                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-amber-600 hover:bg-amber-50 transition-colors"
+                                    className="w-8 h-8 flex items-center justify-center rounded-[8px] text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                                    title="禁用"
                                   >
-                                    <ShieldOff size={13} /> 禁用
+                                    <ShieldOff size={15} />
                                   </button>
                                 )}
                                 {u.status === "disabled" && (
                                   <button
                                     onClick={() => setStatus(u, "active")}
-                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-green-600 hover:bg-green-50 transition-colors"
+                                    className="w-8 h-8 flex items-center justify-center rounded-[8px] text-gray-400 hover:text-green-600 hover:bg-green-50 transition-colors"
+                                    title="恢复"
                                   >
-                                    <ShieldCheck size={13} /> 恢复
+                                    <ShieldCheck size={15} />
                                   </button>
                                 )}
                                 <button
                                   onClick={() => softDeleteUser(u)}
-                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-[8px] text-xs text-red-400 hover:bg-red-50 transition-colors"
+                                  className="w-8 h-8 flex items-center justify-center rounded-[8px] text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
                                   title="删除用户"
                                 >
-                                  <Trash2 size={13} /> 删除
+                                  <Trash2 size={15} />
                                 </button>
                               </>
                             )}
