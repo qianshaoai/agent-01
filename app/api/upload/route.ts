@@ -17,6 +17,25 @@ const ALLOWED_TYPES: Record<string, string> = {
 
 const MAX_SIZE = 20 * 1024 * 1024; // 20MB
 
+// 通过文件头（magic bytes）二次验证文件类型，防止伪造 Content-Type
+// 注意：txt/csv/doc 没有固定文件头，只校验有固定签名的类型
+function verifyMagicBytes(buffer: Buffer, declaredType: string): boolean {
+  if (buffer.length < 4) return false;
+  const hex = buffer.subarray(0, 12).toString("hex").toUpperCase();
+  switch (declaredType) {
+    case "pdf":  return hex.startsWith("25504446"); // %PDF
+    case "png":  return hex.startsWith("89504E47");
+    case "jpg":  return hex.startsWith("FFD8FF");
+    case "webp": return hex.startsWith("52494646") && hex.slice(16, 24) === "57454250"; // RIFF....WEBP
+    case "docx":
+    case "xlsx": return hex.startsWith("504B0304") || hex.startsWith("504B0506") || hex.startsWith("504B0708"); // ZIP (OOXML 是 zip 包)
+    case "doc":  return hex.startsWith("D0CF11E0A1B11AE1"); // OLE2 Compound
+    case "txt":
+    case "csv":  return true; // 纯文本没固定头，跳过
+    default:     return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
@@ -41,6 +60,14 @@ export async function POST(req: NextRequest) {
   try {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
+
+    // 文件头校验，拒绝伪造 MIME 类型的文件
+    if (!verifyMagicBytes(buffer, fileType)) {
+      return NextResponse.json(
+        { error: "文件内容与声明类型不符，拒绝上传" },
+        { status: 400 }
+      );
+    }
 
     // 上传到 Supabase Storage
     const bucket = process.env.SUPABASE_STORAGE_BUCKET ?? "uploads";

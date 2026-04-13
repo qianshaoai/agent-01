@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
+import { useDebounce } from "@/lib/use-debounce";
 import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus, Eye, Bell } from "lucide-react";
 
 type UserRow = {
@@ -67,6 +68,7 @@ export default function AdminUsersPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search, 400);
   const [statusFilter, setStatusFilter] = useState("");
   const [userTypeFilter, setUserTypeFilter] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
@@ -105,6 +107,7 @@ export default function AdminUsersPage() {
   const [groupMembers, setGroupMembers] = useState<Record<string, GroupMember[]>>({});
   const [addMemberGroupId, setAddMemberGroupId] = useState<string | null>(null);
   const [addMemberSearch, setAddMemberSearch] = useState("");
+  const debouncedAddMemberSearch = useDebounce(addMemberSearch, 400);
   const [addMemberResults, setAddMemberResults] = useState<UserRow[]>([]);
   const [addMemberLoading, setAddMemberLoading] = useState(false);
 
@@ -142,7 +145,7 @@ export default function AdminUsersPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: String(p), pageSize: String(pageSize) });
-      if (search) params.set("search", search);
+      if (debouncedSearch) params.set("search", debouncedSearch);
       if (statusFilter) params.set("status", statusFilter);
       if (userTypeFilter) params.set("user_type", userTypeFilter);
       if (roleFilter) params.set("role", roleFilter);
@@ -155,11 +158,15 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
+  }, [page, debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
 
-  useEffect(() => { fetchUsers(1); setPage(1); setSelectedIds([]); }, [search, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
+  useEffect(() => { fetchUsers(1); setPage(1); setSelectedIds([]); }, [debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
   useEffect(() => { fetchUsers(page); }, [page]);
   useEffect(() => { if (activeTab === "groups") loadGroups(); }, [activeTab]);
+  // 添加成员搜索：防抖后才发请求
+  useEffect(() => {
+    if (addMemberGroupId) searchUsersForGroup(debouncedAddMemberSearch);
+  }, [debouncedAddMemberSearch, addMemberGroupId]);
 
   useEffect(() => {
     Promise.all([
@@ -757,7 +764,7 @@ export default function AdminUsersPage() {
                                 className="flex-1 h-9 border border-gray-200 rounded-[8px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
                                 placeholder="搜索用户（手机号/用户名/姓名）…"
                                 value={addMemberSearch}
-                                onChange={(e) => { setAddMemberSearch(e.target.value); searchUsersForGroup(e.target.value); }}
+                                onChange={(e) => setAddMemberSearch(e.target.value)}
                               />
                               <button onClick={() => { setAddMemberGroupId(null); setAddMemberSearch(""); setAddMemberResults([]); }} className="px-3 h-9 rounded-[8px] text-xs text-gray-400 hover:bg-gray-100 border border-gray-200">取消</button>
                             </div>

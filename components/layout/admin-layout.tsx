@@ -91,7 +91,12 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {});
     // 读取当前管理员角色（实时从数据库，不信任 JWT 缓存）
-    function refreshMe() {
+    let lastRefresh = 0;
+    const REFRESH_THROTTLE_MS = 30 * 1000; // 30 秒内不重复拉取
+    function refreshMe(force = false) {
+      const now = Date.now();
+      if (!force && now - lastRefresh < REFRESH_THROTTLE_MS) return;
+      lastRefresh = now;
       fetch("/api/admin/me", { cache: "no-store" })
         .then((r) => r.ok ? r.json() : null)
         .then((me) => {
@@ -100,8 +105,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         })
         .catch(() => {});
     }
-    refreshMe();
-    // 每次切换页面/获得焦点时重新拉取一次，确保管理员角色变动及时生效
+    refreshMe(true);
+    // 窗口聚焦时节流拉取（30 秒内多次聚焦只拉一次）
     const onFocus = () => refreshMe();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
