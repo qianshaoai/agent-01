@@ -27,12 +27,16 @@ import {
   Tag,
   Pencil,
   Check,
+  Building2,
   Image as ImageIcon,
 } from "lucide-react";
 
 type Agent = { id: string; agent_code: string; name: string; agent_type: string; external_url: string };
 type Category = { id: string; name: string; icon_url?: string | null };
 type Tenant = { id: string; code: string; name: string; enabled: boolean };
+type Dept = { id: string; name: string; tenant_code: string };
+type Team = { id: string; name: string; dept_id: string };
+type Permission = { scope_type: string; scope_id: string | null };
 
 type WorkflowStep = {
   id: string;
@@ -54,10 +58,23 @@ type Workflow = {
   enabled: boolean;
   visible_to: string;
   categoryIds: string[];
+  permissions?: Permission[];
   workflow_steps: WorkflowStep[];
 };
 
-const EMPTY_WF = { name: "", description: "", category: "", sortOrder: 0, enabled: true, visibleTo: "all", categoryIds: [] as string[] };
+type PermScope = "org" | "dept" | "team";
+
+const EMPTY_WF = {
+  name: "",
+  description: "",
+  category: "",
+  sortOrder: 0,
+  enabled: true,
+  visibleTo: "all",
+  categoryIds: [] as string[],
+  permScope: "org" as PermScope,
+  permIds: [] as string[],
+};
 const EMPTY_STEP = { title: "", description: "", execType: "agent" as "agent" | "manual" | "review" | "external", agentId: "", buttonText: "进入智能体", enabled: true, stepOrder: 1 };
 
 export default function WorkflowsAdminPage() {
@@ -65,6 +82,8 @@ export default function WorkflowsAdminPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [allDepts, setAllDepts] = useState<Dept[]>([]);
+  const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [tenantSearch, setTenantSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"workflows" | "categories">("workflows");
@@ -94,16 +113,20 @@ export default function WorkflowsAdminPage() {
   async function load() {
     setLoading(true);
     try {
-      const [wr, ar, cr, tr] = await Promise.all([
+      const [wr, ar, cr, tr, dr, teamsR] = await Promise.all([
         fetch("/api/admin/workflows").then((r) => r.json()),
         fetch("/api/admin/agents").then((r) => r.json()),
         fetch("/api/admin/wf-categories").then((r) => r.json()),
         fetch("/api/admin/tenants").then((r) => r.json()),
+        fetch("/api/admin/departments").then((r) => r.json()).catch(() => []),
+        fetch("/api/admin/teams").then((r) => r.json()).catch(() => []),
       ]);
       setWorkflows(Array.isArray(wr) ? wr : []);
       setAgents(Array.isArray(ar) ? ar : []);
       setCategories(Array.isArray(cr) ? cr : []);
       setTenants(Array.isArray(tr) ? tr : []);
+      setAllDepts(Array.isArray(dr) ? dr : []);
+      setAllTeams(Array.isArray(teamsR) ? teamsR : []);
     } catch {
       setWorkflows([]);
     } finally {
@@ -117,16 +140,52 @@ export default function WorkflowsAdminPage() {
   function openAddWf() { setEditingWf(null); setWfForm(EMPTY_WF); setWfError(""); setShowWfModal(true); }
   function openEditWf(wf: Workflow) {
     setEditingWf(wf);
-    setWfForm({ name: wf.name, description: wf.description, category: wf.category, sortOrder: wf.sort_order, enabled: wf.enabled, visibleTo: wf.visible_to, categoryIds: wf.categoryIds ?? [] });
+    // 从权限规则还原 permScope / permIds
+    const rules = wf.permissions ?? [];
+    const firstType = (rules[0]?.scope_type as PermScope) ?? "org";
+    const validScope: PermScope = (["org", "dept", "team"].includes(firstType) ? firstType : "org") as PermScope;
+    const permIds = rules
+      .filter((r) => r.scope_type === validScope)
+      .map((r) => r.scope_id ?? "")
+      .filter(Boolean);
+    setWfForm({
+      name: wf.name,
+      description: wf.description,
+      category: wf.category,
+      sortOrder: wf.sort_order,
+      enabled: wf.enabled,
+      visibleTo: wf.visible_to,
+      categoryIds: wf.categoryIds ?? [],
+      permScope: validScope,
+      permIds,
+    });
     setWfError(""); setShowWfModal(true);
   }
 
   async function handleSaveWf() {
     setWfError("");
     if (!wfForm.name.trim()) { setWfError("请填写工作流名称"); return; }
+    // custom 模式下必须至少选一项
+    if (wfForm.visibleTo === "custom" && wfForm.permIds.length === 0) {
+      setWfError("请至少选择一个可见对象");
+      return;
+    }
     setSaving(true);
     try {
-      const body = { name: wfForm.name, description: wfForm.description, category: wfForm.category, sortOrder: wfForm.sortOrder, enabled: wfForm.enabled, visibleTo: wfForm.visibleTo, categoryIds: wfForm.categoryIds };
+      // 生成 permissions 数组（custom 模式才有）
+      const permissions = wfForm.visibleTo === "custom"
+        ? wfForm.permIds.map((scopeId) => ({ scope_type: wfForm.permScope, scope_id: scopeId }))
+        : [];
+      const body = {
+        name: wfForm.name,
+        description: wfForm.description,
+        category: wfForm.category,
+        sortOrder: wfForm.sortOrder,
+        enabled: wfForm.enabled,
+        visibleTo: wfForm.visibleTo,
+        categoryIds: wfForm.categoryIds,
+        permissions,
+      };
       const res = editingWf
         ? await fetch(`/api/admin/workflows/${editingWf.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
         : await fetch("/api/admin/workflows", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -335,7 +394,9 @@ export default function WorkflowsAdminPage() {
             <option value="all">全部用户</option>
             <option value="org_only">仅组织用户</option>
             <option value="personal_only">仅个人用户</option>
-            <option value="custom">指定组织可见</option>
+            <option value="custom:org">指定组织可见</option>
+            <option value="custom:dept">指定部门可见</option>
+            <option value="custom:team">指定小组可见</option>
           </select>
           <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfStatusFilter} onChange={e => setWfStatusFilter(e.target.value)}>
             <option value="">全部状态</option>
@@ -360,7 +421,12 @@ export default function WorkflowsAdminPage() {
             if (wfVisibleFilter === "all" && wf.visible_to !== "all") return false;
             if (wfVisibleFilter === "org_only" && wf.visible_to !== "org_only") return false;
             if (wfVisibleFilter === "personal_only" && wf.visible_to !== "personal_only") return false;
-            if (wfVisibleFilter === "custom" && ["all", "org_only", "personal_only"].includes(wf.visible_to)) return false;
+            if (wfVisibleFilter.startsWith("custom:")) {
+              if (wf.visible_to !== "custom") return false;
+              const targetScope = wfVisibleFilter.split(":")[1];
+              const firstType = wf.permissions?.[0]?.scope_type;
+              if (firstType !== targetScope) return false;
+            }
             return true;
           });
           return filteredWorkflows.length === 0 ? (
@@ -395,7 +461,17 @@ export default function WorkflowsAdminPage() {
                         })}
                         {wf.visible_to === "org_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>}
                         {wf.visible_to === "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>}
-                        {wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
+                        {wf.visible_to === "custom" && (() => {
+                          const rules = wf.permissions ?? [];
+                          const firstType = rules[0]?.scope_type;
+                          const label = firstType === "dept" ? "指定部门可见"
+                                      : firstType === "team" ? "指定小组可见"
+                                      : "指定组织可见";
+                          const count = rules.length;
+                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`${label}（共 ${count} 项）`}>{label}</span>;
+                        })()}
+                        {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
+                        {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
                       </div>
                       {wf.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{wf.description}</p>}
@@ -604,19 +680,29 @@ export default function WorkflowsAdminPage() {
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
                 <select
                   className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
-                  value={["all", "org_only", "personal_only"].includes(wfForm.visibleTo) ? wfForm.visibleTo : "custom"}
+                  value={wfForm.visibleTo === "custom" ? `custom:${wfForm.permScope}` : wfForm.visibleTo}
                   onChange={(e) => {
                     const v = e.target.value;
-                    setWfForm({ ...wfForm, visibleTo: v === "custom" ? "" : v });
                     setTenantSearch("");
+                    if (v.startsWith("custom:")) {
+                      const scope = v.split(":")[1] as PermScope;
+                      // 切换 scope 类型时清空已选项，避免类型混淆
+                      setWfForm({ ...wfForm, visibleTo: "custom", permScope: scope, permIds: [] });
+                    } else {
+                      setWfForm({ ...wfForm, visibleTo: v, permIds: [] });
+                    }
                   }}
                 >
                   <option value="all">全部用户可见</option>
                   <option value="org_only">仅组织用户可见</option>
                   <option value="personal_only">仅个人用户可见</option>
-                  <option value="custom">指定组织可见</option>
+                  <option value="custom:org">指定组织可见</option>
+                  <option value="custom:dept">指定部门可见</option>
+                  <option value="custom:team">指定小组可见</option>
                 </select>
-                {!["all", "org_only", "personal_only"].includes(wfForm.visibleTo) && (
+
+                {/* custom 模式下根据 permScope 展示对应 picker */}
+                {wfForm.visibleTo === "custom" && wfForm.permScope === "org" && (
                   <div className="flex flex-col gap-1.5">
                     <input
                       className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
@@ -624,15 +710,14 @@ export default function WorkflowsAdminPage() {
                       value={tenantSearch}
                       onChange={(e) => setTenantSearch(e.target.value)}
                     />
-                    <div className="border border-gray-200 rounded-[12px] p-3 max-h-40 overflow-y-auto space-y-1.5">
+                    <div className="border border-gray-200 rounded-[12px] p-3 max-h-44 overflow-y-auto space-y-1.5">
                       {tenants
                         .filter((t) => {
                           const q = tenantSearch.toLowerCase();
                           return !q || t.name.toLowerCase().includes(q) || t.code.toLowerCase().includes(q);
                         })
                         .map((t) => {
-                          const selectedCodes = wfForm.visibleTo ? wfForm.visibleTo.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : [];
-                          const checked = selectedCodes.includes(t.code.toUpperCase());
+                          const checked = wfForm.permIds.includes(t.code);
                           return (
                             <label key={t.id} className="flex items-center gap-2 cursor-pointer">
                               <input
@@ -640,9 +725,10 @@ export default function WorkflowsAdminPage() {
                                 className="accent-[#002FA7] w-4 h-4"
                                 checked={checked}
                                 onChange={() => {
-                                  const codes = wfForm.visibleTo ? wfForm.visibleTo.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean) : [];
-                                  const next = checked ? codes.filter((c) => c !== t.code.toUpperCase()) : [...codes, t.code.toUpperCase()];
-                                  setWfForm({ ...wfForm, visibleTo: next.join(",") });
+                                  const next = checked
+                                    ? wfForm.permIds.filter((c) => c !== t.code)
+                                    : [...wfForm.permIds, t.code];
+                                  setWfForm({ ...wfForm, permIds: next });
                                 }}
                               />
                               <span className="text-sm text-gray-700">{t.name}</span>
@@ -653,11 +739,146 @@ export default function WorkflowsAdminPage() {
                         })}
                       {tenants.length === 0 && <p className="text-xs text-gray-400 text-center py-2">暂无组织</p>}
                     </div>
-                    {wfForm.visibleTo && (
-                      <p className="text-xs text-gray-400">
-                        已选：{wfForm.visibleTo.split(",").filter(Boolean).join("、")}
-                      </p>
-                    )}
+                    <p className="text-xs text-gray-400">已选 {wfForm.permIds.length} 个组织</p>
+                  </div>
+                )}
+
+                {wfForm.visibleTo === "custom" && wfForm.permScope === "dept" && (
+                  <div className="flex flex-col gap-1.5">
+                    <input
+                      className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
+                      placeholder="搜索组织或部门名称…"
+                      value={tenantSearch}
+                      onChange={(e) => setTenantSearch(e.target.value)}
+                    />
+                    <div className="border border-gray-200 rounded-[12px] p-3 max-h-60 overflow-y-auto">
+                      {(() => {
+                        const q = tenantSearch.toLowerCase();
+                        // 按组织分组
+                        const groups = tenants
+                          .map((t) => {
+                            const depts = allDepts.filter((d) => d.tenant_code === t.code);
+                            const filteredDepts = q
+                              ? depts.filter((d) => d.name.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.code.toLowerCase().includes(q))
+                              : depts;
+                            return { tenant: t, depts: filteredDepts };
+                          })
+                          .filter((g) => g.depts.length > 0);
+                        if (groups.length === 0) {
+                          return <p className="text-xs text-gray-400 text-center py-2">暂无匹配部门</p>;
+                        }
+                        return groups.map((g) => (
+                          <div key={g.tenant.id} className="mb-3 last:mb-0">
+                            <div className="flex items-center gap-2 mb-1.5 pb-1 border-b border-gray-100">
+                              <Building2 size={13} className="text-[#002FA7] shrink-0" />
+                              <span className="text-[12px] font-semibold text-gray-700">{g.tenant.name}</span>
+                              <span className="text-[11px] text-gray-400 font-mono">{g.tenant.code}</span>
+                            </div>
+                            <div className="space-y-1 pl-1">
+                              {g.depts.map((d) => {
+                                const checked = wfForm.permIds.includes(d.id);
+                                return (
+                                  <label key={d.id} className="flex items-center gap-2 cursor-pointer pl-4 py-0.5">
+                                    <input
+                                      type="checkbox"
+                                      className="accent-[#002FA7] w-4 h-4"
+                                      checked={checked}
+                                      onChange={() => {
+                                        const next = checked
+                                          ? wfForm.permIds.filter((x) => x !== d.id)
+                                          : [...wfForm.permIds, d.id];
+                                        setWfForm({ ...wfForm, permIds: next });
+                                      }}
+                                    />
+                                    <span className="text-sm text-gray-700">{d.name}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                    <p className="text-xs text-gray-400">已选 {wfForm.permIds.length} 个部门</p>
+                  </div>
+                )}
+
+                {wfForm.visibleTo === "custom" && wfForm.permScope === "team" && (
+                  <div className="flex flex-col gap-1.5">
+                    <input
+                      className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
+                      placeholder="搜索组织/部门/小组名称…"
+                      value={tenantSearch}
+                      onChange={(e) => setTenantSearch(e.target.value)}
+                    />
+                    <div className="border border-gray-200 rounded-[12px] p-3 max-h-72 overflow-y-auto">
+                      {(() => {
+                        const q = tenantSearch.toLowerCase();
+                        const groups = tenants
+                          .map((t) => {
+                            const depts = allDepts.filter((d) => d.tenant_code === t.code);
+                            const deptWithTeams = depts
+                              .map((d) => {
+                                const teams = allTeams.filter((tm) => tm.dept_id === d.id);
+                                const filteredTeams = q
+                                  ? teams.filter((tm) =>
+                                      tm.name.toLowerCase().includes(q) ||
+                                      d.name.toLowerCase().includes(q) ||
+                                      t.name.toLowerCase().includes(q) ||
+                                      t.code.toLowerCase().includes(q)
+                                    )
+                                  : teams;
+                                return { dept: d, teams: filteredTeams };
+                              })
+                              .filter((dt) => dt.teams.length > 0);
+                            return { tenant: t, deptWithTeams };
+                          })
+                          .filter((g) => g.deptWithTeams.length > 0);
+                        if (groups.length === 0) {
+                          return <p className="text-xs text-gray-400 text-center py-2">暂无匹配小组</p>;
+                        }
+                        return groups.map((g) => (
+                          <div key={g.tenant.id} className="mb-3 last:mb-0">
+                            <div className="flex items-center gap-2 mb-1.5 pb-1 border-b border-gray-100">
+                              <Building2 size={13} className="text-[#002FA7] shrink-0" />
+                              <span className="text-[12px] font-semibold text-gray-700">{g.tenant.name}</span>
+                              <span className="text-[11px] text-gray-400 font-mono">{g.tenant.code}</span>
+                            </div>
+                            <div className="space-y-2 pl-1">
+                              {g.deptWithTeams.map(({ dept, teams }) => (
+                                <div key={dept.id}>
+                                  <div className="flex items-center gap-1.5 pl-3 py-0.5">
+                                    <span className="text-[11px] font-medium text-gray-500">{dept.name}</span>
+                                  </div>
+                                  <div className="space-y-0.5">
+                                    {teams.map((tm) => {
+                                      const checked = wfForm.permIds.includes(tm.id);
+                                      return (
+                                        <label key={tm.id} className="flex items-center gap-2 cursor-pointer pl-8 py-0.5">
+                                          <input
+                                            type="checkbox"
+                                            className="accent-[#002FA7] w-4 h-4"
+                                            checked={checked}
+                                            onChange={() => {
+                                              const next = checked
+                                                ? wfForm.permIds.filter((x) => x !== tm.id)
+                                                : [...wfForm.permIds, tm.id];
+                                              setWfForm({ ...wfForm, permIds: next });
+                                            }}
+                                          />
+                                          <span className="text-sm text-gray-700">{tm.name}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                    <p className="text-xs text-gray-400">已选 {wfForm.permIds.length} 个小组</p>
                   </div>
                 )}
               </div>

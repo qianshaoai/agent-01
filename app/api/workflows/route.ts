@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
@@ -39,18 +41,72 @@ export async function GET(req: NextRequest) {
 
   const tenantCode = user.tenantCode ?? "";
   const isPersonal = user.isPersonal ?? !tenantCode;
+  const workflows = data ?? [];
+
+  // 需要查权限表的工作流 ID（visible_to === 'custom' 或旧的逗号分隔格式）
+  const customIds = workflows
+    .filter((wf) => {
+      if (!wf.visible_to) return false;
+      return wf.visible_to === "custom" || !["all", "org_only", "personal_only"].includes(wf.visible_to);
+    })
+    .map((wf) => wf.id);
+
+  // 取当前用户的 dept_id / team_id（可能为空）
+  let userDeptId: string | null = null;
+  let userTeamId: string | null = null;
+  if (!isPersonal) {
+    const { data: userRow } = await db
+      .from("users")
+      .select("dept_id, team_id")
+      .eq("id", user.userId)
+      .single();
+    userDeptId = userRow?.dept_id ?? null;
+    userTeamId = userRow?.team_id ?? null;
+  }
+
+  // 批量查询这些 custom 工作流的权限规则
+  const permMap = new Map<string, { scope_type: string; scope_id: string | null }[]>();
+  if (customIds.length > 0) {
+    const { data: perms } = await db
+      .from("resource_permissions")
+      .select("resource_id, scope_type, scope_id")
+      .eq("resource_type", "workflow")
+      .in("resource_id", customIds);
+    for (const p of (perms ?? []) as { resource_id: string; scope_type: string; scope_id: string | null }[]) {
+      const arr = permMap.get(p.resource_id) ?? [];
+      arr.push({ scope_type: p.scope_type, scope_id: p.scope_id });
+      permMap.set(p.resource_id, arr);
+    }
+  }
 
   // 权限过滤
-  const visible = (data ?? []).filter((wf) => {
+  const visible = workflows.filter((wf) => {
     if (wf.visible_to === "all") return true;
     if (wf.visible_to === "org_only") return !isPersonal;
     if (wf.visible_to === "personal_only") return isPersonal;
-    // 指定组织：逗号分隔的组织码列表
+
+    // custom 模式：查权限规则
+    if (wf.visible_to === "custom") {
+      const rules = permMap.get(wf.id) ?? [];
+      if (rules.length === 0) return false;  // custom 但没规则 → 不可见
+      return rules.some((r) => {
+        switch (r.scope_type) {
+          case "all": return true;
+          case "org":  return !!tenantCode && r.scope_id === tenantCode;
+          case "dept": return !!userDeptId && r.scope_id === userDeptId;
+          case "team": return !!userTeamId && r.scope_id === userTeamId;
+          case "user_type": return r.scope_id === (isPersonal ? "personal" : "organization");
+          case "user": return r.scope_id === user.userId;
+          default: return false;
+        }
+      });
+    }
+
+    // 兼容旧数据：逗号分隔的组织码（未迁移到 custom + resource_permissions 的情况）
     const allowed = wf.visible_to.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean);
     return allowed.includes(tenantCode.toUpperCase());
   });
 
-  // 只返回有启用步骤的工作流，步骤按 step_order 排序
   const result = visible.map((wf) => ({
     ...wf,
     workflow_steps: (wf.workflow_steps ?? [])
