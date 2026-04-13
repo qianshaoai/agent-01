@@ -113,10 +113,12 @@ export async function GET(req: NextRequest) {
     { id: string; real_name: string | null; username: string | null; dept_id: string | null; team_id: string | null; dept_name: string | null; team_name: string | null }
   > = {};
   if (phones.length > 0) {
+    // 只关联"有效"用户（已删除用户不再展示用户信息，但历史调用数据仍保留聚合）
     const { data: userRows } = await db
       .from("users")
       .select("id, phone, tenant_code, real_name, username, dept_id, team_id, departments(name), teams(name)")
-      .in("phone", phones);
+      .in("phone", phones)
+      .neq("status", "deleted");
     for (const u of ((userRows ?? []) as unknown[]) as Array<{
       id: string;
       phone: string;

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signToken, buildAdminSetCookieHeader, AdminRole } from "@/lib/auth";
+import { checkLoginRate, recordLoginFail, clearLoginFail } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   const { username, password } = await req.json();
@@ -10,6 +11,16 @@ export async function POST(req: NextRequest) {
   }
 
   const identifier = username.trim();
+
+  // 登录限流：15 分钟内同一账号连续 5 次失败后锁定 15 分钟
+  const rateKey = `admin:${identifier.toLowerCase()}`;
+  const rate = checkLoginRate(rateKey);
+  if (rate.locked) {
+    return NextResponse.json(
+      { error: `登录失败次数过多，请 ${Math.ceil((rate.retryAfterSec ?? 0) / 60)} 分钟后再试` },
+      { status: 429 }
+    );
+  }
 
   // ── 方式 1：admins 表（系统内置管理员，例如默认 admin 账号）──────
   const { data: admin } = await db
@@ -20,7 +31,11 @@ export async function POST(req: NextRequest) {
 
   if (admin) {
     const ok = await bcrypt.compare(password, admin.pwd_hash);
-    if (!ok) return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
+    if (!ok) {
+      recordLoginFail(rateKey);
+      return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
+    }
+    clearLoginFail(rateKey);
 
     const token = await signToken({
       type: "admin",
@@ -43,6 +58,7 @@ export async function POST(req: NextRequest) {
     .or(`phone.eq.${identifier},username.eq.${identifier}`);
 
   if (!userMatches || userMatches.length === 0) {
+    recordLoginFail(rateKey);
     return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
   }
 
@@ -55,6 +71,7 @@ export async function POST(req: NextRequest) {
     }
   }
   if (!matchedUser) {
+    recordLoginFail(rateKey);
     return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
   }
 
@@ -74,6 +91,9 @@ export async function POST(req: NextRequest) {
   if (!["super_admin", "system_admin", "org_admin"].includes(role)) {
     return NextResponse.json({ error: "该账号无后台访问权限" }, { status: 403 });
   }
+
+  // 所有校验通过，清空失败记录
+  clearLoginFail(rateKey);
 
   const token = await signToken({
     type: "admin",

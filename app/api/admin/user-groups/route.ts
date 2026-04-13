@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAdmin } from "@/lib/auth";
+import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function GET() {
-  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
   const { data, error } = await db
     .from("user_groups")
@@ -25,7 +25,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
   const { name, description, tenantCode } = await req.json();
   if (!name?.trim()) return NextResponse.json({ error: "分组名称不能为空" }, { status: 400 });

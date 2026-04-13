@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAdmin } from "@/lib/auth";
+import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function GET() {
-  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
   const { data } = await db
     .from("wf_categories")
@@ -14,7 +14,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
   const { name } = await req.json();
   if (!name?.trim()) return NextResponse.json({ error: "分类名称不能为空" }, { status: 400 });

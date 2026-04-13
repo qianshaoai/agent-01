@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const categoryId = searchParams.get("categoryId");
 
+  // 硬上限 500，防止组织规模过大时前台一次拉取过量数据
   let query = db
     .from("workflows")
     .select(`
@@ -21,7 +22,8 @@ export async function GET(req: NextRequest) {
       )
     `)
     .eq("enabled", true)
-    .order("sort_order", { ascending: true });
+    .order("sort_order", { ascending: true })
+    .limit(500);
 
   // 如果指定了分类，先查出属于该分类的工作流 ID
   if (categoryId && categoryId !== "__all__") {

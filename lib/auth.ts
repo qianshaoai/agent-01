@@ -2,8 +2,19 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
 
+// JWT_SECRET 必须在环境变量中配置，缺失时立即报错防止使用不安全的默认值
+const JWT_SECRET_RAW = process.env.JWT_SECRET;
+if (!JWT_SECRET_RAW || JWT_SECRET_RAW.length < 32) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_SECRET 环境变量未配置或长度不足 32 字符，拒绝启动");
+  } else {
+    console.warn("[auth] 警告：JWT_SECRET 未配置或长度不足 32 字符，仅 dev 环境使用临时密钥");
+  }
+}
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? "fallback-secret-change-in-production-000"
+  JWT_SECRET_RAW && JWT_SECRET_RAW.length >= 32
+    ? JWT_SECRET_RAW
+    : "dev-only-fallback-please-set-JWT_SECRET-in-env-" + "x".repeat(20)
 );
 
 const COOKIE_NAME = "ai_portal_token";

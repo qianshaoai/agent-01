@@ -31,9 +31,10 @@ export async function GET(req: NextRequest) {
     return db.from("resource_permissions").select("resource_id").eq("resource_type", "agent").or(orParts.join(","));
   };
 
+  // 硬上限 1000 — 防止组织规模过大时一次拉取过量数据
   const [accessibleQuery, categoriesQuery, tcQuery] = await Promise.all([
     user.isPersonal
-      ? db.from("agents").select("id").eq("enabled", true)
+      ? db.from("agents").select("id").eq("enabled", true).limit(1000)
       : buildOrgAccessQuery(),
     db.from("categories").select("id, name, icon_url").order("sort_order"),
     user.isPersonal
@@ -97,7 +98,8 @@ export async function GET(req: NextRequest) {
       .from("agents")
       .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id")
       .in("id", accessibleIds)
-      .eq("enabled", true);
+      .eq("enabled", true)
+      .limit(1000);
     const enriched = await enrichWithCategories(agents ?? []);
     return NextResponse.json({ categories: categories ?? [], agents: enriched });
   }

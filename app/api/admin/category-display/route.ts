@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentAdmin } from "@/lib/auth";
+import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 // GET /api/admin/category-display?agentId=X
 // 返回该智能体在所有分类下的展示状态
 export async function GET(req: NextRequest) {
-  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
   const { searchParams } = new URL(req.url);
   const agentId = searchParams.get("agentId");
@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
 // PATCH /api/admin/category-display
 // 设置某智能体在某分类下的手工状态
 export async function PATCH(req: NextRequest) {
-  if (!(await getCurrentAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
   const { agentId, categoryId, isManual, isHidden } = await req.json();
   if (!agentId || !categoryId) return NextResponse.json({ error: "缺少参数" }, { status: 400 });

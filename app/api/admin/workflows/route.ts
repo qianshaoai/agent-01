@@ -19,7 +19,8 @@ export async function GET() {
           id, step_order, title, description, exec_type, agent_id, button_text, enabled
         )
       `)
-      .order("sort_order", { ascending: true }),
+      .order("sort_order", { ascending: true })
+      .limit(1000),
     db.from("resource_permissions")
       .select("resource_id, scope_type, scope_id")
       .eq("resource_type", "workflow"),

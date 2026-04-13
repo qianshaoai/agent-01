@@ -38,7 +38,6 @@ export async function POST(req: NextRequest) {
     const bytes = await audioFile.arrayBuffer();
     const buffer = Buffer.from(bytes);
     const bucket = process.env.SUPABASE_STORAGE_BUCKET ?? "uploads";
-    console.log("[speech submit] mimeType:", audioFile.type, "size:", audioFile.size);
     const { format, codec, rate } = getAudioFormat(audioFile.type || "audio/webm");
     const audioPath = `speech-temp/${uuidv4()}.${format}`;
 
@@ -130,13 +129,10 @@ export async function GET(req: NextRequest) {
     });
 
     if (!queryRes.ok) {
-      console.log("[speech query] non-200:", queryRes.status, await queryRes.text());
       return NextResponse.json({ done: false });
     }
 
     const result = await queryRes.json();
-
-    console.log("[speech query] audioType:", req.nextUrl.searchParams.get("audioPath"), "response:", JSON.stringify(result));
 
     if (result?.result?.text !== undefined) {
       // 识别完成，清理临时音频文件

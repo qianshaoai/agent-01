@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signToken, buildSetCookieHeader } from "@/lib/auth";
+import { checkLoginRate, recordLoginFail, clearLoginFail } from "@/lib/rate-limit";
 
 function statusError(status: string) {
   if (status === "cancelled") return "该账号已注销，无法登录";
@@ -20,6 +21,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "请填写账号和密码" }, { status: 400 });
     }
 
+    // 登录限流：15 分钟内同一账号连续 5 次失败后锁定 15 分钟
+    const rateKey = `user:${identifier.toLowerCase()}`;
+    const rate = checkLoginRate(rateKey);
+    if (rate.locked) {
+      return NextResponse.json(
+        { error: `登录失败次数过多，请 ${Math.ceil((rate.retryAfterSec ?? 0) / 60)} 分钟后再试` },
+        { status: 429 }
+      );
+    }
+
     // ── 全局查找用户（用户名唯一；手机号可能跨租户重复）────────
     const { data: matches } = await db
       .from("users")
@@ -27,6 +38,7 @@ export async function POST(req: NextRequest) {
       .or(`phone.eq.${identifier},username.eq.${identifier}`);
 
     if (!matches || matches.length === 0) {
+      recordLoginFail(rateKey);
       return NextResponse.json({ error: "账号不存在，请先注册" }, { status: 401 });
     }
 
@@ -46,8 +58,11 @@ export async function POST(req: NextRequest) {
 
     const ok = await bcrypt.compare(password, user.pwd_hash);
     if (!ok) {
+      recordLoginFail(rateKey);
       return NextResponse.json({ error: "密码错误" }, { status: 401 });
     }
+    // 登录成功，清空该 key 的失败记录
+    clearLoginFail(rateKey);
 
     // 若是组织用户，校验组织是否仍有效
     if (user.tenant_code !== "PERSONAL") {
