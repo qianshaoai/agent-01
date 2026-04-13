@@ -335,7 +335,7 @@ export default function WorkflowsAdminPage() {
             <option value="all">全部用户</option>
             <option value="org_only">仅组织用户</option>
             <option value="personal_only">仅个人用户</option>
-            <option value="custom">指定组织</option>
+            <option value="custom">指定组织可见</option>
           </select>
           <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfStatusFilter} onChange={e => setWfStatusFilter(e.target.value)}>
             <option value="">全部状态</option>
@@ -395,7 +395,7 @@ export default function WorkflowsAdminPage() {
                         })}
                         {wf.visible_to === "org_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>}
                         {wf.visible_to === "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>}
-                        {wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织：${wf.visible_to}`}>指定组织</span>}
+                        {wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
                       </div>
                       {wf.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{wf.description}</p>}
@@ -614,7 +614,7 @@ export default function WorkflowsAdminPage() {
                   <option value="all">全部用户可见</option>
                   <option value="org_only">仅组织用户可见</option>
                   <option value="personal_only">仅个人用户可见</option>
-                  <option value="custom">指定组织</option>
+                  <option value="custom">指定组织可见</option>
                 </select>
                 {!["all", "org_only", "personal_only"].includes(wfForm.visibleTo) && (
                   <div className="flex flex-col gap-1.5">
