@@ -127,6 +127,7 @@ export default function HomePage() {
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [notices, setNotices] = useState<NoticeItem[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
+  const [hasAnyWorkflow, setHasAnyWorkflow] = useState(false);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
   const [workflowCollapsed, setWorkflowCollapsed] = useState<boolean>(false);
   useEffect(() => {
@@ -227,6 +228,7 @@ export default function HomePage() {
 
         const wfs: WorkflowItem[] = Array.isArray(workflowsData) ? workflowsData : [];
         setWorkflows(wfs);
+        setHasAnyWorkflow(wfs.length > 0);
         setActiveWorkflowId(wfs.length > 0 ? wfs[0].id : null);
         setUserAgents(Array.isArray(userAgentsData) ? userAgentsData : []);
       } catch {
@@ -593,7 +595,7 @@ export default function HomePage() {
           )}
 
           {/* ── 工作流引导模块（有工作流数据、或正在按分类过滤时才显示） */}
-          {!loading && (workflows.length > 0 || activeCategory !== "__all__") && (
+          {!loading && hasAnyWorkflow && (
             <div className="mb-6 bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
               {/* 标题栏（始终显示，含折叠按钮） */}
               <button
