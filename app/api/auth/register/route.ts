@@ -65,7 +65,8 @@ export async function POST(req: NextRequest) {
         .from("users")
         .select("id", { count: "exact", head: true })
         .eq("phone", normalizedPhone)
-        .eq("tenant_code", normalizedCode);
+        .eq("tenant_code", normalizedCode)
+        .in("status", ["active", "disabled"]);
       if (phoneCount && phoneCount > 0) {
         return NextResponse.json({ error: "该手机号在此组织下已注册" }, { status: 409 });
       }
@@ -74,7 +75,8 @@ export async function POST(req: NextRequest) {
         .from("users")
         .select("id", { count: "exact", head: true })
         .eq("phone", normalizedPhone)
-        .eq("tenant_code", "PERSONAL");
+        .eq("tenant_code", "PERSONAL")
+        .in("status", ["active", "disabled"]);
       if (phoneCount && phoneCount > 0) {
         return NextResponse.json({ error: "该手机号已注册" }, { status: 409 });
       }
