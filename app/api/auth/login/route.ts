@@ -32,10 +32,15 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 全局查找用户（用户名唯一；手机号可能跨租户重复）────────
-    const { data: matches } = await db
-      .from("users")
-      .select("*")
-      .or(`phone.eq.${identifier},username.eq.${identifier}`);
+    // 注：不用 .or() 字符串语法，避免纯数字 identifier 在 PostgREST 产生类型歧义
+    const [{ data: byPhone }, { data: byUsername }] = await Promise.all([
+      db.from("users").select("*").eq("phone", identifier),
+      db.from("users").select("*").eq("username", identifier),
+    ]);
+    const matches = [
+      ...(byPhone ?? []),
+      ...(byUsername ?? []).filter((u) => !byPhone?.some((p) => p.id === u.id)),
+    ];
 
     if (!matches || matches.length === 0) {
       recordLoginFail(rateKey);
