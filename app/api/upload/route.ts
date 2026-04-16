@@ -97,7 +97,29 @@ export async function POST(req: NextRequest) {
     // 提取文本
     let extractedText = "";
     if (fileType === "txt" || fileType === "csv") {
-      extractedText = buffer.toString("utf-8").slice(0, 50000);
+      // 编码检测：BOM → UTF-8 试解 → 回退 GBK
+      let textContent: string;
+      if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
+        // UTF-8 BOM
+        textContent = buffer.subarray(3).toString("utf-8");
+      } else if ((buffer[0] === 0xFF && buffer[1] === 0xFE) || (buffer[0] === 0xFE && buffer[1] === 0xFF)) {
+        // UTF-16 BOM
+        const encoding = buffer[0] === 0xFF ? "utf-16le" : "utf-16be";
+        textContent = new TextDecoder(encoding).decode(buffer.subarray(2));
+      } else {
+        // 尝试 UTF-8，如果出现替换字符说明不是 UTF-8，回退 GBK
+        const utf8 = buffer.toString("utf-8");
+        if (utf8.includes("\uFFFD")) {
+          try {
+            textContent = new TextDecoder("gbk").decode(buffer);
+          } catch {
+            textContent = utf8;
+          }
+        } else {
+          textContent = utf8;
+        }
+      }
+      extractedText = textContent.slice(0, 50000);
     } else if (fileType === "pdf") {
       try {
         const { PDFParse } = await import("pdf-parse");

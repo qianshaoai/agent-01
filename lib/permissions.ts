@@ -37,46 +37,36 @@ export async function getVisibleResourcesForUser(userId: string): Promise<Visibi
     .eq("user_id", userId);
   const userGroupIds = (groupRows ?? []).map((g: { group_id: string }) => g.group_id);
 
-  // 3. 拉取所有 resource_permissions
-  const { data: allPerms } = await db
-    .from("resource_permissions")
-    .select("resource_type, resource_id, scope_type, scope_id");
-  const perms = allPerms ?? [];
-
-  // 4. 判断某条权限是否对该用户生效
-  function matchesUser(p: {
-    scope_type: string;
-    scope_id: string | null;
-  }): boolean {
-    switch (p.scope_type) {
-      case "all":
-        return true;
-      case "user_type":
-        return p.scope_id === ctx.user_type;
-      case "org":
-        return !!ctx.tenant_code && p.scope_id === ctx.tenant_code;
-      case "dept":
-        return !!ctx.dept_id && p.scope_id === ctx.dept_id;
-      case "team":
-        return !!ctx.team_id && p.scope_id === ctx.team_id;
-      case "user":
-        return p.scope_id === ctx.id;
-      case "group":
-        return !!p.scope_id && userGroupIds.includes(p.scope_id);
-      default:
-        return false;
-    }
+  // 3. 构建 OR 条件，只拉取和当前用户相关的权限行
+  const orConditions: string[] = ["scope_type.eq.all"];
+  orConditions.push(`and(scope_type.eq.user_type,scope_id.eq.${ctx.user_type})`);
+  orConditions.push(`and(scope_type.eq.user,scope_id.eq.${ctx.id})`);
+  if (ctx.tenant_code) {
+    orConditions.push(`and(scope_type.eq.org,scope_id.eq.${ctx.tenant_code})`);
   }
+  if (ctx.dept_id) {
+    orConditions.push(`and(scope_type.eq.dept,scope_id.eq.${ctx.dept_id})`);
+  }
+  if (ctx.team_id) {
+    orConditions.push(`and(scope_type.eq.team,scope_id.eq.${ctx.team_id})`);
+  }
+  if (userGroupIds.length > 0) {
+    orConditions.push(`and(scope_type.eq.group,scope_id.in.(${userGroupIds.join(",")}))`);
+  }
+
+  const { data: perms } = await db
+    .from("resource_permissions")
+    .select("resource_type, resource_id")
+    .or(orConditions.join(","));
 
   const visibleWorkflowIds = new Set<string>();
   const visibleAgentIds = new Set<string>();
-  for (const p of perms) {
-    if (!matchesUser(p)) continue;
+  for (const p of perms ?? []) {
     if (p.resource_type === "workflow") visibleWorkflowIds.add(p.resource_id);
     if (p.resource_type === "agent") visibleAgentIds.add(p.resource_id);
   }
 
-  // 5. 取回 workflow / agent 的显示信息
+  // 4. 取回 workflow / agent 的显示信息
   const [wfRes, agRes] = await Promise.all([
     visibleWorkflowIds.size > 0
       ? db.from("workflows").select("id, name, category").in("id", [...visibleWorkflowIds])

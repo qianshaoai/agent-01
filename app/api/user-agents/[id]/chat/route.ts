@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { streamChat, ChatMessage } from "@/lib/adapters";
+import { decrypt } from "@/lib/crypto";
 
 export async function POST(
   req: NextRequest,
@@ -48,7 +49,7 @@ export async function POST(
         const gen = streamChat(messages, {
           platform: agent.platform ?? "openai",
           apiEndpoint: agent.api_url ?? "",
-          apiKey: agent.api_key_enc ?? "",
+          apiKey: decrypt(agent.api_key_enc ?? ""),
           modelParams: (agent.model_params ?? {}) as Record<string, unknown>,
           agentCode: agent.id,
           platformConvId,

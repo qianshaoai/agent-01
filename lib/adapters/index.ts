@@ -70,7 +70,7 @@ async function* cozeStream(
   });
 
   if (!res.ok) {
-    throw new Error(`Coze API error: ${res.status} ${await res.text()}`);
+    throw new Error(`Coze API error: ${res.status} ${await res.clone().text()}`);
   }
 
   yield* parseSSEStream(res, (data, event) => {
@@ -124,7 +124,7 @@ async function* difyStream(
   );
 
   if (!res.ok) {
-    throw new Error(`Dify API error: ${res.status} ${await res.text()}`);
+    throw new Error(`Dify API error: ${res.status} ${await res.clone().text()}`);
   }
 
   yield* parseSSEStream(res, (data) => {
@@ -169,7 +169,7 @@ async function* yuanqiStream(
   );
 
   if (!res.ok) {
-    throw new Error(`Yuanqi API error: ${res.status} ${await res.text()}`);
+    throw new Error(`Yuanqi API error: ${res.status} ${await res.clone().text()}`);
   }
 
   yield* parseSSEStream(res, (data) => {
@@ -208,7 +208,7 @@ async function* openaiCompatibleStream(
   });
 
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${await res.text()}`);
+    throw new Error(`API error: ${res.status} ${await res.clone().text()}`);
   }
 
   yield* parseSSEStream(res, (data) => {
@@ -236,11 +236,15 @@ async function getQingyanToken(apiKey: string, apiSecret: string, baseUrl: strin
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_key: apiKey, api_secret: apiSecret }),
   });
-  if (!res.ok) throw new Error(`Qingyan auth error: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`Qingyan auth error: ${res.status} ${await res.clone().text()}`);
   const data = await res.json();
   if (data.status !== 0) throw new Error(`Qingyan auth failed: ${data.message}`);
 
   const { access_token, expires_in } = data.result;
+  // 清理过期条目，防止内存泄漏
+  for (const [k, v] of qingyanTokenCache) {
+    if (v.expiresAt <= Date.now()) qingyanTokenCache.delete(k);
+  }
   qingyanTokenCache.set(cacheKey, { token: access_token, expiresAt: Date.now() + expires_in * 1000 });
   return access_token;
 }
@@ -274,7 +278,7 @@ async function* qingyanStream(
     }),
   });
 
-  if (!res.ok) throw new Error(`Qingyan API error: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`Qingyan API error: ${res.status} ${await res.clone().text()}`);
 
   // Qingyan SSE returns full accumulated text each event, so we track prev length
   let prevLength = 0;
@@ -316,21 +320,25 @@ async function* parseSSEStream(
   let buffer = "";
   let currentEvent = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (line.startsWith("event:")) {
-        currentEvent = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        const data = line.slice(5).trim();
-        const text = extract(data, currentEvent);
-        if (text) yield text;
-        currentEvent = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          currentEvent = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          const data = line.slice(5).trim();
+          const text = extract(data, currentEvent);
+          if (text) yield text;
+          currentEvent = "";
+        }
       }
     }
+  } finally {
+    reader.cancel();
   }
 }

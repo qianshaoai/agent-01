@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { encrypt } from "@/lib/crypto";
 
 async function getOwnedAgent(agentId: string, userId: string) {
   const { data } = await db
@@ -35,7 +36,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.description !== undefined) updates.description = body.description;
   if (body.platform !== undefined) updates.platform = body.platform;
   if (body.apiUrl !== undefined) updates.api_url = body.apiUrl;
-  if (body.apiKey) updates.api_key_enc = body.apiKey;
+  if (body.apiKey) updates.api_key_enc = encrypt(body.apiKey);
   if (body.externalUrl !== undefined) updates.external_url = body.externalUrl;
   if (body.modelParams !== undefined) updates.model_params = body.modelParams;
 

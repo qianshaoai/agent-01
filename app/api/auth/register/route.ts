@@ -111,6 +111,17 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (error || !newUser) {
+      // 唯一约束冲突（并发注册竞态）
+      if (error?.code === "23505") {
+        const msg = error.message ?? "";
+        if (msg.includes("username")) {
+          return NextResponse.json({ error: "该用户名已被使用" }, { status: 409 });
+        }
+        if (msg.includes("phone")) {
+          return NextResponse.json({ error: "该手机号已注册" }, { status: 409 });
+        }
+        return NextResponse.json({ error: "账号已存在" }, { status: 409 });
+      }
       console.error("[register]", error);
       return NextResponse.json({ error: "注册失败，请稍后重试" }, { status: 500 });
     }

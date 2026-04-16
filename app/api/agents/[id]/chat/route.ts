@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { streamChat, ChatMessage } from "@/lib/adapters";
+import { decrypt } from "@/lib/crypto";
 
 // 上下文窗口：最多取最近 N 轮（每轮 = user + assistant）
 const MAX_CONTEXT_TURNS = 20;
@@ -138,7 +139,7 @@ export async function POST(
           const gen = streamChat(messages, {
             platform: agent.platform,
             apiEndpoint: agent.api_endpoint,
-            apiKey: agent.api_key_enc,
+            apiKey: decrypt(agent.api_key_enc),
             modelParams: (agent.model_params ?? {}) as Record<string, unknown>,
             agentCode: agent.agent_code,
             platformConvId,

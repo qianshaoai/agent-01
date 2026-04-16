@@ -46,9 +46,11 @@ export async function getActiveAdmin(): Promise<AdminPayload | null> {
     .single();
 
   if (dbAdmin) {
+    const VALID_ADMIN_ROLES: AdminRole[] = ["super_admin", "system_admin", "org_admin"];
+    if (!dbAdmin.role || !VALID_ADMIN_ROLES.includes(dbAdmin.role as AdminRole)) return null;
     return {
       ...payload,
-      role: (dbAdmin.role as AdminRole) ?? "super_admin",
+      role: dbAdmin.role as AdminRole,
       tenantCode: dbAdmin.tenant_code ?? null,
     };
   }

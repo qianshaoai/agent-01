@@ -138,7 +138,7 @@ export async function GET(req: NextRequest) {
       // 识别完成，清理临时音频文件
       if (audioPath) {
         const bucket = process.env.SUPABASE_STORAGE_BUCKET ?? "uploads";
-        db.storage.from(bucket).remove([audioPath]).catch(() => {});
+        db.storage.from(bucket).remove([audioPath]).catch((err) => console.error("[speech] failed to delete temp audio:", audioPath, err));
       }
       return NextResponse.json({ done: true, text: result.result.text ?? "" });
     }

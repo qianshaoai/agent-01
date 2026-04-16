@@ -1,5 +1,14 @@
 "use client";
-import { useState, useRef, useEffect, use } from "react";
+import { useState, useRef, useEffect, use, useMemo } from "react";
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -450,7 +459,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
                   <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
                     {msg.role === "assistant" ? (
-                      <div className="chat-content" dangerouslySetInnerHTML={{ __html: msg.content.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br/>") || (streaming ? '<span class="animate-pulse">▌</span>' : "") }} />
+                      <div className="chat-content" dangerouslySetInnerHTML={{ __html: escapeHtml(msg.content).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br/>") || (streaming ? '<span class="animate-pulse">▌</span>' : "") }} />
                     ) : (
                       <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
                     )}

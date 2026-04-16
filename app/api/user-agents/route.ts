@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { encrypt } from "@/lib/crypto";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
     agent_type: agentType ?? "chat",
     platform: platform ?? "openai",
     api_url: apiUrl ?? "",
-    api_key_enc: apiKey ?? "",
+    api_key_enc: apiKey ? encrypt(apiKey) : "",
     external_url: externalUrl ?? "",
     model_params: modelParams ?? {},
   }).select("id, name, description, agent_type, platform, api_url, external_url, model_params, enabled, created_at").single();

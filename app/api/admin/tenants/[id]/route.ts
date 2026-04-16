@@ -14,8 +14,20 @@ export async function PATCH(
   const updates: Record<string, unknown> = {};
 
   if (body.name !== undefined) updates.name = body.name;
-  if (body.quota !== undefined) updates.quota = Number(body.quota);
-  if (body.expiresAt !== undefined) updates.expires_at = body.expiresAt;
+  if (body.quota !== undefined) {
+    const q = Number(body.quota);
+    if (isNaN(q) || !Number.isInteger(q) || q < 0 || q > 10_000_000) {
+      return NextResponse.json({ error: "配额必须为 0~10,000,000 的整数" }, { status: 400 });
+    }
+    updates.quota = q;
+  }
+  if (body.expiresAt !== undefined) {
+    const d = new Date(body.expiresAt);
+    if (isNaN(d.getTime())) {
+      return NextResponse.json({ error: "到期日期格式不合法" }, { status: 400 });
+    }
+    updates.expires_at = body.expiresAt;
+  }
   if (body.enabled !== undefined) updates.enabled = body.enabled;
   if (body.initialPwd) {
     updates.pwd_hash = await bcrypt.hash(body.initialPwd, 12);

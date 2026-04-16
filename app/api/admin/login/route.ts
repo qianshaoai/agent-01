@@ -92,6 +92,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "该账号无后台访问权限" }, { status: 403 });
   }
 
+  // org_admin 需要校验租户是否启用/过期
+  if (role === "org_admin" && matchedUser.tenant_code) {
+    const { data: tenant } = await db
+      .from("tenants")
+      .select("enabled, expires_at")
+      .eq("code", matchedUser.tenant_code)
+      .single();
+    if (!tenant || !tenant.enabled) {
+      return NextResponse.json({ error: "所属组织已被禁用，无法登录" }, { status: 403 });
+    }
+    if (tenant.expires_at && new Date(tenant.expires_at) < new Date()) {
+      return NextResponse.json({ error: "所属组织已过期，无法登录" }, { status: 403 });
+    }
+  }
+
   // 所有校验通过，清空失败记录
   clearLoginFail(rateKey);
 

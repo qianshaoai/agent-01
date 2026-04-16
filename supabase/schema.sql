@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS agents (
 
 -- ── 企业↔智能体分配 ────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tenant_agents (
-  tenant_code TEXT NOT NULL,
+  tenant_code TEXT NOT NULL REFERENCES tenants(code) ON DELETE CASCADE,
   agent_id    UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   PRIMARY KEY (tenant_code, agent_id)
 );
@@ -112,8 +112,11 @@ CREATE TABLE IF NOT EXISTS logs (
   error_msg   TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS logs_created_idx ON logs (created_at DESC);
-CREATE INDEX IF NOT EXISTS logs_tenant_idx  ON logs (tenant_code, created_at DESC);
+CREATE INDEX IF NOT EXISTS logs_created_idx    ON logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS logs_tenant_idx     ON logs (tenant_code, created_at DESC);
+CREATE INDEX IF NOT EXISTS logs_agent_code_idx ON logs (agent_code);
+CREATE INDEX IF NOT EXISTS logs_user_phone_idx ON logs (user_phone);
+CREATE INDEX IF NOT EXISTS logs_action_idx     ON logs (action);
 
 -- ── 上传文件表 ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS files (

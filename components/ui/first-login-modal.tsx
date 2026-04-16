@@ -19,7 +19,7 @@ export function FirstLoginModal({ onClose }: Props) {
     setError("");
     if (!form.oldPwd || !form.newPwd || !form.confirmPwd) { setError("请填写所有字段"); return; }
     if (form.newPwd !== form.confirmPwd) { setError("两次密码不一致"); return; }
-    if (form.newPwd.length < 6) { setError("新密码至少 6 位"); return; }
+    if (form.newPwd.length < 8) { setError("新密码至少 8 位"); return; }
     setLoading(true);
     try {
       const res = await fetch("/api/auth/change-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ oldPassword: form.oldPwd, newPassword: form.newPwd }) });
@@ -52,7 +52,7 @@ export function FirstLoginModal({ onClose }: Props) {
             </div>
             <form onSubmit={handleSubmit} className="space-y-4">
               <Input label="当前密码（初始密码）" type="password" placeholder="输入初始密码" value={form.oldPwd} onChange={(e) => setForm({ ...form, oldPwd: e.target.value })} />
-              <Input label="新密码" type="password" placeholder="至少 6 位" value={form.newPwd} onChange={(e) => setForm({ ...form, newPwd: e.target.value })} />
+              <Input label="新密码" type="password" placeholder="至少 8 位" value={form.newPwd} onChange={(e) => setForm({ ...form, newPwd: e.target.value })} />
               <Input label="确认新密码" type="password" placeholder="再次输入新密码" value={form.confirmPwd} onChange={(e) => setForm({ ...form, confirmPwd: e.target.value })} />
               {error && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{error}</div>}
               <Button type="submit" size="lg" className="w-full" loading={loading}>确认修改</Button>

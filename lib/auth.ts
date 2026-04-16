@@ -130,22 +130,24 @@ export async function getPayloadFromRequest(
 
 // ─── Set/clear cookie helpers ────────────────────────────────────────────────
 
+const secureCookie = process.env.NODE_ENV === "production" ? "; Secure" : "";
+
 export function buildSetCookieHeader(token: string): string {
   const maxAge = 30 * 24 * 60 * 60;
-  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookie}`;
 }
 
 export function buildClearCookieHeader(): string {
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie}`;
 }
 
 export function buildAdminSetCookieHeader(token: string): string {
   const maxAge = 30 * 24 * 60 * 60;
-  return `${ADMIN_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  return `${ADMIN_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookie}`;
 }
 
 export function buildAdminClearCookieHeader(): string {
-  return `${ADMIN_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  return `${ADMIN_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookie}`;
 }
 
 export { COOKIE_NAME, ADMIN_COOKIE_NAME };

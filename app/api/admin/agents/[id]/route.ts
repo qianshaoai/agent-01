@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { encrypt } from "@/lib/crypto";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ export async function PATCH(
   if (body.agentType !== undefined) updates.agent_type = body.agentType;
   if (body.externalUrl !== undefined) updates.external_url = body.externalUrl;
   if (body.apiEndpoint !== undefined) updates.api_endpoint = body.apiEndpoint;
-  if (body.apiKey) updates.api_key_enc = body.apiKey;
+  if (body.apiKey) updates.api_key_enc = encrypt(body.apiKey);
   if (body.modelParams !== undefined) updates.model_params = body.modelParams;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
 

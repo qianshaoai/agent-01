@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { encrypt } from "@/lib/crypto";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +87,7 @@ export async function POST(req: NextRequest) {
       agent_type: agentType ?? "chat",
       external_url: externalUrl ?? "",
       api_endpoint: apiEndpoint ?? "",
-      api_key_enc: apiKey ?? "",
+      api_key_enc: apiKey ? encrypt(apiKey) : "",
       model_params: modelParams ?? {},
     })
     .select()
