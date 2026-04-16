@@ -54,34 +54,17 @@ export async function GET(req: NextRequest) {
     query = query.eq("tenant_code", admin.tenantCode);
   }
 
-  // 先取全部符合过滤的记录，在内存中按 角色+时间 排序后手动分页
-  // （用户量在后台管理场景下可控，通常 < 数千，这里取上限 5000 作为安全护栏）
-  const { data, count, error } = await query.limit(5000);
+  // 数据库层排序 + 分页（避免全量加载到内存）
+  // status 字母序：active < cancelled < deleted < disabled，cancelled/deleted 自然靠后
+  // role 字母序：org_admin < super_admin < system_admin < user，近似角色优先级
+  const start = (page - 1) * pageSize;
+  const { data, count, error } = await query
+    .order("status")
+    .order("role")
+    .order("created_at", { ascending: false })
+    .range(start, start + pageSize - 1);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const roleRank: Record<string, number> = {
-    super_admin: 0,
-    system_admin: 1,
-    org_admin: 2,
-    user: 3,
-  };
-  const sorted = (data ?? []).slice().sort((a, b) => {
-    // 1. 已注销（cancelled）/ 已删除（deleted）沉底
-    const aBad = (a.status === "cancelled" || a.status === "deleted") ? 1 : 0;
-    const bBad = (b.status === "cancelled" || b.status === "deleted") ? 1 : 0;
-    if (aBad !== bBad) return aBad - bBad;
-    // 2. 按角色排序
-    const ar = roleRank[a.role] ?? 99;
-    const br = roleRank[b.role] ?? 99;
-    if (ar !== br) return ar - br;
-    // 3. 时间倒序
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-  });
-
-  const total = count ?? sorted.length;
-  const start = (page - 1) * pageSize;
-  const pageData = sorted.slice(start, start + pageSize);
-
-  return NextResponse.json({ users: pageData, total, page, pageSize });
+  return NextResponse.json({ users: data ?? [], total: count ?? 0, page, pageSize });
 }

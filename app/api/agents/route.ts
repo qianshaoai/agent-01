@@ -109,13 +109,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ categories: categories ?? [], agents: [] });
   }
 
-  // 4a. 获取该分类下的工作流 ID
-  const { data: links } = await db
-    .from("workflow_categories")
-    .select("workflow_id")
-    .eq("category_id", categoryId);
+  // 4a. 并行：工作流分类关联 + 手工覆盖 + 多对多直接关联（互不依赖）
+  const [{ data: links }, { data: overrides }, { data: directLinks }] = await Promise.all([
+    db.from("workflow_categories").select("workflow_id").eq("category_id", categoryId),
+    db.from("category_agent_display").select("agent_id, is_manual, is_hidden").eq("category_id", categoryId),
+    db.from("agent_categories").select("agent_id").eq("category_id", categoryId),
+  ]);
 
   const workflowIds = (links ?? []).map((l: { workflow_id: string }) => l.workflow_id);
+  const manualIds = (overrides ?? [])
+    .filter((o: { is_manual: boolean }) => o.is_manual)
+    .map((o: { agent_id: string }) => o.agent_id);
+  const directIds = (directLinks ?? []).map((l: { agent_id: string }) => l.agent_id);
 
   // 4b. 过滤用户可见工作流，取步骤中的智能体（自动同步集合）
   let autoAgentIds: string[] = [];
@@ -150,23 +155,6 @@ export async function GET(req: NextRequest) {
       ];
     }
   }
-
-  // 4c. 读取后台手工覆盖记录
-  const { data: overrides } = await db
-    .from("category_agent_display")
-    .select("agent_id, is_manual, is_hidden")
-    .eq("category_id", categoryId);
-
-  const manualIds = (overrides ?? [])
-    .filter((o: { is_manual: boolean }) => o.is_manual)
-    .map((o: { agent_id: string }) => o.agent_id);
-
-  // 4c.1 读取 agent_categories 多对多连接表（需求 #10）
-  const { data: directLinks } = await db
-    .from("agent_categories")
-    .select("agent_id")
-    .eq("category_id", categoryId);
-  const directIds = (directLinks ?? []).map((l: { agent_id: string }) => l.agent_id);
 
   const hiddenSet = new Set(
     (overrides ?? [])

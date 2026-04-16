@@ -1,5 +1,25 @@
 "use client";
-import { useState, useRef, useEffect, use, useMemo } from "react";
+import { useState, useRef, useEffect, use, useMemo, memo } from "react";
+
+function friendlyError(msg: string): string {
+  if (!msg) return "调用失败，请稍后重试";
+  const map: [RegExp, string][] = [
+    [/ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i, "网络连接失败，请稍后重试"],
+    [/ENOTFOUND|DNS/i, "服务地址无法访问，请联系管理员"],
+    [/timeout|timed?\s*out/i, "请求超时，请稍后重试"],
+    [/401|unauthorized|token.*invalid/i, "登录已过期，请重新登录"],
+    [/403|forbidden|权限/i, "没有权限执行此操作"],
+    [/429|too many|rate.?limit|频率/i, "请求过于频繁，请稍后再试"],
+    [/500|internal.*error/i, "服务器内部错误，请稍后重试"],
+    [/502|503|504|bad gateway|service unavailable/i, "服务暂时不可用，请稍后重试"],
+    [/quota|配额|次数/i, msg],
+    [/过期|expired/i, msg],
+  ];
+  for (const [pattern, friendly] of map) {
+    if (pattern.test(msg)) return friendly;
+  }
+  return msg;
+}
 
 function escapeHtml(str: string): string {
   return str
@@ -9,6 +29,32 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+type ChatMsgProps = {
+  msg: { id: string; role: string; content: string; createdAt?: string };
+  streaming: boolean;
+};
+
+const ChatMessage = memo(function ChatMessage({ msg, streaming }: ChatMsgProps) {
+  return (
+    <div className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-[#002FA7] text-white" : "bg-gray-100 text-gray-600"}`}>
+        {msg.role === "user" ? <User size={15} /> : <Bot size={15} />}
+      </div>
+      <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
+        <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
+          {msg.role === "assistant" ? (
+            <div className="chat-content" dangerouslySetInnerHTML={{ __html: escapeHtml(msg.content).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br/>") || (streaming ? '<span class="animate-pulse">▌</span>' : "") }} />
+          ) : (
+            <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
+          )}
+        </div>
+        {msg.createdAt && <span className="text-[10px] text-gray-400 px-1">{msg.createdAt}</span>}
+      </div>
+    </div>
+  );
+});
+
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -197,7 +243,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
 
       if (!res.ok) {
         const err = await res.json();
-        setError(err.error ?? "调用失败");
+        setError(friendlyError(err.error ?? ""));
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
         setStreaming(false);
         return;
@@ -320,8 +366,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           // 2. 前端轮询结果（首次 500ms，之后每 1000ms，最多 5 分钟）
           const { requestId, audioPath } = submitData;
           const queryBase = `/api/speech?requestId=${requestId}&audioPath=${encodeURIComponent(audioPath ?? "")}`;
-          for (let i = 0; i < 300; i++) {
-            await new Promise((r) => setTimeout(r, i === 0 ? 500 : 1000));
+          for (let i = 0; i < 60; i++) {
+            const delay = Math.min(500 * Math.pow(2, i), 5000);
+            await new Promise((r) => setTimeout(r, delay));
             const queryRes = await fetch(queryBase);
             const queryData = await queryRes.json();
 
@@ -354,6 +401,33 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         setError("无法访问麦克风，请检查设备和权限");
       }
     }
+  }
+
+  // 加载中：显示骨架屏
+  if (!agent && !redirecting) {
+    return (
+      <div className="h-screen flex flex-col bg-[#f8f9fc]">
+        <header className="bg-white border-b border-gray-100 shadow-[0_1px_4px_rgba(0,0,0,0.06)]">
+          <div className="h-14 px-4 flex items-center gap-3">
+            <Link href="/" className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
+              <ArrowLeft size={18} />
+            </Link>
+            <div className="flex items-center gap-2 flex-1">
+              <div className="w-8 h-8 rounded-[10px] bg-gray-100 animate-pulse" />
+              <div className="h-4 w-32 bg-gray-100 rounded animate-pulse" />
+            </div>
+          </div>
+        </header>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-14 h-14 rounded-[16px] bg-[#002FA7]/8 flex items-center justify-center animate-pulse">
+              <Bot size={28} className="text-[#002FA7]" />
+            </div>
+            <p className="text-sm text-gray-400">加载中…</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // 外链跳转中：展示过渡页避免空白闪烁
@@ -405,7 +479,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           <div className="p-4 border-b border-gray-100 flex items-center justify-between">
             <span className="text-sm font-semibold text-gray-700">历史会话</span>
             <div className="flex items-center gap-1">
-              <button onClick={newChat} className="p-1.5 rounded-[8px] hover:bg-[#002FA7] hover:text-white text-gray-500 transition-colors" title="新建对话">
+              <button onClick={newChat} className="p-1.5 rounded-[8px] hover:bg-[#002FA7] hover:text-white text-gray-500 transition-colors" title="新建对话" aria-label="新建对话">
                 <Plus size={16} />
               </button>
               <button className="lg:hidden p-1.5 rounded-[8px] hover:bg-gray-100" onClick={() => setSidebarOpen(false)}>
@@ -417,7 +491,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             <button onClick={newChat} className="w-full flex items-center gap-2 px-3 py-2.5 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors mb-1">
               <Plus size={15} /><span>新建对话</span>
             </button>
-            {conversations.map((conv) => (
+            {conversations.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-6 px-2 leading-relaxed">暂无会话记录<br/>发送消息开始对话</p>
+            ) : conversations.map((conv) => (
               <button
                 key={conv.id}
                 onClick={() => selectConversation(conv.id)}
@@ -451,22 +527,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               </div>
             )}
 
-            {messages.map((msg) => (
-              <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-[#002FA7] text-white" : "bg-gray-100 text-gray-600"}`}>
-                  {msg.role === "user" ? <User size={15} /> : <Bot size={15} />}
-                </div>
-                <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
-                  <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
-                    {msg.role === "assistant" ? (
-                      <div className="chat-content" dangerouslySetInnerHTML={{ __html: escapeHtml(msg.content).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br/>") || (streaming ? '<span class="animate-pulse">▌</span>' : "") }} />
-                    ) : (
-                      <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
-                    )}
-                  </div>
-                  {msg.createdAt && <span className="text-[10px] text-gray-400 px-1">{msg.createdAt}</span>}
-                </div>
-              </div>
+            {messages.map((msg, i) => (
+              <ChatMessage key={msg.id} msg={msg} streaming={streaming && i === messages.length - 1} />
             ))}
 
             {error && (
@@ -509,7 +571,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 />
                 <div className="flex items-center justify-between px-3 pb-2.5">
                   <div className="flex items-center gap-1">
-                    <button onClick={() => fileInputRef.current?.click()} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="上传文件">
+                    <button onClick={() => fileInputRef.current?.click()} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="上传文件" aria-label="上传文件">
                       <Paperclip size={16} />
                     </button>
                     <button onClick={handleVoice} disabled={transcribing} className={`p-1.5 rounded-[8px] transition-colors ${recording ? "bg-red-100 text-red-500 hover:bg-red-200" : transcribing ? "text-yellow-500 animate-pulse cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={recording ? "停止录音" : transcribing ? "识别中…" : "语音输入"}>

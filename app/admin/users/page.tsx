@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
+import { useToast } from "@/components/ui/toast";
 import { useDebounce } from "@/lib/use-debounce";
 import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus, Eye, Bell } from "lucide-react";
 
@@ -63,6 +64,7 @@ const ROLE_MAP = {
 const inputCls = "h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all";
 
 export default function AdminUsersPage() {
+  const { toast } = useToast();
   const [adminMeta, setAdminMeta] = useState<AdminMeta | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -139,7 +141,7 @@ export default function AdminUsersPage() {
     }
   }
 
-  const pageSize = 20;
+  const [pageSize, setPageSize] = useState(20);
 
   const fetchUsers = useCallback(async (p = page) => {
     setLoading(true);
@@ -158,9 +160,9 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
+  }, [page, pageSize, debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
 
-  useEffect(() => { fetchUsers(1); setPage(1); setSelectedIds([]); }, [debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
+  useEffect(() => { fetchUsers(1); setPage(1); setSelectedIds([]); }, [debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter, pageSize]);
   useEffect(() => { fetchUsers(page); }, [page]);
   useEffect(() => { if (activeTab === "groups") loadGroups(); }, [activeTab]);
   // 添加成员搜索：防抖后才发请求
@@ -276,7 +278,8 @@ export default function AdminUsersPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "set-role", role: newRole }),
       });
-      if (res.ok) { setRoleTarget(null); fetchUsers(page); }
+      if (res.ok) { setRoleTarget(null); fetchUsers(page); toast("角色变更成功"); }
+      else { toast("角色变更失败", "error"); }
     } finally {
       setRoleSaving(false);
     }
@@ -340,8 +343,8 @@ export default function AdminUsersPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "delete" }),
     });
-    if (res.ok) fetchUsers(page);
-    else { const d = await res.json(); alert(d.error ?? "删除失败"); }
+    if (res.ok) { fetchUsers(page); toast("用户已删除"); }
+    else { const d = await res.json(); toast(d.error ?? "删除失败", "error"); }
   }
 
   // ── 用户分组 ──────────────────────────────────────────────────
@@ -579,7 +582,7 @@ export default function AdminUsersPage() {
                               {u.username || <span className="text-gray-300">—</span>}
                             </button>
                             {u.first_login && (
-                              <span title="未改初始密码" className="inline-flex">
+                              <span title="未改初始密码" aria-label="未改初始密码" className="inline-flex">
                                 <Bell size={12} className="text-amber-500 shrink-0" />
                               </span>
                             )}
@@ -684,12 +687,34 @@ export default function AdminUsersPage() {
           </div>
 
           {/* 分页 */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-3.5 border-t border-gray-100 bg-gray-50/30">
-              <span className="text-[12px] text-gray-500">第 {page} / {totalPages} 页，共 {total} 条</span>
-              <div className="flex gap-1.5">
+          {total > 0 && (
+            <div className="flex items-center justify-between px-4 py-3.5 border-t border-gray-100 bg-gray-50/30 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] text-gray-500">第 {page} / {totalPages} 页，共 {total} 条</span>
+                <select
+                  className="h-7 border border-gray-200 rounded-[6px] px-1.5 text-[12px] bg-white focus:outline-none"
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                >
+                  {[20, 50, 100].map((n) => <option key={n} value={n}>{n} 条/页</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-1.5">
                 <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="px-3 h-8 rounded-[8px] text-[12px] border border-gray-200 bg-white disabled:opacity-40 hover:bg-gray-50 transition-colors">上一页</button>
                 <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="px-3 h-8 rounded-[8px] text-[12px] border border-gray-200 bg-white disabled:opacity-40 hover:bg-gray-50 transition-colors">下一页</button>
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  className="w-14 h-8 border border-gray-200 rounded-[8px] px-2 text-[12px] text-center bg-white focus:outline-none focus:border-[#002FA7]"
+                  placeholder="页码"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const v = parseInt((e.target as HTMLInputElement).value);
+                      if (v >= 1 && v <= totalPages) { setPage(v); (e.target as HTMLInputElement).value = ""; }
+                    }
+                  }}
+                />
               </div>
             </div>
           )}
@@ -736,7 +761,7 @@ export default function AdminUsersPage() {
                               if (e.key === "Escape") { setEditingGroupId(null); setEditingGroupName(""); }
                             }}
                           />
-                          <button onClick={() => saveEditGroup(g.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white" title="确认"><Check size={13} /></button>
+                          <button onClick={() => saveEditGroup(g.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white" title="确认" aria-label="确认"><Check size={13} /></button>
                           <button onClick={() => { setEditingGroupId(null); setEditingGroupName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400"><X size={13} /></button>
                         </div>
                       ) : (
@@ -747,8 +772,8 @@ export default function AdminUsersPage() {
                             <span className="text-xs text-gray-400 ml-1">{g.member_count} 人</span>
                             {g.tenant_code && <span className="text-xs text-gray-400 font-mono">({g.tenant_code})</span>}
                           </button>
-                          <button onClick={() => { setEditingGroupId(g.id); setEditingGroupName(g.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600" title="重命名"><Pencil size={13} /></button>
-                          <button onClick={() => deleteGroup(g)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500" title="删除"><Trash2 size={13} /></button>
+                          <button onClick={() => { setEditingGroupId(g.id); setEditingGroupName(g.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600" title="重命名" aria-label="重命名"><Pencil size={13} /></button>
+                          <button onClick={() => deleteGroup(g)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500" title="删除" aria-label="删除"><Trash2 size={13} /></button>
                         </>
                       )}
                     </div>
@@ -813,7 +838,7 @@ export default function AdminUsersPage() {
                                     <p className="text-xs text-gray-400 font-mono">{m.phone}</p>
                                   </div>
                                 </div>
-                                <button onClick={() => removeMember(g.id, m.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors" title="移出分组"><UserMinus size={12} /></button>
+                                <button onClick={() => removeMember(g.id, m.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-300 hover:text-red-400 transition-colors" title="移出分组" aria-label="移出分组"><UserMinus size={12} /></button>
                               </div>
                             ))}
                           </div>

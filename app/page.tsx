@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
@@ -12,7 +12,6 @@ import {
   Settings,
   MessageSquare,
   QrCode,
-  ChevronRight,
   Megaphone,
   Zap,
   Menu,
@@ -24,14 +23,16 @@ import {
   Building2,
   Eye,
   Wrench,
-  ArrowRight,
   Plus,
   Trash2,
   Edit2,
   Check,
   BookOpen,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { AgentCard } from "@/components/agent-card";
+import { WorkflowStepButton } from "@/components/workflow-step-button";
+import { UserAgentCard } from "@/components/user-agent-card";
+import type { UserInfo, AgentItem, CategoryItem, NoticeItem, UserAgentItem, WorkflowItem } from "@/lib/types";
 
 // 动态导入 ChevronDown，关闭 SSR，避免 localStorage 初始化状态导致的 Hydration 不一致
 const ChevronDown = dynamic(
@@ -39,63 +40,7 @@ const ChevronDown = dynamic(
   { ssr: false }
 );
 
-type UserInfo = {
-  userId: string;
-  phone: string;
-  tenantCode: string;
-  tenantName: string;
-  isPersonal: boolean;
-  role: "super_admin" | "system_admin" | "org_admin" | "user";
-  userType: "personal" | "organization";
-  quota: { total: number; used: number; left: number; expiresAt: string } | null;
-};
-
-type AgentItem = {
-  id: string;
-  agent_code: string;
-  name: string;
-  description: string;
-  platform: string;
-  agent_type?: string;
-  external_url?: string;
-  categories?: { name: string; icon_url?: string | null };
-  categoriesAll?: { id: string; name: string; icon_url: string | null }[];
-};
-
-type CategoryItem = { id: string; name: string; icon_url?: string | null };
-type NoticeItem = { id: string; tenant_code: string | null; content: string; enabled: boolean };
-type UserAgentItem = {
-  id: string;
-  name: string;
-  description: string;
-  agent_type: "chat" | "external";
-  platform: string;
-  api_url: string;
-  external_url: string;
-  model_params?: Record<string, unknown>;
-  has_api_key?: boolean;
-};
 const EMPTY_UA_FORM = { name: "", description: "", agentType: "chat" as "chat" | "external", platform: "openai", apiUrl: "", apiKey: "", externalUrl: "", modelParams: "{}" };
-
-type WorkflowStep = {
-  id: string;
-  step_order: number;
-  title: string;
-  description: string;
-  exec_type: "agent" | "manual" | "review" | "external";
-  agent_id: string | null;
-  button_text: string;
-  enabled: boolean;
-  agents?: { id: string; agent_code: string; name: string; agent_type: string; external_url: string } | null;
-};
-
-type WorkflowItem = {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  workflow_steps: WorkflowStep[];
-};
 
 const LS_DISMISSED_KEY = "dismissed_notices_v1";
 const groupsKey = (userId: string) => `cat_groups_v1_${userId}`;
@@ -129,17 +74,15 @@ export default function HomePage() {
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [hasAnyWorkflow, setHasAnyWorkflow] = useState(false);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
-  const [workflowCollapsed, setWorkflowCollapsed] = useState<boolean>(false);
+  const [workflowCollapsed, setWorkflowCollapsed] = useState(false);
+  const [agentCollapsed, setAgentCollapsed] = useState(false);
+  const [myAgentsCollapsed, setMyAgentsCollapsed] = useState(false);
   useEffect(() => {
-    try { if (localStorage.getItem("wf_collapsed") === "1") setWorkflowCollapsed(true); } catch {}
-  }, []);
-  const [agentCollapsed, setAgentCollapsed] = useState<boolean>(false);
-  useEffect(() => {
-    try { if (localStorage.getItem("agent_collapsed") === "1") setAgentCollapsed(true); } catch {}
-  }, []);
-  const [myAgentsCollapsed, setMyAgentsCollapsed] = useState<boolean>(false);
-  useEffect(() => {
-    try { if (localStorage.getItem("my_agents_collapsed") === "1") setMyAgentsCollapsed(true); } catch {}
+    try {
+      if (localStorage.getItem("wf_collapsed") === "1") setWorkflowCollapsed(true);
+      if (localStorage.getItem("agent_collapsed") === "1") setAgentCollapsed(true);
+      if (localStorage.getItem("my_agents_collapsed") === "1") setMyAgentsCollapsed(true);
+    } catch {}
   }, []);
   const [userAgents, setUserAgents] = useState<UserAgentItem[]>([]);
   const [showMyAgentsSettings, setShowMyAgentsSettings] = useState(false);
@@ -154,6 +97,8 @@ export default function HomePage() {
   });
   const [loading, setLoading] = useState(true);
   const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "AI 智能体平台", help_doc_url: "", contact_qr_url: "", contact_qr_text: "扫码添加微信，获取专属服务" });
+
+  const categoryCache = useRef(new Map<string, { wfs: WorkflowItem[]; agents: AgentItem[] }>());
 
   // ── 用户自定义分组 ──────────────────────────────────────────────
   const [catGroups, setCatGroups] = useState<CatGroup[]>([]);
@@ -316,6 +261,7 @@ export default function HomePage() {
 
   const allCats = [{ id: "__all__", name: "全部" }, ...categories];
   const filtered = displayAgents;
+  const categoryMap = new Map(categories.map((c) => [c.id, c]));
   // 已被加入任何分组的分类 ID 集合
   const groupedCatIds = new Set(catGroups.flatMap((g) => g.categoryIds));
   // 没有加入任何分组的分类（当无分组时 = 全部分类，行为与之前一致）
@@ -325,25 +271,38 @@ export default function HomePage() {
     setActiveCategory(catId);
     setSidebarOpen(false);
 
-    // 并行刷新：工作流 + 智能体展示
-    const wfUrl = catId === "__all__" ? "/api/workflows" : `/api/workflows?categoryId=${catId}`;
-    const agentUrl = catId === "__all__" ? "/api/agents" : `/api/agents?categoryId=${catId}`;
+    // "全部"使用初始加载的完整列表，不缓存
+    if (catId === "__all__") {
+      const wfs = await fetch("/api/workflows").then((r) => r.json()).catch(() => []);
+      const wfList: WorkflowItem[] = Array.isArray(wfs) ? wfs : [];
+      setWorkflows(wfList);
+      setActiveWorkflowId(wfList.length > 0 ? wfList[0].id : null);
+      setDisplayAgents(agents);
+      return;
+    }
 
+    // 检查缓存
+    const cached = categoryCache.current.get(catId);
+    if (cached) {
+      setWorkflows(cached.wfs);
+      setActiveWorkflowId(cached.wfs.length > 0 ? cached.wfs[0].id : null);
+      setDisplayAgents(cached.agents);
+      return;
+    }
+
+    // 未缓存，并行请求
     const [wfs, agentsData] = await Promise.all([
-      fetch(wfUrl).then((r) => r.json()).catch(() => []),
-      fetch(agentUrl).then((r) => r.json()).catch(() => ({ agents: [] })),
+      fetch(`/api/workflows?categoryId=${catId}`).then((r) => r.json()).catch(() => []),
+      fetch(`/api/agents?categoryId=${catId}`).then((r) => r.json()).catch(() => ({ agents: [] })),
     ]);
 
     const wfList: WorkflowItem[] = Array.isArray(wfs) ? wfs : [];
+    const agentList: AgentItem[] = agentsData.agents ?? [];
+    categoryCache.current.set(catId, { wfs: wfList, agents: agentList });
+
     setWorkflows(wfList);
     setActiveWorkflowId(wfList.length > 0 ? wfList[0].id : null);
-
-    // 全部 → 用完整智能体列表；特定分类 → 用服务端计算结果
-    if (catId === "__all__") {
-      setDisplayAgents(agents);
-    } else {
-      setDisplayAgents(agentsData.agents ?? []);
-    }
+    setDisplayAgents(agentList);
   }
 
   async function refreshUserAgents() {
@@ -405,7 +364,10 @@ export default function HomePage() {
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-[12px] overflow-hidden shrink-0 flex items-center justify-center bg-gradient-to-br from-[#002FA7] to-[#1a47c0] shadow-[0_4px_12px_rgba(0,47,167,0.25)]">
                 {siteSettings.logo_url ? (
-                  <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" />
+                  <>
+                    <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.querySelector("span")?.removeAttribute("hidden"); }} />
+                    <span hidden className="text-white text-sm font-bold">AI</span>
+                  </>
                 ) : (
                   <span className="text-white text-sm font-bold">AI</span>
                 )}
@@ -445,17 +407,17 @@ export default function HomePage() {
 
             <div className="flex items-center gap-1 ml-1">
               {siteSettings.help_doc_url && (
-                <a href={siteSettings.help_doc_url} target="_blank" rel="noopener noreferrer" className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="帮助文档">
+                <a href={siteSettings.help_doc_url} target="_blank" rel="noopener noreferrer" className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="帮助文档" aria-label="帮助文档">
                   <BookOpen size={20} />
                 </a>
               )}
-              <button onClick={() => setContactOpen(true)} className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="联系我们">
+              <button onClick={() => setContactOpen(true)} className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="联系我们" aria-label="联系我们">
                 <QrCode size={20} />
               </button>
-              <Link href="/settings" className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="账号设置">
+              <Link href="/settings" className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors" title="账号设置" aria-label="账号设置">
                 <Settings size={20} />
               </Link>
-              <button onClick={handleLogout} className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-red-50 text-gray-500 hover:text-red-500 transition-colors" title="退出登录">
+              <button onClick={handleLogout} className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-red-50 text-gray-500 hover:text-red-500 transition-colors" title="退出登录" aria-label="退出登录">
                 <LogOut size={20} />
               </button>
             </div>
@@ -483,7 +445,7 @@ export default function HomePage() {
 
             {/* 用户自定义分组 */}
             {catGroups.map((group) => {
-              const groupCats = categories.filter((c) => group.categoryIds.includes(c.id));
+              const groupCats = group.categoryIds.map((id) => categoryMap.get(id)).filter((c): c is CategoryItem => !!c);
               return (
                 <div key={group.id}>
                   <div
@@ -538,10 +500,10 @@ export default function HomePage() {
                   className="flex-1 h-7 text-xs border border-[#002FA7]/30 rounded-[7px] px-2 focus:outline-none focus:border-[#002FA7]"
                   placeholder="分组名称…"
                 />
-                <button onClick={createGroup} className="p-1 rounded-[5px] bg-[#002FA7] text-white hover:bg-[#001f7a]" title="确认">
+                <button onClick={createGroup} className="p-1 rounded-[5px] bg-[#002FA7] text-white hover:bg-[#001f7a]" title="确认" aria-label="确认">
                   <Check size={12} />
                 </button>
-                <button onClick={() => { setAddingGroup(false); setNewGroupName(""); }} className="p-1 rounded-[5px] hover:bg-gray-100 text-gray-400" title="取消">
+                <button onClick={() => { setAddingGroup(false); setNewGroupName(""); }} className="p-1 rounded-[5px] hover:bg-gray-100 text-gray-400" title="取消" aria-label="取消">
                   <X size={12} />
                 </button>
               </div>
@@ -824,7 +786,7 @@ export default function HomePage() {
 
       {/* ── 我的智能体设置弹窗 ──────────────────────────────────────── */}
       {showMyAgentsSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="我的智能体">
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
             {/* 弹窗头部 */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
@@ -862,7 +824,7 @@ export default function HomePage() {
 
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs font-medium text-gray-600">名称 *</label>
-                    <input className="h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" placeholder="智能体名称" value={uaForm.name} onChange={(e) => setUaForm({ ...uaForm, name: e.target.value })} />
+                    <input autoFocus className="h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" placeholder="智能体名称" value={uaForm.name} onChange={(e) => setUaForm({ ...uaForm, name: e.target.value })} />
                   </div>
 
                   <div className="flex flex-col gap-1.5">
@@ -908,7 +870,8 @@ export default function HomePage() {
                       </div>
                       <div className="flex flex-col gap-1.5">
                         <label className="text-xs font-medium text-gray-600">模型参数（JSON）</label>
-                        <textarea rows={3} className="w-full border border-gray-200 rounded-[10px] px-3 py-2 text-sm font-mono focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" value={uaForm.modelParams} onChange={(e) => setUaForm({ ...uaForm, modelParams: e.target.value })} />
+                        <textarea rows={3} className={`w-full border rounded-[10px] px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 resize-none ${uaForm.modelParams.trim() && (() => { try { JSON.parse(uaForm.modelParams); return false; } catch { return true; } })() ? "border-red-300 focus:border-red-400 focus:ring-red-100" : "border-gray-200 focus:border-[#002FA7] focus:ring-[#002FA7]/10"}`} value={uaForm.modelParams} onChange={(e) => setUaForm({ ...uaForm, modelParams: e.target.value })} />
+                        {uaForm.modelParams.trim() && (() => { try { JSON.parse(uaForm.modelParams); return null; } catch { return <p className="text-[11px] text-red-500 mt-0.5">JSON 格式不正确</p>; } })()}
                       </div>
                     </>
                   )}
@@ -936,7 +899,7 @@ export default function HomePage() {
 
       {/* ── 编辑分组弹窗 ──────────────────────────────────────────── */}
       {editingGroup && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="编辑分组">
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-sm p-6">
             <h3 className="font-semibold text-gray-900 mb-4">编辑分组</h3>
             <div className="space-y-4">
@@ -996,7 +959,7 @@ export default function HomePage() {
       </footer>
 
       {contactOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setContactOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setContactOpen(false)} role="dialog" aria-modal="true" aria-label="联系我们">
           <div className="bg-white rounded-[20px] p-8 shadow-2xl flex flex-col items-center gap-4 w-72" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-semibold text-gray-900">联系我们</h3>
             <div className="w-40 h-40 bg-gray-100 rounded-[12px] flex items-center justify-center overflow-hidden">
@@ -1017,150 +980,3 @@ export default function HomePage() {
   );
 }
 
-// ── 智能体卡片（抽出组件，处理内链/外链两种类型）────────────────
-function AgentCard({ agent }: { agent: AgentItem }) {
-  const isExternal = agent.agent_type === "external";
-
-  const cardClass =
-    "group bg-white rounded-[16px] p-5 shadow-[0_1px_4px_rgba(0,0,0,0.06)] border border-gray-100/60 hover:shadow-[0_10px_28px_rgba(0,47,167,0.12)] hover:-translate-y-0.5 hover:border-[#002FA7]/20 transition-all duration-200 flex flex-col gap-4 cursor-pointer";
-
-  const cardContent = (
-    <>
-      <div className="flex items-start justify-between">
-        <div className={`w-12 h-12 rounded-[12px] flex items-center justify-center ${isExternal ? "bg-orange-50" : "bg-[#002FA7]/8"}`}>
-          {isExternal
-            ? <ExternalLink size={22} className="text-orange-500" />
-            : <MessageSquare size={24} className="text-[#002FA7]" />}
-        </div>
-        <span className="text-[11px] text-gray-400 font-mono mt-1.5">{agent.agent_code}</span>
-      </div>
-      <div className="flex-1 min-h-0">
-        <h3 className={`text-[15px] font-semibold text-gray-900 mb-1.5 transition-colors ${isExternal ? "group-hover:text-orange-500" : "group-hover:text-[#002FA7]"}`}>{agent.name}</h3>
-        <p className="text-[13px] text-gray-500 leading-relaxed line-clamp-2">{agent.description}</p>
-      </div>
-      <div className="flex items-center justify-between pt-1 gap-2">
-        <div className="flex flex-wrap gap-1 min-w-0">
-          {agent.categoriesAll && agent.categoriesAll.length > 0 ? (
-            agent.categoriesAll.map((c) => (
-              <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
-                {c.icon_url ? <img src={c.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : null}
-                {c.name}
-              </span>
-            ))
-          ) : (
-            <Badge variant="muted">{agent.categories?.name ?? "通用"}</Badge>
-          )}
-        </div>
-        <div className={`flex items-center gap-1 text-[12px] font-medium opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ${isExternal ? "text-orange-500" : "text-[#002FA7]"}`}>
-          {isExternal ? <>外链跳转 <ExternalLink size={13} /></> : <>开始对话 <ChevronRight size={14} /></>}
-        </div>
-      </div>
-    </>
-  );
-
-  if (isExternal) {
-    // 外链地址为空时降级为不可点击
-    if (!agent.external_url) {
-      return <div className={cardClass + " opacity-50 cursor-not-allowed"}>{cardContent}</div>;
-    }
-    return (
-      <a
-        href={agent.external_url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={cardClass}
-      >
-        {cardContent}
-      </a>
-    );
-  }
-
-  return (
-    <Link href={`/agents/${agent.agent_code}`} className={cardClass}>
-      {cardContent}
-    </Link>
-  );
-}
-
-// ── 工作流步骤按钮 ────────────────────────────────────────────────
-function WorkflowStepButton({ step }: { step: WorkflowStep }) {
-  const agent = step.agents;
-
-  // 未绑定智能体
-  if (!step.agent_id) {
-    return <span className="text-xs text-gray-400 italic shrink-0">未绑定智能体</span>;
-  }
-
-  // 智能体已被删除
-  if (!agent) {
-    return <span className="text-xs text-red-400 bg-red-50 px-2.5 py-1 rounded-[8px] shrink-0">智能体已删除，请联系管理员</span>;
-  }
-
-  const isExternal = agent.agent_type === "external";
-
-  // 外链型但 URL 为空
-  if (isExternal && !agent.external_url) {
-    return <span className="text-xs text-gray-400 italic shrink-0">外链地址未配置</span>;
-  }
-
-  if (isExternal) {
-    return (
-      <a
-        href={agent.external_url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-medium transition-colors bg-orange-50 text-orange-600 hover:bg-orange-100 shrink-0"
-      >
-        <ExternalLink size={11} />
-        {step.button_text}
-        <ArrowRight size={11} />
-      </a>
-    );
-  }
-
-  return (
-    <Link href={`/agents/${agent.agent_code}`} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-medium transition-colors bg-[#002FA7]/8 text-[#002FA7] hover:bg-[#002FA7]/15 shrink-0">
-      <Bot size={11} />
-      {step.button_text}
-      <ArrowRight size={11} />
-    </Link>
-  );
-}
-
-// ── 我的智能体卡片 ────────────────────────────────────────────────
-function UserAgentCard({ agent }: { agent: UserAgentItem }) {
-  const isExternal = agent.agent_type === "external";
-
-  const cardClass =
-    "group bg-white rounded-[16px] p-5 shadow-[0_1px_4px_rgba(0,0,0,0.06)] hover:shadow-[0_8px_24px_rgba(0,47,167,0.12)] hover:-translate-y-0.5 transition-all duration-200 flex flex-col gap-3 cursor-pointer border border-transparent hover:border-[#002FA7]/10";
-
-  const cardContent = (
-    <>
-      <div className="flex items-start justify-between">
-        <div className={`w-11 h-11 rounded-[12px] flex items-center justify-center ${isExternal ? "bg-orange-50" : "bg-[#002FA7]/8"}`}>
-          {isExternal
-            ? <ExternalLink size={20} className="text-orange-500" />
-            : <Bot size={20} className="text-[#002FA7]" />}
-        </div>
-        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-400 font-medium mt-1">我的</span>
-      </div>
-      <div className="flex-1">
-        <h3 className={`font-semibold text-gray-900 mb-1 transition-colors ${isExternal ? "group-hover:text-orange-500" : "group-hover:text-[#002FA7]"}`}>{agent.name}</h3>
-        <p className="text-xs text-gray-500 leading-relaxed line-clamp-2">{agent.description || (isExternal ? "点击跳转外部链接" : `${agent.platform} 智能体`)}</p>
-      </div>
-      <div className="flex items-center justify-between pt-1">
-        <span className="text-[10px] text-gray-400">{isExternal ? "外链跳转" : agent.platform}</span>
-        <div className={`flex items-center gap-1 text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity ${isExternal ? "text-orange-500" : "text-[#002FA7]"}`}>
-          {isExternal ? <>外链跳转 <ExternalLink size={12} /></> : <>开始对话 <ChevronRight size={14} /></>}
-        </div>
-      </div>
-    </>
-  );
-
-  if (isExternal) {
-    if (!agent.external_url) return <div className={cardClass + " opacity-50 cursor-not-allowed"}>{cardContent}</div>;
-    return <a href={agent.external_url} target="_blank" rel="noopener noreferrer" className={cardClass}>{cardContent}</a>;
-  }
-
-  return <Link href={`/user-agents/${agent.id}`} className={cardClass}>{cardContent}</Link>;
-}

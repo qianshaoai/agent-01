@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
+import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,7 @@ const EMPTY_WF = {
 const EMPTY_STEP = { title: "", description: "", execType: "agent" as "agent" | "manual" | "review" | "external", agentId: "", buttonText: "进入智能体", enabled: true, stepOrder: 1 };
 
 export default function WorkflowsAdminPage() {
+  const { toast } = useToast();
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -104,6 +106,10 @@ export default function WorkflowsAdminPage() {
   const [stepForm, setStepForm] = useState<{ title: string; description: string; execType: "agent" | "manual" | "review" | "external"; agentId: string; buttonText: string; enabled: boolean; stepOrder: number }>(EMPTY_STEP);
   const [stepError, setStepError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Confirm dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  function showConfirm(message: string, onConfirm: () => void) { setConfirmDialog({ message, onConfirm }); }
 
   // Category management state
   const [newCatName, setNewCatName] = useState("");
@@ -200,16 +206,18 @@ export default function WorkflowsAdminPage() {
     load();
   }
 
-  async function duplicateWf(wf: Workflow) {
-    if (!confirm(`确认复制工作流「${wf.name}」？将连同所有步骤一起复制。`)) return;
-    await fetch(`/api/admin/workflows/${wf.id}/duplicate`, { method: "POST" });
-    load();
+  function duplicateWf(wf: Workflow) {
+    showConfirm(`确认复制工作流「${wf.name}」？将连同所有步骤一起复制。`, async () => {
+      await fetch(`/api/admin/workflows/${wf.id}/duplicate`, { method: "POST" });
+      load(); toast("工作流已复制");
+    });
   }
 
-  async function deleteWf(wf: Workflow) {
-    if (!confirm(`确认删除工作流「${wf.name}」？步骤也会一并删除。`)) return;
-    await fetch(`/api/admin/workflows/${wf.id}`, { method: "DELETE" });
-    load();
+  function deleteWf(wf: Workflow) {
+    showConfirm(`确认删除工作流「${wf.name}」？步骤也会一并删除。`, async () => {
+      await fetch(`/api/admin/workflows/${wf.id}`, { method: "DELETE" });
+      load(); toast("工作流已删除");
+    });
   }
 
   // ── Step CRUD ──────────────────────────────────────────────────
@@ -292,13 +300,15 @@ export default function WorkflowsAdminPage() {
     } finally { setSaving(false); }
   }
 
-  async function deleteStep(step: WorkflowStep) {
-    if (!confirm(`确认删除步骤「${step.title}」？`)) return;
-    const wf = workflows.find(w => w.workflow_steps?.some(s => s.id === step.id));
-    await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "DELETE" });
-    await load();
-    if (wf) await renumberSteps(wf.id);
-    await load();
+  function deleteStep(step: WorkflowStep) {
+    showConfirm(`确认删除步骤「${step.title}」？`, async () => {
+      const wf = workflows.find(w => w.workflow_steps?.some(s => s.id === step.id));
+      await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "DELETE" });
+      await load();
+      if (wf) await renumberSteps(wf.id);
+      await load();
+      toast("步骤已删除");
+    });
   }
 
   async function toggleStepEnabled(step: WorkflowStep) {
@@ -324,11 +334,12 @@ export default function WorkflowsAdminPage() {
     setEditingCatId(null); setEditingCatName(""); load();
   }
 
-  async function deleteWfCat(cat: Category) {
-    if (!confirm(`确认删除分类「${cat.name}」？`)) return;
-    const res = await fetch(`/api/admin/wf-categories/${cat.id}`, { method: "DELETE" });
-    if (!res.ok) { const d = await res.json(); alert(d.error ?? "删除失败"); return; }
-    load();
+  function deleteWfCat(cat: Category) {
+    showConfirm(`确认删除分类「${cat.name}」？`, async () => {
+      const res = await fetch(`/api/admin/wf-categories/${cat.id}`, { method: "DELETE" });
+      if (!res.ok) { const d = await res.json(); alert(d.error ?? "删除失败"); return; }
+      load();
+    });
   }
 
   async function handleWfCatIcon(catId: string, e: React.ChangeEvent<HTMLInputElement>) {
@@ -347,12 +358,13 @@ export default function WorkflowsAdminPage() {
     e.target.value = "";
   }
 
-  async function removeWfCatIcon(catId: string) {
-    if (!confirm("确认删除此分类的图标？")) return;
-    const res = await fetch(`/api/admin/wf-categories/${catId}/icon`, { method: "DELETE" });
-    if (res.ok) {
-      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: null } : c));
-    }
+  function removeWfCatIcon(catId: string) {
+    showConfirm("确认删除此分类的图标？", async () => {
+      const res = await fetch(`/api/admin/wf-categories/${catId}/icon`, { method: "DELETE" });
+      if (res.ok) {
+        setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: null } : c));
+      }
+    });
   }
 
   return (
@@ -481,9 +493,9 @@ export default function WorkflowsAdminPage() {
                       <button onClick={() => toggleWfEnabled(wf)} className={`p-1.5 rounded-[8px] transition-colors ${wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={wf.enabled ? "停用" : "启用"}>
                         {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                       </button>
-                      <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流"><Copy size={14} /></button>
-                      <button onClick={() => openEditWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Edit2 size={14} /></button>
-                      <button onClick={() => deleteWf(wf)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={14} /></button>
+                      <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流" aria-label="复制工作流"><Copy size={14} /></button>
+                      <button onClick={() => openEditWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
+                      <button onClick={() => deleteWf(wf)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
                     </div>
                   </div>
 
@@ -595,8 +607,8 @@ export default function WorkflowsAdminPage() {
                           if (e.key === "Escape") { setEditingCatId(null); setEditingCatName(""); }
                         }}
                       />
-                      <button onClick={() => saveEditWfCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认"><Check size={13} /></button>
-                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消"><X size={13} /></button>
+                      <button onClick={() => saveEditWfCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认" aria-label="确认"><Check size={13} /></button>
+                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消" aria-label="取消"><X size={13} /></button>
                     </div>
                   ) : (
                     <>
@@ -618,10 +630,10 @@ export default function WorkflowsAdminPage() {
                           <ImageIcon size={13} />
                         </label>
                         {cat.icon_url && (
-                          <button onClick={() => removeWfCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标"><X size={13} /></button>
+                          <button onClick={() => removeWfCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标" aria-label="删除图标"><X size={13} /></button>
                         )}
-                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
-                        <button onClick={() => deleteWfCat(cat)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={13} /></button>
+                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Pencil size={13} /></button>
+                        <button onClick={() => deleteWfCat(cat)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={13} /></button>
                       </div>
                     </>
                   )}
@@ -952,6 +964,19 @@ export default function WorkflowsAdminPage() {
             <div className="flex justify-end gap-2 mt-6">
               <Button variant="ghost" onClick={() => setShowStepModal(null)}>取消</Button>
               <Button onClick={handleSaveStep} loading={saving}>{showStepModal.step ? "保存" : "添加"}</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 确认弹窗 */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="确认操作">
+          <div className="bg-white rounded-[16px] shadow-2xl w-full max-w-sm p-6">
+            <p className="text-sm text-gray-700 leading-relaxed mb-6">{confirmDialog.message}</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setConfirmDialog(null)}>取消</Button>
+              <Button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }}>确认</Button>
             </div>
           </div>
         </div>

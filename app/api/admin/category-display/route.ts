@@ -69,37 +69,55 @@ export async function GET(req: NextRequest) {
 }
 
 // PATCH /api/admin/category-display
-// 设置某智能体在某分类下的手工状态
+// 支持单条 { agentId, categoryId, isManual, isHidden }
+// 或批量 { agentId, items: [{ categoryId, isManual, isHidden }, ...] }
 export async function PATCH(req: NextRequest) {
   if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
-  const { agentId, categoryId, isManual, isHidden } = await req.json();
-  if (!agentId || !categoryId) return NextResponse.json({ error: "缺少参数" }, { status: 400 });
+  const body = await req.json();
+  const { agentId } = body;
+  if (!agentId) return NextResponse.json({ error: "缺少 agentId" }, { status: 400 });
 
-  // isManual 和 isHidden 互斥：设置 hidden 时清除 manual，设置 manual 时清除 hidden
-  const finalManual = isHidden ? false : (isManual ?? false);
-  const finalHidden = isManual ? false : (isHidden ?? false);
+  // 统一为数组处理
+  const items: { categoryId: string; isManual?: boolean; isHidden?: boolean }[] =
+    Array.isArray(body.items) ? body.items : [{ categoryId: body.categoryId, isManual: body.isManual, isHidden: body.isHidden }];
 
-  if (!finalManual && !finalHidden) {
-    // 两者都关闭 → 删除记录（恢复默认）
+  if (items.length === 0 || !items[0].categoryId) {
+    return NextResponse.json({ error: "缺少 categoryId" }, { status: 400 });
+  }
+
+  const toUpsert: { agent_id: string; category_id: string; is_manual: boolean; is_hidden: boolean; created_at: string }[] = [];
+  const toDelete: string[] = [];
+
+  for (const item of items) {
+    const finalManual = item.isHidden ? false : (item.isManual ?? false);
+    const finalHidden = item.isManual ? false : (item.isHidden ?? false);
+
+    if (!finalManual && !finalHidden) {
+      toDelete.push(item.categoryId);
+    } else {
+      toUpsert.push({
+        agent_id: agentId,
+        category_id: item.categoryId,
+        is_manual: finalManual,
+        is_hidden: finalHidden,
+        created_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  // 批量删除 + 批量 upsert，各只一次数据库操作
+  if (toDelete.length > 0) {
     await db
       .from("category_agent_display")
       .delete()
       .eq("agent_id", agentId)
-      .eq("category_id", categoryId);
-  } else {
+      .in("category_id", toDelete);
+  }
+  if (toUpsert.length > 0) {
     await db
       .from("category_agent_display")
-      .upsert(
-        {
-          agent_id: agentId,
-          category_id: categoryId,
-          is_manual: finalManual,
-          is_hidden: finalHidden,
-          created_at: new Date().toISOString(),
-        },
-        { onConflict: "category_id,agent_id" }
-      );
+      .upsert(toUpsert, { onConflict: "category_id,agent_id" });
   }
 
   return NextResponse.json({ ok: true });

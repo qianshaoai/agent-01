@@ -7,20 +7,17 @@ export async function GET() {
 
   const { data, error } = await db
     .from("user_groups")
-    .select("id, name, description, tenant_code, created_at")
+    .select("id, name, description, tenant_code, created_at, user_group_members(count)")
     .order("created_at", { ascending: true });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // 附加成员数量
-  const groups = data ?? [];
-  const counts = await Promise.all(
-    groups.map((g) =>
-      db.from("user_group_members").select("*", { count: "exact", head: true }).eq("group_id", g.id)
-    )
-  );
-
-  const result = groups.map((g, i) => ({ ...g, member_count: counts[i].count ?? 0 }));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = (data ?? []).map((g: any) => ({
+    ...g,
+    member_count: g.user_group_members?.[0]?.count ?? 0,
+    user_group_members: undefined,
+  }));
   return NextResponse.json(result);
 }
 

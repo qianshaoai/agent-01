@@ -1,6 +1,7 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
+import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,7 @@ const EMPTY_AGENT = { id: "", name: "", description: "", categoryIds: [] as stri
 const EMPTY_API = { endpoint: "", apiKey: "", modelParams: '{"temperature": 0.7, "max_tokens": 2000}' };
 
 export default function AgentsAdminPage() {
+  const { toast } = useToast();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -116,16 +118,26 @@ export default function AgentsAdminPage() {
     setPermLoading(true);
     setNewScopeType("org");
     setNewScopeId("");
-    const [permsData, deptsData, teamsData, groupsData] = await Promise.all([
-      fetch(`/api/admin/resource-permissions?resource_type=agent&resource_id=${a.id}`).then(r => r.json()).catch(() => []),
-      fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
-      fetch("/api/admin/teams").then(r => r.json()).catch(() => []),
-      fetch("/api/admin/user-groups").then(r => r.json()).catch(() => []),
-    ]);
-    setPermissions(Array.isArray(permsData) ? permsData : []);
-    setDepts(Array.isArray(deptsData) ? deptsData : []);
-    setTeams(Array.isArray(teamsData) ? teamsData : []);
-    setUserGroups(Array.isArray(groupsData) ? groupsData : []);
+
+    // 权限数据每次都要刷新（和具体 agent 相关）；部门/团队/分组只拉一次做页面级缓存
+    const permsPromise = fetch(`/api/admin/resource-permissions?resource_type=agent&resource_id=${a.id}`).then(r => r.json()).catch(() => []);
+    const needOrgData = depts.length === 0 && teams.length === 0 && userGroups.length === 0;
+
+    if (needOrgData) {
+      const [permsData, deptsData, teamsData, groupsData] = await Promise.all([
+        permsPromise,
+        fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
+        fetch("/api/admin/teams").then(r => r.json()).catch(() => []),
+        fetch("/api/admin/user-groups").then(r => r.json()).catch(() => []),
+      ]);
+      setPermissions(Array.isArray(permsData) ? permsData : []);
+      setDepts(Array.isArray(deptsData) ? deptsData : []);
+      setTeams(Array.isArray(teamsData) ? teamsData : []);
+      setUserGroups(Array.isArray(groupsData) ? groupsData : []);
+    } else {
+      const permsData = await permsPromise;
+      setPermissions(Array.isArray(permsData) ? permsData : []);
+    }
     setPermLoading(false);
   }
 
@@ -183,7 +195,7 @@ export default function AgentsAdminPage() {
         : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
-      setShowAgentModal(false); load();
+      setShowAgentModal(false); load(); toast(editing ? "智能体已更新" : "智能体已创建");
     } finally { setSaving(false); }
   }
 
@@ -194,7 +206,7 @@ export default function AgentsAdminPage() {
       let params: Record<string, unknown> = {};
       try { params = JSON.parse(apiForm.modelParams); } catch {}
       await fetch(`/api/admin/agents/${showApiModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiEndpoint: apiForm.endpoint, apiKey: apiForm.apiKey || undefined, modelParams: params }) });
-      setShowApiModal(null); load();
+      setShowApiModal(null); load(); toast("API 配置已保存");
     } finally { setSaving(false); }
   }
 
@@ -261,6 +273,15 @@ export default function AgentsAdminPage() {
 
   const platformColor: Record<string, string> = { coze: "bg-blue-100 text-blue-700", dify: "bg-purple-100 text-purple-700", zhipu: "bg-green-100 text-green-700", openai: "bg-gray-100 text-gray-600", other: "bg-gray-100 text-gray-600" };
 
+  const filteredAgents = useMemo(() => agents.filter(a => {
+    if (agentTypeFilter && a.agent_type !== agentTypeFilter) return false;
+    if (agentCategoryFilter && a.category_id !== agentCategoryFilter) return false;
+    if (agentStatusFilter === "enabled" && !a.enabled) return false;
+    if (agentStatusFilter === "disabled" && a.enabled) return false;
+    return true;
+  }), [agents, agentTypeFilter, agentCategoryFilter, agentStatusFilter]);
+  const hasAgentFilter = agentTypeFilter || agentCategoryFilter || agentStatusFilter;
+
   return (
     <AdminLayout>
       <div className="space-y-6">
@@ -283,16 +304,7 @@ export default function AgentsAdminPage() {
           }
         />
 
-        {activeTab === "agents" && (() => {
-          const filteredAgents = agents.filter(a => {
-            if (agentTypeFilter && a.agent_type !== agentTypeFilter) return false;
-            if (agentCategoryFilter && a.category_id !== agentCategoryFilter) return false;
-            if (agentStatusFilter === "enabled" && !a.enabled) return false;
-            if (agentStatusFilter === "disabled" && a.enabled) return false;
-            return true;
-          });
-          const hasAgentFilter = agentTypeFilter || agentCategoryFilter || agentStatusFilter;
-          return (
+        {activeTab === "agents" && (
           <>
           <Card padding="md" className="flex flex-wrap gap-3 items-center">
             <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentTypeFilter} onChange={e => setAgentTypeFilter(e.target.value)}>
@@ -367,12 +379,12 @@ export default function AgentsAdminPage() {
                         </td>
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-1">
-                            <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Edit2 size={14} /></button>
+                            <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
                             {a.agent_type !== "external" && (
-                              <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置"><Key size={14} /></button>
+                              <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置" aria-label="API 配置"><Key size={14} /></button>
                             )}
-                            <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置"><Settings2 size={14} /></button>
-                            <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="分类展示配置"><LayoutGrid size={14} /></button>
+                            <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置" aria-label="权限设置"><Settings2 size={14} /></button>
+                            <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="分类展示配置" aria-label="分类展示配置"><LayoutGrid size={14} /></button>
                           </div>
                         </td>
                       </tr>
@@ -383,8 +395,7 @@ export default function AgentsAdminPage() {
             )}
           </Card>
           </>
-          );
-        })()}
+        )}
 
         {activeTab === "categories" && (
           <Card padding="lg">
@@ -408,8 +419,8 @@ export default function AgentsAdminPage() {
                           if (e.key === "Escape") { setEditingCatId(null); setEditingCatName(""); }
                         }}
                       />
-                      <button onClick={() => saveEditCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认"><Check size={13} /></button>
-                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消"><X size={13} /></button>
+                      <button onClick={() => saveEditCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认" aria-label="确认"><Check size={13} /></button>
+                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消" aria-label="取消"><X size={13} /></button>
                     </div>
                   ) : (
                     <>
@@ -431,12 +442,12 @@ export default function AgentsAdminPage() {
                           <ImageIcon size={13} />
                         </label>
                         {cat.icon_url && (
-                          <button onClick={() => removeCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标">
+                          <button onClick={() => removeCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标" aria-label="删除图标">
                             <X size={13} />
                           </button>
                         )}
-                        <button onClick={() => openCatAssign(cat)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="组织分配"><Building2 size={13} /></button>
-                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Pencil size={13} /></button>
+                        <button onClick={() => openCatAssign(cat)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="组织分配" aria-label="组织分配"><Building2 size={13} /></button>
+                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Pencil size={13} /></button>
                       </div>
                     </>
                   )}
@@ -547,9 +558,21 @@ export default function AgentsAdminPage() {
             </p>
             {!displayLoading && displayConfig.length > 0 && (
               <div className="flex items-center gap-2 mb-3">
-                <button onClick={async () => { for (const cfg of displayConfig.filter(c => !c.is_manual)) await toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isManual", false); }} className="text-xs text-[#002FA7] hover:underline">一键全选</button>
+                <button onClick={async () => {
+                  const items = displayConfig.filter(c => !c.is_manual).map(c => ({ categoryId: c.category_id, isManual: true }));
+                  if (items.length === 0) return;
+                  await fetch("/api/admin/category-display", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentId: showDisplayModal.id, items }) });
+                  const data = await fetch(`/api/admin/category-display?agentId=${showDisplayModal.id}`).then(r => r.json()).catch(() => []);
+                  setDisplayConfig(Array.isArray(data) ? data : []);
+                }} className="text-xs text-[#002FA7] hover:underline">一键全选</button>
                 <span className="text-gray-300">·</span>
-                <button onClick={async () => { for (const cfg of displayConfig.filter(c => c.is_manual)) await toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isManual", true); }} className="text-xs text-gray-400 hover:text-gray-600 hover:underline">全部取消</button>
+                <button onClick={async () => {
+                  const items = displayConfig.filter(c => c.is_manual).map(c => ({ categoryId: c.category_id, isManual: false }));
+                  if (items.length === 0) return;
+                  await fetch("/api/admin/category-display", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentId: showDisplayModal.id, items }) });
+                  const data = await fetch(`/api/admin/category-display?agentId=${showDisplayModal.id}`).then(r => r.json()).catch(() => []);
+                  setDisplayConfig(Array.isArray(data) ? data : []);
+                }} className="text-xs text-gray-400 hover:text-gray-600 hover:underline">全部取消</button>
               </div>
             )}
             {displayLoading ? (

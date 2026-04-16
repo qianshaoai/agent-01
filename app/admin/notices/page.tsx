@@ -91,9 +91,9 @@ export default function NoticesPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => openEdit(n)} className="p-2 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑"><Edit2 size={15} /></button>
+                    <button onClick={() => openEdit(n)} className="p-2 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={15} /></button>
                     <button onClick={() => toggleEnabled(n)} className="p-2 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title={n.enabled ? "禁用" : "启用"}>{n.enabled ? <EyeOff size={15} /> : <Eye size={15} />}</button>
-                    <button onClick={() => deleteNotice(n.id)} className="p-2 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除"><Trash2 size={15} /></button>
+                    <button onClick={() => deleteNotice(n.id)} className="p-2 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={15} /></button>
                   </div>
                 </div>
               </Card>
