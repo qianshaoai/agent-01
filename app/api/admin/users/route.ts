@@ -66,5 +66,5 @@ export async function GET(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ users: data ?? [], total: count ?? 0, page, pageSize });
+  return NextResponse.json({ data: data ?? [], pagination: { page, pageSize, total: count ?? 0 } });
 }

@@ -155,8 +155,8 @@ export default function AdminUsersPage() {
       if (orgFilter) params.set("org", orgFilter);
       const res = await fetch(`/api/admin/users?${params}`);
       const data = await res.json();
-      setUsers(data.users ?? []);
-      setTotal(data.total ?? 0);
+      setUsers(data.data ?? []);
+      setTotal(data.pagination?.total ?? 0);
     } finally {
       setLoading(false);
     }

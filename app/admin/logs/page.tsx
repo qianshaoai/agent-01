@@ -26,14 +26,17 @@ const ACTION_LABELS: Record<string, string> = { chat: "对话", login: "登录",
 export default function LogsPage() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [tenantFilter, setTenantFilter] = useState("all");
 
-  async function load() {
+  async function load(p = page) {
     setLoading(true);
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({ page: String(p), pageSize: String(pageSize) });
     if (search) params.set("search", search);
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (tenantFilter !== "all") params.set("tenantCode", tenantFilter);
@@ -42,14 +45,18 @@ export default function LogsPage() {
       fetch(`/api/admin/logs?${params}`).then((r) => r.json()),
       fetch("/api/admin/tenants").then((r) => r.json()),
     ]);
-    setLogs(Array.isArray(lr) ? lr : []);
+    setLogs(lr.data ?? []);
+    setTotal(lr.pagination?.total ?? 0);
     setTenants(Array.isArray(tr) ? tr : []);
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, [statusFilter, tenantFilter]);
+  useEffect(() => { setPage(1); load(1); }, [statusFilter, tenantFilter, pageSize]);
+  useEffect(() => { load(page); }, [page]);
 
-  function handleSearch(e: React.FormEvent) { e.preventDefault(); load(); }
+  function handleSearch(e: React.FormEvent) { e.preventDefault(); setPage(1); load(1); }
+
+  const totalPages = Math.ceil(total / pageSize);
 
   return (
     <AdminLayout>
@@ -58,9 +65,9 @@ export default function LogsPage() {
           icon={<FileText size={20} />}
           title="操作日志"
           subtitle="全量审计日志，可追溯所有用户行为"
-          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {logs.length} 条</span>}
+          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {total} 条</span>}
           actions={
-            <button onClick={load} className="flex items-center gap-1.5 px-3 h-9 rounded-[10px] text-[13px] text-gray-500 hover:bg-gray-100 transition-colors">
+            <button onClick={() => load()} className="flex items-center gap-1.5 px-3 h-9 rounded-[10px] text-[13px] text-gray-500 hover:bg-gray-100 transition-colors">
               <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> 刷新
             </button>
           }
@@ -132,6 +139,20 @@ export default function LogsPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+          {total > 0 && (
+            <div className="flex items-center justify-between px-5 py-3.5 border-t border-gray-100 bg-gray-50/30 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] text-gray-500">第 {page} / {totalPages} 页，共 {total} 条</span>
+                <select className="h-7 border border-gray-200 rounded-[6px] px-1.5 text-[12px] bg-white focus:outline-none" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                  {[50, 100].map((n) => <option key={n} value={n}>{n} 条/页</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="px-3 h-8 rounded-[8px] text-[12px] border border-gray-200 bg-white disabled:opacity-40 hover:bg-gray-50 transition-colors">上一页</button>
+                <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="px-3 h-8 rounded-[8px] text-[12px] border border-gray-200 bg-white disabled:opacity-40 hover:bg-gray-50 transition-colors">下一页</button>
+              </div>
             </div>
           )}
         </Card>
