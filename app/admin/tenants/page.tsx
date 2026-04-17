@@ -48,7 +48,7 @@ export default function TenantsPage() {
   async function load() {
     setLoading(true);
     const res = await fetch("/api/admin/tenants");
-    if (res.ok) setTenants(await res.json());
+    if (res.ok) { const d = await res.json(); setTenants(d.data ?? d); }
     setLoading(false);
   }
   useEffect(() => { load(); }, []);

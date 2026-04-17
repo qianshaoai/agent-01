@@ -351,7 +351,7 @@ export default function AdminUsersPage() {
   async function loadGroups() {
     setGroupsLoading(true);
     const res = await fetch("/api/admin/user-groups");
-    if (res.ok) setGroups(await res.json());
+    if (res.ok) { const d = await res.json(); setGroups(d.data ?? d); }
     setGroupsLoading(false);
   }
 
