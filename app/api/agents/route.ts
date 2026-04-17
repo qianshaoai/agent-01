@@ -46,13 +46,18 @@ export async function GET(req: NextRequest) {
     ? ((accessibleQuery.data ?? []) as { id: string }[]).map((a) => a.id)
     : ((accessibleQuery.data ?? []) as { resource_id: string }[]).map((r) => r.resource_id);
 
-  // 分类过滤：有分配记录 → 仅对指定组织显示；无分配记录 → 对所有人可见
+  // 分类过滤：
+  //   - 个人用户：始终看到全部分类
+  //   - 组织用户：若 tenant_categories 里配置过本组织 → 按配置过滤；否则兜底显示全部（兼容旧数据）
   const allCategories = categoriesQuery.data ?? [];
   const tcData = (tcQuery.data ?? []) as { category_id: string; tenant_code: string }[];
+  const hasAnyTenantConfig = tcData.some((r) => r.tenant_code === user.tenantCode);
   const allowedCatIds = new Set(tcData.filter((r) => r.tenant_code === user.tenantCode).map((r) => r.category_id));
   const categories = user.isPersonal
     ? allCategories
-    : allCategories.filter((cat) => allowedCatIds.has(cat.id));
+    : hasAnyTenantConfig
+      ? allCategories.filter((cat) => allowedCatIds.has(cat.id))
+      : allCategories;
 
   // ── 附加：为返回的智能体挂上 categoriesAll（多对多）────────────
   async function enrichWithCategories(agentList: Array<{ id: string; category_id?: string | null; [k: string]: unknown }>) {
