@@ -1,19 +1,20 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
-  const { data } = await db
+  const { page, pageSize, start } = parsePagination(req, 100);
+  const { data, count } = await db
     .from("tenants")
-    .select("id, code, name, quota, quota_used, expires_at, enabled, created_at")
+    .select("id, code, name, quota, quota_used, expires_at, enabled, created_at", { count: "exact" })
     .order("created_at", { ascending: false })
-    .limit(500);
+    .range(start, start + pageSize - 1);
 
-  return NextResponse.json(data ?? []);
+  return paginatedResponse(data ?? [], count ?? 0, page, pageSize);
 }
 
 export async function POST(req: NextRequest) {

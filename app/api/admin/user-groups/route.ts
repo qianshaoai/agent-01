@@ -1,16 +1,17 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
-  const { data, error } = await db
+  const { page, pageSize, start } = parsePagination(req, 100);
+  const { data, count, error } = await db
     .from("user_groups")
-    .select("id, name, description, tenant_code, created_at, user_group_members(count)")
+    .select("id, name, description, tenant_code, created_at, user_group_members(count)", { count: "exact" })
     .order("created_at", { ascending: true })
-    .limit(500);
+    .range(start, start + pageSize - 1);
 
   if (error) return dbError(error);
 
@@ -20,7 +21,7 @@ export async function GET() {
     member_count: g.user_group_members?.[0]?.count ?? 0,
     user_group_members: undefined,
   }));
-  return NextResponse.json(result);
+  return paginatedResponse(result, count ?? 0, page, pageSize);
 }
 
 export async function POST(req: NextRequest) {

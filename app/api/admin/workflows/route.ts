@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -7,10 +7,11 @@ export const dynamic = "force-dynamic";
 
 type WfPerm = { scope_type: string; scope_id: string | null };
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
 
+  const { page, pageSize, start } = parsePagination(req, 50);
   const [wfRes, permRes] = await Promise.all([
     db.from("workflows")
       .select(`
@@ -19,9 +20,9 @@ export async function GET() {
         workflow_steps (
           id, step_order, title, description, exec_type, agent_id, button_text, enabled
         )
-      `)
+      `, { count: "exact" })
       .order("sort_order", { ascending: true })
-      .limit(500),
+      .range(start, start + pageSize - 1),
     db.from("resource_permissions")
       .select("resource_id, scope_type, scope_id")
       .eq("resource_type", "workflow"),
@@ -43,7 +44,7 @@ export async function GET() {
     permissions: permMap.get(wf.id) ?? [],
   }));
 
-  return NextResponse.json(result);
+  return paginatedResponse(result, wfRes.count ?? 0, page, pageSize);
 }
 
 export async function POST(req: NextRequest) {

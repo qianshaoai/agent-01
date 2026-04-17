@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { PAGINATION } from "@/lib/config";
 
 type ErrorCode =
   | "UNAUTHORIZED"
@@ -41,4 +42,18 @@ export function dbError(error: { message?: string; code?: string } | null, fallb
   // 不暴露原始 message，用 fallback
   console.error("[db error]", error.code, error.message);
   return apiError(fallback);
+}
+
+/** 从请求中解析分页参数 */
+export function parsePagination(req: NextRequest, defaultSize = PAGINATION.DEFAULT_PAGE_SIZE) {
+  const sp = req.nextUrl.searchParams;
+  const page = Math.max(1, parseInt(sp.get("page") ?? "1"));
+  const pageSize = Math.min(PAGINATION.MAX_PAGE_SIZE, Math.max(1, parseInt(sp.get("pageSize") ?? String(defaultSize))));
+  const start = (page - 1) * pageSize;
+  return { page, pageSize, start };
+}
+
+/** 构造统一分页响应 */
+export function paginatedResponse<T>(data: T[], total: number, page: number, pageSize: number) {
+  return NextResponse.json({ data, pagination: { page, pageSize, total } });
 }

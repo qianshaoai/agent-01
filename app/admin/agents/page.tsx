@@ -92,9 +92,9 @@ export default function AgentsAdminPage() {
     setLoading(true);
     try {
       const [ar, cr, tr] = await Promise.all([
-        fetch("/api/admin/agents").then((r) => r.json()),
-        fetch("/api/admin/categories").then((r) => r.json()),
-        fetch("/api/admin/tenants").then((r) => r.json()),
+        fetch("/api/admin/agents").then((r) => r.json()).then(d => d.data ?? d),
+        fetch("/api/admin/categories").then((r) => r.json()).then(d => d.data ?? d),
+        fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
       ]);
       setAgents(Array.isArray(ar) ? ar : []);
       setCategories(Array.isArray(cr) ? cr : []);
@@ -126,9 +126,9 @@ export default function AgentsAdminPage() {
     if (needOrgData) {
       const [permsData, deptsData, teamsData, groupsData] = await Promise.all([
         permsPromise,
-        fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
-        fetch("/api/admin/teams").then(r => r.json()).catch(() => []),
-        fetch("/api/admin/user-groups").then(r => r.json()).catch(() => []),
+        fetch("/api/admin/departments").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
+        fetch("/api/admin/teams").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
+        fetch("/api/admin/user-groups").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
       ]);
       setPermissions(Array.isArray(permsData) ? permsData : []);
       setDepts(Array.isArray(deptsData) ? deptsData : []);

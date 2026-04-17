@@ -23,8 +23,8 @@ export default function DashboardPage() {
   useEffect(() => {
     Promise.all([
       fetch("/api/admin/analytics").then((r) => r.json()),
-      fetch("/api/admin/agents").then((r) => r.json()),
-      fetch("/api/admin/notices").then((r) => r.json()),
+      fetch("/api/admin/agents").then((r) => r.json()).then(d => d.data ?? d),
+      fetch("/api/admin/notices").then((r) => r.json()).then(d => d.data ?? d),
     ]).then(([analytics, agents, notices]) => {
       setData(analytics);
       setAgentCount(Array.isArray(agents) ? agents.length : 0);

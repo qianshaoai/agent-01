@@ -1,18 +1,19 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
-  const { data } = await db
+  const { page, pageSize, start } = parsePagination(req, 100);
+  const { data, count } = await db
     .from("categories")
-    .select("id, name, sort_order, icon_url")
+    .select("id, name, sort_order, icon_url", { count: "exact" })
     .order("sort_order")
-    .limit(500);
+    .range(start, start + pageSize - 1);
 
-  return NextResponse.json(data ?? []);
+  return paginatedResponse(data ?? [], count ?? 0, page, pageSize);
 }
 
 export async function POST(req: NextRequest) {

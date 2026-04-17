@@ -120,12 +120,12 @@ export default function WorkflowsAdminPage() {
     setLoading(true);
     try {
       const [wr, ar, cr, tr, dr, teamsR] = await Promise.all([
-        fetch("/api/admin/workflows").then((r) => r.json()),
-        fetch("/api/admin/agents").then((r) => r.json()),
-        fetch("/api/admin/wf-categories").then((r) => r.json()),
-        fetch("/api/admin/tenants").then((r) => r.json()),
-        fetch("/api/admin/departments").then((r) => r.json()).catch(() => []),
-        fetch("/api/admin/teams").then((r) => r.json()).catch(() => []),
+        fetch("/api/admin/workflows").then((r) => r.json()).then(d => d.data ?? d),
+        fetch("/api/admin/agents").then((r) => r.json()).then(d => d.data ?? d),
+        fetch("/api/admin/wf-categories").then((r) => r.json()).then(d => d.data ?? d),
+        fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
+        fetch("/api/admin/departments").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
+        fetch("/api/admin/teams").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
       ]);
       setWorkflows(Array.isArray(wr) ? wr : []);
       setAgents(Array.isArray(ar) ? ar : []);
@@ -244,7 +244,7 @@ export default function WorkflowsAdminPage() {
     const steps = [...(wf?.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
     // 如果是插入，新步骤已用 insertAfterOrder+1，这里按当前顺序重排
     // 先 reload 拿最新列表再重排
-    const res = await fetch(`/api/admin/workflows`).then(r => r.json()).catch(() => []);
+    const res = await fetch(`/api/admin/workflows`).then(r => r.json()).then(d => d.data ?? d).catch(() => []);
     const fresh = (Array.isArray(res) ? res : []).find((w: { id: string }) => w.id === workflowId);
     const freshSteps: WorkflowStep[] = fresh?.workflow_steps
       ? [...fresh.workflow_steps].sort((a: WorkflowStep, b: WorkflowStep) => a.step_order - b.step_order)

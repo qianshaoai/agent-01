@@ -172,8 +172,8 @@ export default function AdminUsersPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/admin/tenants").then(r => r.json()).catch(() => []),
-      fetch("/api/admin/departments").then(r => r.json()).catch(() => []),
+      fetch("/api/admin/tenants").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
+      fetch("/api/admin/departments").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
       fetch("/api/admin/me", { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([tr, dr, me]) => {
       setTenants(Array.isArray(tr) ? tr : []);

@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -6,15 +6,16 @@ import { encrypt } from "@/lib/crypto";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
 
+  const { page, pageSize, start } = parsePagination(req, 50);
   const [agentsRes, rpRes, acRes, catRes] = await Promise.all([
     db.from("agents")
-      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params")
+      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(500),
+      .range(start, start + pageSize - 1),
     db.from("resource_permissions").select("resource_id, scope_type, scope_id").eq("resource_type", "agent"),
     db.from("agent_categories").select("agent_id, category_id"),
     db.from("categories").select("id, name, icon_url"),
@@ -55,7 +56,7 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json(masked);
+  return paginatedResponse(masked, agentsRes.count ?? 0, page, pageSize);
 }
 
 export async function POST(req: NextRequest) {

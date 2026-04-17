@@ -22,8 +22,8 @@ export default function NoticesPage() {
   async function load() {
     setLoading(true);
     const [nr, tr] = await Promise.all([
-      fetch("/api/admin/notices").then((r) => r.json()),
-      fetch("/api/admin/tenants").then((r) => r.json()),
+      fetch("/api/admin/notices").then((r) => r.json()).then(d => d.data ?? d),
+      fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
     ]);
     setNotices(Array.isArray(nr) ? nr : []);
     setTenants(Array.isArray(tr) ? tr : []);

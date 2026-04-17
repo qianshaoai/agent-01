@@ -1,28 +1,28 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
 
+  const { page, pageSize, start } = parsePagination(req, 50);
   let query = db
     .from("notices")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(500);
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false });
 
   // 组织管理员只能看自己组织的公告 + 全局公告
   if (admin.role === "org_admin") {
-    if (!admin.tenantCode) return NextResponse.json([]);
+    if (!admin.tenantCode) return paginatedResponse([], 0, page, pageSize);
     query = query.or(`tenant_code.is.null,tenant_code.eq.${admin.tenantCode}`);
   }
 
-  const { data } = await query;
-  return NextResponse.json(data ?? []);
+  const { data, count } = await query.range(start, start + pageSize - 1);
+  return paginatedResponse(data ?? [], count ?? 0, page, pageSize);
 }
 
 export async function POST(req: NextRequest) {

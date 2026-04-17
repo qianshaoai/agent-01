@@ -43,7 +43,7 @@ export default function LogsPage() {
 
     const [lr, tr] = await Promise.all([
       fetch(`/api/admin/logs?${params}`).then((r) => r.json()),
-      fetch("/api/admin/tenants").then((r) => r.json()),
+      fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
     ]);
     setLogs(lr.data ?? []);
     setTotal(lr.pagination?.total ?? 0);

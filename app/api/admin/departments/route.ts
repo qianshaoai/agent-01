@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -6,13 +6,14 @@ import { db } from "@/lib/db";
 export async function GET(req: NextRequest) {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
+  const { page, pageSize, start } = parsePagination(req, 100);
   const tenantCode = req.nextUrl.searchParams.get("tenantCode");
-  let query = db.from("departments").select("*").order("sort_order").order("created_at").limit(500);
+  let query = db.from("departments").select("*", { count: "exact" }).order("sort_order").order("created_at");
   if (tenantCode) query = query.eq("tenant_code", tenantCode);
 
-  const { data, error } = await query;
+  const { data, count, error } = await query.range(start, start + pageSize - 1);
   if (error) return dbError(error);
-  return NextResponse.json(data ?? []);
+  return paginatedResponse(data ?? [], count ?? 0, page, pageSize);
 }
 
 export async function POST(req: NextRequest) {

@@ -61,9 +61,9 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/admin/tenants").then(r => r.ok ? r.json() : []).catch(() => []),
-      fetch("/api/admin/departments").then(r => r.ok ? r.json() : []).catch(() => []),
-      fetch("/api/admin/teams").then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch("/api/admin/tenants").then(r => r.ok ? r.json() : []).then(d => d.data ?? d).catch(() => []),
+      fetch("/api/admin/departments").then(r => r.ok ? r.json() : []).then(d => d.data ?? d).catch(() => []),
+      fetch("/api/admin/teams").then(r => r.ok ? r.json() : []).then(d => d.data ?? d).catch(() => []),
     ]).then(([t, d, tm]) => {
       setTenants(Array.isArray(t) ? t : []);
       setDepts(Array.isArray(d) ? d : []);
