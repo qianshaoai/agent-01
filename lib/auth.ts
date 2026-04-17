@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
+import { AUTH } from "@/lib/config";
 
 // JWT_SECRET 必须在环境变量中配置，缺失时立即报错防止使用不安全的默认值
 const JWT_SECRET_RAW = process.env.JWT_SECRET;
@@ -133,7 +134,7 @@ export async function getPayloadFromRequest(
 const secureCookie = process.env.NODE_ENV === "production" ? "; Secure" : "";
 
 export function buildSetCookieHeader(token: string): string {
-  const maxAge = 30 * 24 * 60 * 60;
+  const maxAge = AUTH.COOKIE_MAX_AGE_SEC;
   return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookie}`;
 }
 
@@ -142,7 +143,7 @@ export function buildClearCookieHeader(): string {
 }
 
 export function buildAdminSetCookieHeader(token: string): string {
-  const maxAge = 30 * 24 * 60 * 60;
+  const maxAge = AUTH.COOKIE_MAX_AGE_SEC;
   return `${ADMIN_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookie}`;
 }
 

@@ -1,5 +1,6 @@
 import { getCurrentUser, getCurrentAdmin, UserPayload, AdminPayload, AdminRole } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { apiError } from "@/lib/api-error";
 
 // UserPayload enriched with DB-fresh status and nickname.
 // Use this in API routes that must enforce account status.
@@ -73,4 +74,26 @@ export async function getActiveAdmin(): Promise<AdminPayload | null> {
     role: dbUser.role as AdminRole,
     tenantCode: dbUser.role === "org_admin" ? (dbUser.tenant_code ?? null) : null,
   };
+}
+
+/**
+ * 鉴权辅助：要求管理员登录，否则返回 401 Response。
+ * 用法：
+ *   const result = await requireAdmin();
+ *   if (result instanceof Response) return result;
+ *   const admin = result; // AdminPayload
+ */
+export async function requireAdmin(): Promise<AdminPayload | Response> {
+  const admin = await getActiveAdmin();
+  if (!admin) return apiError("未登录或权限已变更", "UNAUTHORIZED");
+  return admin;
+}
+
+/**
+ * 鉴权辅助：要求用户登录，否则返回 401 Response。
+ */
+export async function requireUser(): Promise<ActiveUser | Response> {
+  const user = await getActiveUser();
+  if (!user) return apiError("未登录", "UNAUTHORIZED");
+  return user;
 }

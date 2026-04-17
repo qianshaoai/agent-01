@@ -4,15 +4,17 @@
 //   - 对于暴力破解场景（单 IP 持续请求命中同一实例）足够用
 //   - 想要强保证需要接入 Redis/KV，属于下一阶段
 
+import { RATE_LIMIT } from "@/lib/config";
+
 type WindowEntry = {
   count: number;        // 窗口内失败次数
   firstAt: number;      // 窗口起点（毫秒时间戳）
   lockedUntil?: number; // 锁定结束时间（毫秒时间戳）
 };
 
-const WINDOW_MS = 15 * 60 * 1000; // 15 分钟窗口
-const MAX_FAIL = 5;               // 窗口内 5 次失败后锁定
-const LOCK_MS = 15 * 60 * 1000;   // 锁定 15 分钟
+const WINDOW_MS = RATE_LIMIT.WINDOW_MS;
+const MAX_FAIL = RATE_LIMIT.MAX_FAIL;
+const LOCK_MS = RATE_LIMIT.LOCK_MS;
 
 const store = new Map<string, WindowEntry>();
 
