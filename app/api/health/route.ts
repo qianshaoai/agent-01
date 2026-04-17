@@ -1,10 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { withRequestLog } from "@/lib/request-logger";
 
 export const dynamic = "force-dynamic";
 
-export const GET = withRequestLog(async (_req: NextRequest) => {
+export async function GET() {
   const start = Date.now();
 
   let dbStatus: "ok" | "error" = "ok";
@@ -31,4 +30,4 @@ export const GET = withRequestLog(async (_req: NextRequest) => {
     },
     { status: healthy ? 200 : 503 }
   );
-});
+}

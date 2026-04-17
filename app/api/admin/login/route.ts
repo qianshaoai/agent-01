@@ -4,9 +4,8 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signToken, buildAdminSetCookieHeader, AdminRole } from "@/lib/auth";
 import { checkLoginRate, recordLoginFail, clearLoginFail } from "@/lib/rate-limit";
-import { withRequestLog } from "@/lib/request-logger";
 
-export const POST = withRequestLog(async (req: NextRequest) => {
+export async function POST(req: NextRequest) {
   const { username, password } = await req.json();
   if (!username || !password) {
     return apiError("请填写用户名和密码", "VALIDATION_ERROR");
@@ -127,4 +126,4 @@ export const POST = withRequestLog(async (req: NextRequest) => {
     { ok: true, mustChangePassword },
     { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
   );
-});
+}
