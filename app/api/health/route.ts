@@ -1,20 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { withRequestLog } from "@/lib/request-logger";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withRequestLog(async (_req: NextRequest) => {
   const start = Date.now();
 
-  // 数据库连通性检查
   let dbStatus: "ok" | "error" = "ok";
-  let dbError: string | undefined;
+  let dbErr: string | undefined;
   try {
     const { error } = await db.from("admins").select("id", { count: "exact", head: true });
-    if (error) { dbStatus = "error"; dbError = "query failed"; }
+    if (error) { dbStatus = "error"; dbErr = "query failed"; }
   } catch {
     dbStatus = "error";
-    dbError = "connection failed";
+    dbErr = "connection failed";
   }
 
   const healthy = dbStatus === "ok";
@@ -25,10 +25,10 @@ export async function GET() {
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       checks: {
-        database: { status: dbStatus, ...(dbError ? { error: dbError } : {}) },
+        database: { status: dbStatus, ...(dbErr ? { error: dbErr } : {}) },
       },
       responseTime: Date.now() - start,
     },
     { status: healthy ? 200 : 503 }
   );
-}
+});

@@ -14,7 +14,7 @@ export async function GET() {
     db.from("agents")
       .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params")
       .order("created_at", { ascending: false })
-      .limit(2000),
+      .limit(500),
     db.from("resource_permissions").select("resource_id, scope_type, scope_id").eq("resource_type", "agent"),
     db.from("agent_categories").select("agent_id, category_id"),
     db.from("categories").select("id, name, icon_url"),

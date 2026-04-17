@@ -3,8 +3,9 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signToken, buildAdminSetCookieHeader, AdminRole } from "@/lib/auth";
 import { checkLoginRate, recordLoginFail, clearLoginFail } from "@/lib/rate-limit";
+import { withRequestLog } from "@/lib/request-logger";
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog(async (req: NextRequest) => {
   const { username, password } = await req.json();
   if (!username || !password) {
     return NextResponse.json({ error: "请填写用户名和密码" }, { status: 400 });
@@ -125,4 +126,4 @@ export async function POST(req: NextRequest) {
     { ok: true, mustChangePassword },
     { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
   );
-}
+});

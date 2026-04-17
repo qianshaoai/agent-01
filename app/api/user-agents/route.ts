@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -45,6 +46,6 @@ export async function POST(req: NextRequest) {
     model_params: modelParams ?? {},
   }).select("id, name, description, agent_type, platform, api_url, external_url, model_params, enabled, created_at").single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json(data, { status: 201 });
 }

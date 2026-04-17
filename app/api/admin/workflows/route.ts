@@ -21,13 +21,13 @@ export async function GET() {
         )
       `)
       .order("sort_order", { ascending: true })
-      .limit(1000),
+      .limit(500),
     db.from("resource_permissions")
       .select("resource_id, scope_type, scope_id")
       .eq("resource_type", "workflow"),
   ]);
 
-  if (wfRes.error) return NextResponse.json({ error: wfRes.error.message }, { status: 500 });
+  if (wfRes.error) return dbError(wfRes.error);
 
   const permMap = new Map<string, WfPerm[]>();
   for (const p of (permRes.data ?? []) as { resource_id: string; scope_type: string; scope_id: string | null }[]) {

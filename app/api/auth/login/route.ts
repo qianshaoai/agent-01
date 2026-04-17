@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signToken, buildSetCookieHeader } from "@/lib/auth";
 import { checkLoginRate, recordLoginFail, clearLoginFail } from "@/lib/rate-limit";
+import { withRequestLog } from "@/lib/request-logger";
 
 function statusError(status: string) {
   if (status === "cancelled") return "该账号已注销，无法登录";
@@ -11,7 +12,7 @@ function statusError(status: string) {
   return "账号状态异常";
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog(async (req: NextRequest) => {
   try {
     const body = await req.json();
     const identifier: string = (body.identifier ?? body.phone ?? "").trim();
@@ -107,4 +108,4 @@ export async function POST(req: NextRequest) {
     console.error("[login]", e);
     return NextResponse.json({ error: "服务器错误，请稍后重试" }, { status: 500 });
   }
-}
+});

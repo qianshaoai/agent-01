@@ -14,26 +14,27 @@ type LogEntry = {
   path: string;
   status: number;
   durationMs: number;
-  userId?: string;
   error?: string;
 };
 
-/** 包裹 API handler，自动记录请求日志（requestId、method、path、耗时、状态码） */
-export function withRequestLog(
-  handler: (req: NextRequest, ctx: { requestId: string }) => Promise<Response>
+/**
+ * 包裹 API handler，自动记录请求日志。
+ * 用法：export const GET = withRequestLog(async (req) => { ... return NextResponse.json(...); });
+ */
+export function withRequestLog<T extends unknown[]>(
+  handler: (req: NextRequest, ...args: T) => Promise<Response>
 ) {
-  return async (req: NextRequest, ...args: unknown[]): Promise<Response> => {
+  return async (req: NextRequest, ...args: T): Promise<Response> => {
     const requestId = generateRequestId();
     const start = Date.now();
     let status = 200;
     let errorMsg: string | undefined;
 
     try {
-      // 透传 Next.js 的 route params（第二个参数）
-      const res = await (handler as Function)(req, { requestId, ...(args[0] as object ?? {}) });
+      const res = await handler(req, ...args);
       status = res.status;
 
-      // 将 requestId 注入响应头，方便前端/调试追踪
+      // 注入 requestId 响应头
       const headers = new Headers(res.headers);
       headers.set("X-Request-Id", requestId);
       return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
@@ -51,7 +52,6 @@ export function withRequestLog(
       };
       if (errorMsg) entry.error = errorMsg;
 
-      // 结构化日志输出
       if (status >= 500) {
         console.error("[API]", JSON.stringify(entry));
       } else if (status >= 400) {
