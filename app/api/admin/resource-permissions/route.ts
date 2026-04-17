@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
   if (scopeId) query = query.eq("scope_id", scopeId);
 
   const { data, error } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
 
   const perms = data ?? [];
 
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest) {
 
   if (error) {
     if (error.code === "23505") return NextResponse.json({ error: "该权限已存在" }, { status: 409 });
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return dbError(error);
   }
   return NextResponse.json(data, { status: 201 });
 }
@@ -94,6 +95,6 @@ export async function DELETE(req: NextRequest) {
 
   const { id } = await req.json();
   const { error } = await db.from("resource_permissions").delete().eq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json({ ok: true });
 }

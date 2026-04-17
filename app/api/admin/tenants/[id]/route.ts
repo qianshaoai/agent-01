@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getActiveAdmin } from "@/lib/session";
@@ -40,7 +41,7 @@ export async function PATCH(
     .select()
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json(data);
 }
 
@@ -90,6 +91,6 @@ export async function DELETE(
   //   tenant 删除时 departments 会自动级联，teams 会跟着 departments 级联
 
   const { error } = await db.from("tenants").delete().eq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json({ ok: true });
 }

@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -59,7 +60,7 @@ export async function PATCH(
       .eq("id", id);
     if (error) {
       if (error.code === "23505") return NextResponse.json({ error: "该编号已被其他智能体使用，请换一个编号" }, { status: 409 });
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return dbError(error);
     }
   }
 

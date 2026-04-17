@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -97,7 +98,7 @@ export async function POST(req: NextRequest) {
     if (error.code === "23505") {
       return NextResponse.json({ error: "智能体编号已存在" }, { status: 409 });
     }
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return dbError(error);
   }
 
   if (catIds.length > 0) {

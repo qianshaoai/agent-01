@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -27,7 +28,7 @@ export async function PATCH(
       .from("workflows")
       .update(updates)
       .eq("id", id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return dbError(error);
   }
 
   // 更新分类关联（全量替换）
@@ -82,6 +83,6 @@ export async function DELETE(
     .eq("resource_id", id);
 
   const { error } = await db.from("workflows").delete().eq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json({ ok: true });
 }

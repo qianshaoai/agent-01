@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getActiveAdmin } from "@/lib/session";
@@ -9,7 +10,8 @@ export async function GET() {
   const { data } = await db
     .from("tenants")
     .select("id, code, name, quota, quota_used, expires_at, enabled, created_at")
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(500);
 
   return NextResponse.json(data ?? []);
 }
@@ -45,7 +47,7 @@ export async function POST(req: NextRequest) {
     if (error.code === "23505") {
       return NextResponse.json({ error: "组织码已存在" }, { status: 409 });
     }
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return dbError(error);
   }
 
   return NextResponse.json(data, { status: 201 });

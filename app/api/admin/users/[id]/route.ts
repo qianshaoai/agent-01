@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { canAssignRole, canManageTarget } from "@/lib/auth";
@@ -44,7 +45,7 @@ export async function PATCH(
       return NextResponse.json({ error: "状态值无效" }, { status: 400 });
     }
     const { error } = await db.from("users").update({ status }).eq("id", id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return dbError(error);
     return NextResponse.json({ ok: true });
   }
 
@@ -76,7 +77,7 @@ export async function PATCH(
       return NextResponse.json({ error: "无权将用户设置为该角色（不能高于或等于自己）" }, { status: 403 });
     }
     const { error } = await db.from("users").update({ role }).eq("id", id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return dbError(error);
     return NextResponse.json({ ok: true });
   }
 
@@ -88,7 +89,7 @@ export async function PATCH(
       team_id: teamId || null,
     };
     const { error } = await db.from("users").update(updates).eq("id", id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return dbError(error);
     return NextResponse.json({ ok: true });
   }
 
@@ -103,7 +104,7 @@ export async function PATCH(
       .from("users")
       .update({ pwd_hash, first_login: true })
       .eq("id", id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return dbError(error);
     return NextResponse.json({ ok: true });
   }
 
@@ -112,7 +113,7 @@ export async function PATCH(
   //   但列表查询会过滤掉这些行，对上层等同于"删除"。
   if (body.action === "soft-delete" || body.action === "delete") {
     const { error } = await db.from("users").update({ status: "deleted" }).eq("id", id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return dbError(error);
     return NextResponse.json({ ok: true });
   }
 

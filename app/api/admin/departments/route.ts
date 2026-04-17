@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -6,11 +7,11 @@ export async function GET(req: NextRequest) {
   if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
 
   const tenantCode = req.nextUrl.searchParams.get("tenantCode");
-  let query = db.from("departments").select("*").order("sort_order").order("created_at");
+  let query = db.from("departments").select("*").order("sort_order").order("created_at").limit(500);
   if (tenantCode) query = query.eq("tenant_code", tenantCode);
 
   const { data, error } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json(data ?? []);
 }
 
@@ -28,6 +29,6 @@ export async function POST(req: NextRequest) {
     .select()
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json(data, { status: 201 });
 }

@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getActiveAdmin } from "@/lib/session";
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
       .from("users")
       .update({ pwd_hash: newHash, first_login: false })
       .eq("id", admin.adminId);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return dbError(error);
     return NextResponse.json({ ok: true });
   }
 
@@ -60,6 +61,6 @@ export async function POST(req: NextRequest) {
     .from("admins")
     .update({ pwd_hash: newHash })
     .eq("id", admin.adminId);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json({ ok: true });
 }

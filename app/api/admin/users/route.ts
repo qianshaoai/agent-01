@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -64,7 +65,7 @@ export async function GET(req: NextRequest) {
     .order("created_at", { ascending: false })
     .range(start, start + pageSize - 1);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
 
   return NextResponse.json({ data: data ?? [], pagination: { page, pageSize, total: count ?? 0 } });
 }

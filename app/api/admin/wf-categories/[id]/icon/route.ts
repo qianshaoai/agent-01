@@ -1,3 +1,4 @@
+import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -34,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
 
   const { error } = await db.from("wf_categories").update({ icon_url: publicUrl }).eq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
 
   return NextResponse.json({ url: publicUrl });
 }
@@ -47,6 +48,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
   const { id } = await params;
   const { error } = await db.from("wf_categories").update({ icon_url: null }).eq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return dbError(error);
   return NextResponse.json({ ok: true });
 }
