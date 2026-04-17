@@ -301,12 +301,12 @@ export default function AdminUsersPage() {
     // 加载部门列表
     const res = await fetch(`/api/admin/departments?tenantCode=${encodeURIComponent(u.tenant_code)}`);
     const data = await res.json();
-    setDeptOptions(Array.isArray(data) ? data : []);
+    setDeptOptions(Array.isArray(data.data ?? data) ? (data.data ?? data) : []);
     // 如果已有部门，加载对应小组
     if (u.dept_id) {
       const tRes = await fetch(`/api/admin/teams?deptId=${u.dept_id}`);
       const tData = await tRes.json();
-      setTeamOptions(Array.isArray(tData) ? tData : []);
+      setTeamOptions(Array.isArray(tData.data ?? tData) ? (tData.data ?? tData) : []);
     }
   }
 
@@ -316,8 +316,8 @@ export default function AdminUsersPage() {
     setTeamOptions([]);
     if (!deptId) return;
     const res = await fetch(`/api/admin/teams?deptId=${deptId}`);
-    const data = await res.json();
-    setTeamOptions(Array.isArray(data) ? data : []);
+    const raw = await res.json();
+    setTeamOptions(Array.isArray(raw.data ?? raw) ? (raw.data ?? raw) : []);
   }
 
   async function doSetDept() {
@@ -377,7 +377,7 @@ export default function AdminUsersPage() {
 
   async function loadGroupMembers(groupId: string) {
     const res = await fetch(`/api/admin/user-groups/${groupId}/members`);
-    if (res.ok) { const d = await res.json(); setGroupMembers((prev) => ({ ...prev, [groupId]: d })); }
+    if (res.ok) { const d = await res.json(); setGroupMembers((prev) => ({ ...prev, [groupId]: d.data ?? d })); }
   }
 
   async function toggleGroupExpand(groupId: string) {
@@ -395,7 +395,7 @@ export default function AdminUsersPage() {
     if (!q.trim()) { setAddMemberResults([]); return; }
     setAddMemberLoading(true);
     const res = await fetch(`/api/admin/users?search=${encodeURIComponent(q)}&pageSize=10&page=1`);
-    if (res.ok) { const d = await res.json(); setAddMemberResults(d.users ?? []); }
+    if (res.ok) { const d = await res.json(); setAddMemberResults(d.data ?? d.users ?? []); }
     setAddMemberLoading(false);
   }
 

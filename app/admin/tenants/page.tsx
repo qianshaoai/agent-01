@@ -68,7 +68,8 @@ export default function TenantsPage() {
   async function loadDepts(tenantCode: string) {
     const res = await fetch(`/api/admin/departments?tenantCode=${tenantCode}`);
     if (res.ok) {
-      const data: Department[] = await res.json();
+      const raw = await res.json();
+      const data: Department[] = raw.data ?? raw;
       setDepartments((prev) => ({ ...prev, [tenantCode]: data }));
       // 预加载所有部门的小组
       for (const dept of data) {
@@ -80,7 +81,8 @@ export default function TenantsPage() {
   async function loadTeams(deptId: string) {
     const res = await fetch(`/api/admin/teams?deptId=${deptId}`);
     if (res.ok) {
-      const data: Team[] = await res.json();
+      const raw = await res.json();
+      const data: Team[] = raw.data ?? raw;
       setTeams((prev) => ({ ...prev, [deptId]: data }));
     }
   }
