@@ -1,7 +1,7 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -13,8 +13,8 @@ export const dynamic = "force-dynamic";
  * - 默认 admins 表的账号也支持走此接口
  */
 export async function POST(req: NextRequest) {
-  const admin = await getActiveAdmin();
-  if (!admin) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { oldPassword, newPassword } = await req.json();
   if (!newPassword || newPassword.length < 8) {

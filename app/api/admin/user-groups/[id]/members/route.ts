@@ -1,10 +1,10 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { id } = await params;
 
@@ -18,7 +18,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { id } = await params;
   const { userIds } = await req.json();
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { id } = await params;
   const { userId } = await req.json();

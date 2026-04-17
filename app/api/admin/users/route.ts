@@ -1,17 +1,18 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { PAGINATION } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const admin = await getActiveAdmin();
-  if (!admin) return NextResponse.json({ error: "未登录或权限已变更" }, { status: 401 });
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { searchParams } = req.nextUrl;
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1"));
-  const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get("pageSize") ?? "20")));
+  const pageSize = Math.min(PAGINATION.MAX_PAGE_SIZE, Math.max(1, parseInt(searchParams.get("pageSize") ?? String(PAGINATION.DEFAULT_PAGE_SIZE))));
   const search = searchParams.get("search")?.trim() ?? "";
   const statusFilter = searchParams.get("status") ?? "";
 

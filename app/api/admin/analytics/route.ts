@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const admin = await getActiveAdmin();
-  if (!admin) return NextResponse.json({ error: "未授权或权限已变更" }, { status: 401 });
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { searchParams } = req.nextUrl;
   const tenantFilter = searchParams.get("tenantCode") ?? "";

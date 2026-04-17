@@ -4,8 +4,8 @@ import { db } from "@/lib/db";
 import { streamChat, ChatMessage } from "@/lib/adapters";
 import { decrypt } from "@/lib/crypto";
 
-// 上下文窗口：最多取最近 N 轮（每轮 = user + assistant）
-const MAX_CONTEXT_TURNS = 20;
+import { CHAT } from "@/lib/config";
+const MAX_CONTEXT_TURNS = CHAT.MAX_CONTEXT_TURNS;
 
 export async function POST(
   req: NextRequest,

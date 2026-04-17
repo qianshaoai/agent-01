@@ -1,14 +1,15 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 // 上传/替换智能体分类图标
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await getActiveAdmin();
-  if (!admin || admin.role === "org_admin") {
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  if (admin.role === "org_admin") {
     return NextResponse.json({ error: "无权操作" }, { status: 403 });
   }
 
@@ -42,8 +43,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
 // 删除分类图标
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await getActiveAdmin();
-  if (!admin || admin.role === "org_admin") {
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  if (admin.role === "org_admin") {
     return NextResponse.json({ error: "无权操作" }, { status: 403 });
   }
 

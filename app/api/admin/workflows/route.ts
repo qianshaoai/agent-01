@@ -1,6 +1,6 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 type WfPerm = { scope_type: string; scope_id: string | null };
 
 export async function GET() {
-  const admin = await getActiveAdmin();
-  if (!admin) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const [wfRes, permRes] = await Promise.all([
     db.from("workflows")
@@ -47,8 +47,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await getActiveAdmin();
-  if (!admin) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { name, description, category, sortOrder, enabled, visibleTo, categoryIds, permissions } = await req.json();
 

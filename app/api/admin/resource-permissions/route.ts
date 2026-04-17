@@ -1,6 +1,6 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -18,7 +18,7 @@ function getScopeLabel(scopeType: string, scopeId: string | null, maps: any) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { searchParams } = req.nextUrl;
   const resourceType = searchParams.get("resource_type");
@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { resourceType, resourceId, scopeType, scopeId } = await req.json();
   if (!resourceType || !resourceId || !scopeType) {
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { id } = await req.json();
   const { error } = await db.from("resource_permissions").delete().eq("id", id);

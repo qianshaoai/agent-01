@@ -1,13 +1,13 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { id } = await params;
   const body = await req.json();
@@ -37,7 +37,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { id } = await params;
   const { error } = await db.from("workflow_steps").delete().eq("id", id);

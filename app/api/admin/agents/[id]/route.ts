@@ -1,6 +1,6 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 
@@ -10,8 +10,8 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await getActiveAdmin();
-  if (!admin) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { id } = await params;
   const body = await req.json();

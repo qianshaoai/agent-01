@@ -1,11 +1,11 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function GET() {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { data } = await db
     .from("tenants")
@@ -17,7 +17,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { code, name, initialPwd, quota, expiresAt } = await req.json();
   if (!code || !name || !initialPwd || !quota || !expiresAt) {

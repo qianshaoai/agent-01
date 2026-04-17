@@ -1,14 +1,14 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const admin = await getActiveAdmin();
-  if (!admin) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const [agentsRes, rpRes, acRes, catRes] = await Promise.all([
     db.from("agents")
@@ -59,8 +59,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await getActiveAdmin();
-  if (!admin) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const body = await req.json();
   const { agentCode, name, description, platform, agentType, externalUrl, apiEndpoint, apiKey, modelParams } = body;

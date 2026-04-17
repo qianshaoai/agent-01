@@ -1,10 +1,10 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function GET(req: NextRequest) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const deptId = req.nextUrl.searchParams.get("deptId");
   const tenantCode = req.nextUrl.searchParams.get("tenantCode");
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { deptId, tenantCode, name, sortOrder } = await req.json();
   if (!deptId || !tenantCode || !name?.trim()) {

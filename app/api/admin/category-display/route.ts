@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getActiveAdmin } from "@/lib/session";
+import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 // GET /api/admin/category-display?agentId=X
 // 返回该智能体在所有分类下的展示状态
 export async function GET(req: NextRequest) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { searchParams } = new URL(req.url);
   const agentId = searchParams.get("agentId");
@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
 // 支持单条 { agentId, categoryId, isManual, isHidden }
 // 或批量 { agentId, items: [{ categoryId, isManual, isHidden }, ...] }
 export async function PATCH(req: NextRequest) {
-  if (!(await getActiveAdmin())) return NextResponse.json({ error: "未授权" }, { status: 401 });
+  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const body = await req.json();
   const { agentId } = body;
