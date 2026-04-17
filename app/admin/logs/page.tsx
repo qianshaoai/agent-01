@@ -1,10 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
-import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
-import { Search, Filter, Clock, AlertCircle, CheckCircle2, LogIn, Upload, MessageSquare, RefreshCw, FileText } from "lucide-react";
+import { Search, Clock, AlertCircle, CheckCircle2, LogIn, Upload, MessageSquare, RefreshCw, FileText } from "lucide-react";
 
 type Log = {
   id: string;
@@ -51,10 +50,29 @@ export default function LogsPage() {
     setLoading(false);
   }
 
-  useEffect(() => { setPage(1); load(1); }, [statusFilter, tenantFilter, pageSize]);
-  useEffect(() => { load(page); }, [page]);
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (search) params.set("search", search);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (tenantFilter !== "all") params.set("tenantCode", tenantFilter);
 
-  function handleSearch(e: React.FormEvent) { e.preventDefault(); setPage(1); load(1); }
+    Promise.all([
+      fetch(`/api/admin/logs?${params}`).then((r) => r.json()),
+      fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
+    ]).then(([lr, tr]) => {
+      if (cancelled) return;
+      setLogs(lr.data ?? []);
+      setTotal(lr.pagination?.total ?? 0);
+      setTenants(Array.isArray(tr) ? tr : []);
+      setLoading(false);
+    }).catch(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, pageSize, statusFilter, tenantFilter]);
+
+  function handleSearch(e: React.FormEvent) { e.preventDefault(); if (page !== 1) setPage(1); else load(1); }
 
   const totalPages = Math.ceil(total / pageSize);
 
@@ -79,12 +97,12 @@ export default function LogsPage() {
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input className="w-full h-10 pl-9 pr-4 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" placeholder="手机号、组织码、智能体…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
-            <select className="h-10 px-3 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7]" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <select className="h-10 px-3 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7]" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
               <option value="all">全部状态</option>
               <option value="success">成功</option>
               <option value="error">失败</option>
             </select>
-            <select className="h-10 px-3 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7]" value={tenantFilter} onChange={(e) => setTenantFilter(e.target.value)}>
+            <select className="h-10 px-3 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7]" value={tenantFilter} onChange={(e) => { setTenantFilter(e.target.value); setPage(1); }}>
               <option value="all">全部组织</option>
               {tenants.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
             </select>
@@ -145,7 +163,7 @@ export default function LogsPage() {
             <div className="flex items-center justify-between px-5 py-3.5 border-t border-gray-100 bg-gray-50/30 flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="text-[12px] text-gray-500">第 {page} / {totalPages} 页，共 {total} 条</span>
-                <select className="h-7 border border-gray-200 rounded-[6px] px-1.5 text-[12px] bg-white focus:outline-none" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                <select className="h-7 border border-gray-200 rounded-[6px] px-1.5 text-[12px] bg-white focus:outline-none" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
                   {[50, 100].map((n) => <option key={n} value={n}>{n} 条/页</option>)}
                 </select>
               </div>

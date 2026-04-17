@@ -57,7 +57,25 @@ export default function AnalyticsPage() {
     setLoading(false);
   }, [days, tenantFilter, deptFilter, teamFilter, userSearch]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams({ days: String(days) });
+    if (tenantFilter) params.set("tenantCode", tenantFilter);
+    if (deptFilter) params.set("deptId", deptFilter);
+    if (teamFilter) params.set("teamId", teamFilter);
+    if (userSearch) params.set("userSearch", userSearch);
+
+    fetch(`/api/admin/analytics?${params}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (cancelled) return;
+        if (d) setData(d);
+        setLoading(false);
+      })
+      .catch(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [days, tenantFilter, deptFilter, teamFilter, userSearch]);
 
   useEffect(() => {
     Promise.all([

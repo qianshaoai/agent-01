@@ -42,10 +42,9 @@ export async function GET(req: NextRequest) {
       : db.from("tenant_categories").select("category_id, tenant_code"),
   ]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const accessibleIds: string[] = user.isPersonal
-    ? (accessibleQuery.data ?? []).map((a: any) => a.id as string)
-    : (accessibleQuery.data ?? []).map((r: any) => r.resource_id as string);
+    ? ((accessibleQuery.data ?? []) as { id: string }[]).map((a) => a.id)
+    : ((accessibleQuery.data ?? []) as { resource_id: string }[]).map((r) => r.resource_id);
 
   // 分类过滤：有分配记录 → 仅对指定组织显示；无分配记录 → 对所有人可见
   const allCategories = categoriesQuery.data ?? [];
@@ -56,7 +55,7 @@ export async function GET(req: NextRequest) {
     : allCategories.filter((cat) => allowedCatIds.has(cat.id));
 
   // ── 附加：为返回的智能体挂上 categoriesAll（多对多）────────────
-  async function enrichWithCategories(agentList: Array<{ id: string; [k: string]: unknown }>) {
+  async function enrichWithCategories(agentList: Array<{ id: string; category_id?: string | null; [k: string]: unknown }>) {
     if (agentList.length === 0) return agentList;
     const ids = agentList.map((a) => a.id);
     const { data: acRows } = await db
@@ -77,8 +76,7 @@ export async function GET(req: NextRequest) {
       const cids = agentCatMap.get(a.id) ?? [];
       const catsAll = cids.map((cid) => catMap.get(cid)).filter(Boolean) as { id: string; name: string; icon_url: string | null }[];
       // 如果连接表里没有，回退到旧字段 category_id
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const fallback: { id: string; name: string; icon_url: string | null } | undefined = (a as any).category_id ? catMap.get((a as any).category_id) : undefined;
+      const fallback: { id: string; name: string; icon_url: string | null } | undefined = a.category_id ? catMap.get(a.category_id) : undefined;
       const finalCats = catsAll.length > 0 ? catsAll : (fallback ? [fallback] : []);
       return {
         ...a,

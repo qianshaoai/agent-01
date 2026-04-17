@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { v4 as uuidv4 } from "uuid";
+import { withRequestLog } from "@/lib/request-logger";
 
 const SUBMIT_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit";
 const QUERY_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query";
@@ -15,7 +16,7 @@ function getAudioFormat(mimeType: string): { format: string; codec: string; rate
 }
 
 // POST：提交识别任务，立即返回 requestId
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog(async (req: NextRequest) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
@@ -98,10 +99,10 @@ export async function POST(req: NextRequest) {
     console.error("[speech submit]", e);
     return NextResponse.json({ error: "提交语音任务失败，请重试" }, { status: 500 });
   }
-}
+});
 
 // GET：查询识别结果
-export async function GET(req: NextRequest) {
+export const GET = withRequestLog(async (req: NextRequest) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
@@ -155,4 +156,4 @@ export async function GET(req: NextRequest) {
     console.error("[speech query]", e);
     return NextResponse.json({ done: false });
   }
-}
+});

@@ -466,6 +466,8 @@ export default function WorkflowsAdminPage() {
                           if (!cat) return null;
                           return (
                             <span key={cid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
+                              {/* 小图标（<20px），next/image 优化收益低 */}
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
                               {cat.icon_url ? <img src={cat.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
                               {cat.name}
                             </span>
@@ -615,6 +617,8 @@ export default function WorkflowsAdminPage() {
                       <div className="flex items-center gap-3">
                         {cat.icon_url ? (
                           <div className="w-8 h-8 rounded-[8px] overflow-hidden bg-white border border-gray-200 flex items-center justify-center">
+                            {/* 用户上传图标，URL 动态不在 next/image remotePatterns 内 */}
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={cat.icon_url} alt={cat.name} className="w-full h-full object-contain" />
                           </div>
                         ) : (
@@ -659,7 +663,7 @@ export default function WorkflowsAdminPage() {
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">所属分类（可多选）</label>
                 {categories.length === 0 ? (
-                  <p className="text-xs text-gray-400">暂无分类，请先在"分类管理"Tab 中创建</p>
+                  <p className="text-xs text-gray-400">暂无分类，请先在「分类管理」Tab 中创建</p>
                 ) : (
                   <>
                     <div className="border border-gray-200 rounded-[12px] p-3 max-h-36 overflow-y-auto space-y-1.5">

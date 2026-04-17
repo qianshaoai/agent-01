@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect, use, useMemo, memo } from "react";
+import { useState, useRef, useEffect, use, memo } from "react";
 
 function friendlyError(msg: string): string {
   if (!msg) return "调用失败，请稍后重试";
@@ -127,42 +127,49 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   }, [messages]);
 
   useEffect(() => {
-    loadInitialData();
+    let cancelled = false;
+
+    async function load() {
+      const [agentsRes, convsRes, meRes] = await Promise.allSettled([
+        fetch("/api/agents"),
+        fetch(`/api/conversations?agentCode=${agentCode}`),
+        fetch("/api/me"),
+      ]);
+      if (cancelled) return;
+
+      if (agentsRes.status === "fulfilled" && agentsRes.value.ok) {
+        const data = await agentsRes.value.json();
+        if (cancelled) return;
+        const found = data.agents?.find((a: AgentInfo) => a.agent_code === agentCode);
+        if (found?.agent_type === "external" && found?.external_url) {
+          // 外链型智能体：自动跳转到外部链接
+          setRedirecting(true);
+          window.location.replace(found.external_url);
+          return;
+        }
+        setAgent(found ?? { agent_code: agentCode, name: agentCode, description: "" });
+      } else {
+        setAgent({ agent_code: agentCode, name: agentCode, description: "" });
+      }
+
+      if (convsRes.status === "fulfilled" && convsRes.value.ok) {
+        const raw = await convsRes.value.json();
+        if (cancelled) return;
+        setConversations(raw.data ?? raw ?? []);
+      }
+
+      if (meRes.status === "fulfilled" && meRes.value.ok) {
+        const data = await meRes.value.json();
+        if (cancelled) return;
+        if (data.quota) {
+          setQuota({ left: data.quota.left, expiresAt: data.quota.expiresAt });
+        }
+      }
+    }
+
+    load();
+    return () => { cancelled = true; };
   }, [agentCode]);
-
-  async function loadInitialData() {
-    const [agentsRes, convsRes, meRes] = await Promise.allSettled([
-      fetch("/api/agents"),
-      fetch(`/api/conversations?agentCode=${agentCode}`),
-      fetch("/api/me"),
-    ]);
-
-    if (agentsRes.status === "fulfilled" && agentsRes.value.ok) {
-      const data = await agentsRes.value.json();
-      const found = data.agents?.find((a: AgentInfo) => a.agent_code === agentCode);
-      if (found?.agent_type === "external" && found?.external_url) {
-        // 外链型智能体：自动跳转到外部链接
-        setRedirecting(true);
-        window.location.replace(found.external_url);
-        return;
-      }
-      setAgent(found ?? { agent_code: agentCode, name: agentCode, description: "" });
-    } else {
-      setAgent({ agent_code: agentCode, name: agentCode, description: "" });
-    }
-
-    if (convsRes.status === "fulfilled" && convsRes.value.ok) {
-      const data = await convsRes.value.json();
-      setConversations(data ?? []);
-    }
-
-    if (meRes.status === "fulfilled" && meRes.value.ok) {
-      const data = await meRes.value.json();
-      if (data.quota) {
-        setQuota({ left: data.quota.left, expiresAt: data.quota.expiresAt });
-      }
-    }
-  }
 
   async function loadConversationMessages(convId: string) {
     setLoading(true);
@@ -278,7 +285,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               setActiveConvId(obj.conversationId);
               // Refresh conversation list
               const convsRes = await fetch(`/api/conversations?agentCode=${agentCode}`);
-              if (convsRes.ok) setConversations(await convsRes.json());
+              if (convsRes.ok) { const raw = await convsRes.json(); setConversations(raw.data ?? raw ?? []); }
               // Update quota
               if (quota) setQuota((q) => q ? { ...q, left: q.left - 1 } : q);
             }

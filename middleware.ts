@@ -24,7 +24,6 @@ export async function middleware(req: NextRequest) {
   // ── API 请求日志 ─────────────────────────────────────────────
   if (pathname.startsWith("/api/")) {
     const requestId = `${Date.now().toString(36)}-${(reqCounter++ % 0xFFFF).toString(16).padStart(4, "0")}`;
-    const start = Date.now();
 
     const res = NextResponse.next();
     res.headers.set("X-Request-Id", requestId);

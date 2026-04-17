@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, Send, Bot, User, MessageSquare, ExternalLink } from "lucide-react";
+import { ArrowLeft, Send, Bot, User, MessageSquare } from "lucide-react";
 
 type Message = { role: "user" | "assistant"; content: string };
 type AgentInfo = { id: string; name: string; description: string; agent_type: string; external_url?: string };

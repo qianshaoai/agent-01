@@ -58,14 +58,12 @@ export default function AgentsAdminPage() {
   const [activeTab, setActiveTab] = useState<"agents" | "categories">("agents");
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [showApiModal, setShowApiModal] = useState<Agent | null>(null);
-  const [showAssignModal, setShowAssignModal] = useState<Agent | null>(null);
   const [showDisplayModal, setShowDisplayModal] = useState<Agent | null>(null);
   const [displayConfig, setDisplayConfig] = useState<CategoryDisplayConfig[]>([]);
   const [displayLoading, setDisplayLoading] = useState(false);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [form, setForm] = useState(EMPTY_AGENT);
   const [apiForm, setApiForm] = useState(EMPTY_API);
-  const [selectedTenants, setSelectedTenants] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [agentTypeFilter, setAgentTypeFilter] = useState("");
   const [agentCategoryFilter, setAgentCategoryFilter] = useState("");
@@ -111,7 +109,6 @@ export default function AgentsAdminPage() {
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   function openApi(a: Agent) { setShowApiModal(a); setApiForm({ endpoint: a.api_endpoint ?? "", apiKey: "", modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}' }); }
-  function openAssign(a: Agent) { setShowAssignModal(a); setSelectedTenants(a.tenant_codes ?? []); }
 
   async function openPermModal(a: Agent) {
     setShowPermModal(a);
@@ -208,13 +205,6 @@ export default function AgentsAdminPage() {
       await fetch(`/api/admin/agents/${showApiModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiEndpoint: apiForm.endpoint, apiKey: apiForm.apiKey || undefined, modelParams: params }) });
       setShowApiModal(null); load(); toast("API 配置已保存");
     } finally { setSaving(false); }
-  }
-
-  async function handleAssign() {
-    if (!showAssignModal) return;
-    setSaving(true);
-    await fetch(`/api/admin/agents/${showAssignModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tenantCodes: selectedTenants }) });
-    setSaving(false); setShowAssignModal(null); load();
   }
 
   async function openCatAssign(cat: Category) {
@@ -359,6 +349,8 @@ export default function AgentsAdminPage() {
                             <div className="flex flex-wrap gap-1">
                               {a.categoriesAll.map((c) => (
                                 <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                                  {/* 小图标（<20px），next/image 优化收益低 */}
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
                                   {c.icon_url ? <img src={c.icon_url} alt={c.name} className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
                                   {c.name}
                                 </span>
@@ -427,6 +419,8 @@ export default function AgentsAdminPage() {
                       <div className="flex items-center gap-3">
                         {cat.icon_url ? (
                           <div className="w-8 h-8 rounded-[8px] overflow-hidden bg-white border border-gray-200 flex items-center justify-center">
+                            {/* 用户上传图标，URL 动态不在 next/image remotePatterns 内 */}
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={cat.icon_url} alt={cat.name} className="w-full h-full object-contain" />
                           </div>
                         ) : (
@@ -490,6 +484,7 @@ export default function AgentsAdminPage() {
                               }}
                             />
                             {cat.icon_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
                               <img src={cat.icon_url} alt={cat.name} className="w-5 h-5 rounded-[4px] object-contain" />
                             ) : (
                               <Tag size={14} className="text-gray-400" />
@@ -554,7 +549,7 @@ export default function AgentsAdminPage() {
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
             <h2 className="font-semibold text-gray-900 mb-1">分类展示配置</h2>
             <p className="text-sm text-gray-500 mb-2">
-              {showDisplayModal.name} — 控制此智能体在各分类"智能体展示"中的可见性
+              {showDisplayModal.name} — 控制此智能体在各分类「智能体展示」中的可见性
             </p>
             {!displayLoading && displayConfig.length > 0 && (
               <div className="flex items-center gap-2 mb-3">

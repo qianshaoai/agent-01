@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { getCurrentUser, buildClearCookieHeader } from "@/lib/auth";
+import { withRequestLog } from "@/lib/request-logger";
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog(async (req: NextRequest) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
@@ -31,4 +32,4 @@ export async function POST(req: NextRequest) {
     { ok: true },
     { headers: { "Set-Cookie": buildClearCookieHeader() } }
   );
-}
+});

@@ -259,7 +259,6 @@ export default function HomePage() {
     saveDismissed(next);
   }
 
-  const allCats = [{ id: "__all__", name: "全部" }, ...categories];
   const filtered = displayAgents;
   const categoryMap = new Map(categories.map((c) => [c.id, c]));
   // 已被加入任何分组的分类 ID 集合
@@ -365,6 +364,7 @@ export default function HomePage() {
               <div className="w-12 h-12 rounded-[12px] overflow-hidden shrink-0 flex items-center justify-center bg-gradient-to-br from-[#002FA7] to-[#1a47c0] shadow-[0_4px_12px_rgba(0,47,167,0.25)]">
                 {siteSettings.logo_url ? (
                   <>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.querySelector("span")?.removeAttribute("hidden"); }} />
                     <span hidden className="text-white text-sm font-bold">AI</span>
                   </>
@@ -478,6 +478,8 @@ export default function HomePage() {
                       className={`group/item relative w-full flex items-center gap-2 px-3.5 py-2 pl-7 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
                     >
                       <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-[#002FA7] rounded-r transition-all duration-200 ${activeCategory === cat.id ? "h-5" : "h-0 group-hover/item:h-5"}`} />
+                      {/* 小图标（16px），next/image 优化收益低 */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       {cat.icon_url && <img src={cat.icon_url} alt="" className="w-4 h-4 object-contain shrink-0" />}
                       {cat.name}
                     </button>
@@ -527,6 +529,8 @@ export default function HomePage() {
                 className={`group/item relative flex items-center gap-2 px-3.5 py-2.5 rounded-[10px] text-[14px] transition-all duration-150 ${activeCategory === cat.id ? "bg-[#002FA7]/10 text-[#002FA7] font-semibold" : "text-gray-600 font-medium hover:bg-gray-100 hover:text-gray-900"}`}
               >
                 <span className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 bg-[#002FA7] rounded-r transition-all duration-200 ${activeCategory === cat.id ? "h-5" : "h-0 group-hover/item:h-5"}`} />
+                {/* 小图标（16px），next/image 优化收益低 */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 {cat.icon_url && <img src={cat.icon_url} alt="" className="w-4 h-4 object-contain shrink-0" />}
                 {cat.name}
               </button>
@@ -964,6 +968,7 @@ export default function HomePage() {
             <h3 className="font-semibold text-gray-900">联系我们</h3>
             <div className="w-40 h-40 bg-gray-100 rounded-[12px] flex items-center justify-center overflow-hidden">
               {siteSettings.contact_qr_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img src={siteSettings.contact_qr_url} alt="联系二维码" className="w-full h-full object-contain" />
               ) : (
                 <QrCode size={64} className="text-gray-300" />

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { signToken, buildSetCookieHeader } from "@/lib/auth";
 import { parseBody } from "@/lib/validate";
 import { z } from "zod";
+import { withRequestLog } from "@/lib/request-logger";
 
 const registerSchema = z.object({
   userType: z.enum(["personal", "organization"], { message: "请选择用户类型" }),
@@ -16,7 +17,7 @@ const registerSchema = z.object({
 
 const TENANT_CODE_RE = /^[A-Za-z]{4,8}$/;
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog(async (req: NextRequest) => {
   try {
     const parsed = await parseBody(req, registerSchema);
     if (parsed instanceof Response) return parsed;
@@ -140,4 +141,4 @@ export async function POST(req: NextRequest) {
     console.error("[register]", e);
     return NextResponse.json({ error: "服务器错误，请稍后重试" }, { status: 500 });
   }
-}
+});

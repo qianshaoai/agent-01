@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 文档目录里的临时脚本不属于主工程代码
+    "doc/**",
   ]),
 ]);
 

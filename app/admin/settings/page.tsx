@@ -3,7 +3,6 @@ import { useState, useEffect, useRef } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
-import { Card } from "@/components/ui/card";
 import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon, BookOpen, QrCode, Settings as SettingsIcon } from "lucide-react";
 
 type Settings = { logo_url: string; platform_name: string; help_doc_url: string; contact_qr_url: string; contact_qr_text: string };
@@ -158,6 +157,7 @@ export default function AdminSettingsPage() {
               <p className="text-xs text-gray-400 mb-2 text-center">当前效果</p>
               <div className="w-10 h-10 rounded-[10px] overflow-hidden bg-gray-50 border border-gray-100 flex items-center justify-center">
                 {settings.logo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={settings.logo_url}
                     alt="Logo"
@@ -292,6 +292,7 @@ export default function AdminSettingsPage() {
             />
             <div className="w-32 h-32 rounded-[12px] overflow-hidden bg-gray-100 border border-gray-100 flex items-center justify-center">
               {settings.contact_qr_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img src={settings.contact_qr_url} alt="联系二维码" className="w-full h-full object-contain" />
               ) : (
                 <QrCode size={40} className="text-gray-300" />

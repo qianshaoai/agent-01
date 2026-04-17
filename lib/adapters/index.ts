@@ -118,6 +118,8 @@ async function* difyStream(
 ): AsyncGenerator<string> {
   // Dify: last user message + history as conversation_id approach
   const userMsg = [...messages].reverse().find((m) => m.role === "user");
+  // Dify 历史会话功能预留（走 conversation_id，暂未传入 history）
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const history = messages.slice(0, -1);
 
   const body = {

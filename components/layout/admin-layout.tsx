@@ -74,15 +74,18 @@ const ROLE_LABEL: Record<AdminRole, string> = {
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [siteSettings, setSiteSettings] = useState({ logo_url: "", platform_name: "" });
+  const [siteSettings, setSiteSettings] = useState(() => {
+    if (typeof window === "undefined") return { logo_url: "", platform_name: "" };
+    try {
+      const cached = localStorage.getItem("brand_settings_v1");
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return { logo_url: "", platform_name: "" };
+  });
   const [adminRole, setAdminRole] = useState<AdminRole>("super_admin");
   const [adminUsername, setAdminUsername] = useState<string>("");
 
   useEffect(() => {
-    try {
-      const cached = localStorage.getItem("brand_settings_v1");
-      if (cached) setSiteSettings(JSON.parse(cached));
-    } catch {}
     fetch("/api/settings")
       .then((r) => r.json())
       .then((d) => {
@@ -117,12 +120,13 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     .map((g) => ({ ...g, items: g.items.filter((it) => it.allowedRoles.includes(adminRole)) }))
     .filter((g) => g.items.length > 0);
 
-  const NavContent = () => (
+  const navContent = (
     <>
       {/* Logo 区 */}
       <div className="px-5 h-16 flex items-center gap-2.5 border-b border-gray-100">
         <div className="w-9 h-9 rounded-[10px] overflow-hidden shrink-0 flex items-center justify-center bg-[#002FA7]">
           {siteSettings.logo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
             <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" />
           ) : (
             <span className="text-white text-xs font-bold">AI</span>
@@ -194,7 +198,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen flex" style={{ background: "var(--bg-app)" }}>
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex flex-col w-60 bg-white border-r border-gray-100 fixed inset-y-0 left-0 z-40">
-        <NavContent />
+        {navContent}
       </aside>
 
       {/* Mobile sidebar */}
@@ -205,7 +209,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             <button className="absolute top-4 right-4 z-10" onClick={() => setMobileOpen(false)}>
               <X size={20} className="text-gray-500" />
             </button>
-            <NavContent />
+            {navContent}
           </aside>
         </div>
       )}

@@ -162,8 +162,10 @@ export default function AdminUsersPage() {
     }
   }, [page, pageSize, debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
 
-  useEffect(() => { fetchUsers(1); setPage(1); setSelectedIds([]); }, [debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter, pageSize]);
-  useEffect(() => { fetchUsers(page); }, [page]);
+  // 筛选变化时重置页码（fetchUsers 会随 useCallback 依赖变化自动刷新）
+  useEffect(() => { setPage(1); setSelectedIds([]); }, [debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter, pageSize]);
+  // fetchUsers 或 page 变化时发起请求
+  useEffect(() => { fetchUsers(page); }, [fetchUsers, page]);
   useEffect(() => { if (activeTab === "groups") loadGroups(); }, [activeTab]);
   // 添加成员搜索：防抖后才发请求
   useEffect(() => {

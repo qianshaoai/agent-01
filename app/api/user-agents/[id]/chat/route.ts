@@ -3,11 +3,12 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { streamChat, ChatMessage } from "@/lib/adapters";
 import { decrypt } from "@/lib/crypto";
+import { withRequestLog } from "@/lib/request-logger";
 
-export async function POST(
+export const POST = withRequestLog(async (
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
+) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
@@ -85,4 +86,4 @@ export async function POST(
       Connection: "keep-alive",
     },
   });
-}
+});

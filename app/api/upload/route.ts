@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { withRequestLog } from "@/lib/request-logger";
 
 // 支持的文件类型
 const ALLOWED_TYPES: Record<string, string> = {
@@ -36,7 +37,7 @@ function verifyMagicBytes(buffer: Buffer, declaredType: string): boolean {
   }
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog(async (req: NextRequest) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
 
@@ -188,4 +189,4 @@ export async function POST(req: NextRequest) {
     console.error("[upload]", e);
     return NextResponse.json({ error: "文件处理失败" }, { status: 500 });
   }
-}
+});

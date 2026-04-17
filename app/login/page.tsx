@@ -72,6 +72,7 @@ export default function LoginPage() {
         <div className="flex items-center gap-2">
           <div className="w-10 h-10 rounded-[10px] overflow-hidden shrink-0 flex items-center justify-center bg-[#002FA7]">
             {siteSettings.logo_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
               <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" />
             ) : (
               <span className="text-white text-xs font-bold">AI</span>

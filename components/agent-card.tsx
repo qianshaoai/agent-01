@@ -28,6 +28,8 @@ export function AgentCard({ agent }: { agent: AgentItem }) {
           {agent.categoriesAll && agent.categoriesAll.length > 0 ? (
             agent.categoriesAll.map((c) => (
               <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                {/* 小图标（<20px），next/image 优化收益低 */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 {c.icon_url ? <img src={c.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : null}
                 {c.name}
               </span>
