@@ -3,6 +3,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
+import { parseBody } from "@/lib/validate";
+import { z } from "zod";
+
+const createAgentSchema = z.object({
+  agentCode: z.string().min(1, "请填写智能体编号"),
+  name: z.string().min(1, "请填写名称"),
+  platform: z.string().min(1, "请选择平台"),
+  description: z.string().optional().default(""),
+  agentType: z.enum(["chat", "external"]).optional().default("chat"),
+  externalUrl: z.string().optional().default(""),
+  apiEndpoint: z.string().optional().default(""),
+  apiKey: z.string().optional().default(""),
+  modelParams: z.record(z.string(), z.unknown()).optional().default({}),
+  categoryIds: z.array(z.string()).optional().default([]),
+  categoryId: z.string().optional(),
+});
 
 export const dynamic = "force-dynamic";
 
@@ -63,19 +79,11 @@ export async function POST(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
 
-  const body = await req.json();
+  const body = await parseBody(req, createAgentSchema);
+  if (body instanceof Response) return body;
+
   const { agentCode, name, description, platform, agentType, externalUrl, apiEndpoint, apiKey, modelParams } = body;
-
-  if (!agentCode || !name || !platform) {
-    return apiError("请填写编号、名称和平台", "VALIDATION_ERROR");
-  }
-
-  // 兼容：categoryIds 多选 / categoryId 单选
-  const catIds: string[] = Array.isArray(body.categoryIds)
-    ? body.categoryIds
-    : body.categoryId
-      ? [body.categoryId]
-      : [];
+  const catIds = body.categoryIds.length > 0 ? body.categoryIds : (body.categoryId ? [body.categoryId] : []);
   const primaryCat = catIds[0] ?? null;
 
   const { data, error } = await db

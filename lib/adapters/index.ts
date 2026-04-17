@@ -3,6 +3,24 @@
  * 每个适配器接收消息列表和配置，返回 AsyncGenerator<string>（流式文本块）
  */
 
+/** 指数退避重试（用于非流式请求，如认证） */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxAttempts = 3,
+  baseDelayMs = 1000
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === maxAttempts) throw err;
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("unreachable");
+}
+
 export type ChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
@@ -231,14 +249,17 @@ async function getQingyanToken(apiKey: string, apiSecret: string, baseUrl: strin
   const cached = qingyanTokenCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
 
-  const res = await fetch(`${baseUrl}/get_token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey, api_secret: apiSecret }),
+  const data = await withRetry(async () => {
+    const res = await fetch(`${baseUrl}/get_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: apiKey, api_secret: apiSecret }),
+    });
+    if (!res.ok) throw new Error(`Qingyan auth error: ${res.status} ${await res.clone().text()}`);
+    const d = await res.json();
+    if (d.status !== 0) throw new Error(`Qingyan auth failed: ${d.message}`);
+    return d;
   });
-  if (!res.ok) throw new Error(`Qingyan auth error: ${res.status} ${await res.clone().text()}`);
-  const data = await res.json();
-  if (data.status !== 0) throw new Error(`Qingyan auth failed: ${data.message}`);
 
   const { access_token, expires_in } = data.result;
   // 清理过期条目，防止内存泄漏

@@ -2,31 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signToken, buildSetCookieHeader } from "@/lib/auth";
+import { parseBody } from "@/lib/validate";
+import { z } from "zod";
 
-const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
-const PHONE_RE = /^\d{7,15}$/;
+const registerSchema = z.object({
+  userType: z.enum(["personal", "organization"], { message: "请选择用户类型" }),
+  username: z.string().regex(/^[a-zA-Z0-9_]{3,20}$/, "用户名为 3~20 位字母、数字或下划线"),
+  realName: z.string().min(2, "真实姓名为 2~20 个字符").max(20, "真实姓名为 2~20 个字符"),
+  phone: z.string().regex(/^\d{7,15}$/, "手机号格式不正确"),
+  password: z.string().min(8, "密码至少 8 位"),
+  tenantCode: z.string().optional().default(""),
+});
+
 const TENANT_CODE_RE = /^[A-Za-z]{4,8}$/;
 
 export async function POST(req: NextRequest) {
   try {
-    const { userType, username, realName, phone, password, tenantCode } = await req.json();
-
-    // ── 基础校验 ──────────────────────────────────────────────
-    if (!userType || !["personal", "organization"].includes(userType)) {
-      return NextResponse.json({ error: "请选择用户类型" }, { status: 400 });
-    }
-    if (!username || !USERNAME_RE.test(username)) {
-      return NextResponse.json({ error: "用户名为 3~20 位字母、数字或下划线" }, { status: 400 });
-    }
-    if (!realName || realName.trim().length < 2 || realName.trim().length > 20) {
-      return NextResponse.json({ error: "真实姓名为 2~20 个字符" }, { status: 400 });
-    }
-    if (!phone || !PHONE_RE.test(phone.trim())) {
-      return NextResponse.json({ error: "手机号格式不正确" }, { status: 400 });
-    }
-    if (!password || password.length < 8) {
-      return NextResponse.json({ error: "密码至少 8 位" }, { status: 400 });
-    }
+    const parsed = await parseBody(req, registerSchema);
+    if (parsed instanceof Response) return parsed;
+    const { userType, username, realName, phone, password, tenantCode } = parsed;
 
     const normalizedUsername = username.trim();
     const normalizedPhone = phone.trim();
