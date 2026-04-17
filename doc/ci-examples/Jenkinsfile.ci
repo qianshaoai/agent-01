@@ -1,0 +1,29 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    timeout(time: 20, unit: 'MINUTES')
+  }
+
+  stages {
+    stage('Install') {
+      steps {
+        sh 'npm ci'
+      }
+    }
+
+    stage('Check') {
+      steps {
+        withCredentials([
+          string(credentialsId: 'jwt-secret', variable: 'JWT_SECRET'),
+          string(credentialsId: 'supabase-url', variable: 'NEXT_PUBLIC_SUPABASE_URL'),
+          string(credentialsId: 'supabase-anon-key', variable: 'NEXT_PUBLIC_SUPABASE_ANON_KEY'),
+          string(credentialsId: 'supabase-service-role-key', variable: 'SUPABASE_SERVICE_ROLE_KEY'),
+        ]) {
+          sh 'npm run ci:check'
+        }
+      }
+    }
+  }
+}

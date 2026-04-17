@@ -6,7 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "ci:lint": "npm run lint",
+    "ci:typecheck": "tsc --noEmit",
+    "ci:build": "npm run build",
+    "ci:test": "echo \"Tests pending (see M2.2 in 4.17up)\"",
+    "ci:check": "npm run ci:lint && npm run ci:typecheck && npm run ci:build && npm run ci:test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",

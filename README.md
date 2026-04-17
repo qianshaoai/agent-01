@@ -20,6 +20,16 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## 开发流程
+
+本地启停规范、端口冲突处理、Windows EPERM / 系统盘空间等常见坑点见 [`doc/DEV_WORKFLOW.md`](doc/DEV_WORKFLOW.md)。
+
+## 质量门禁
+
+所有检查通过 `npm run ci:check` 统一入口执行，包含 lint（eslint）、类型检查（tsc --noEmit）、构建（next build）、测试（vitest，M2.2 落地后接入）。
+
+CI 平台配置模板见 [`doc/ci-examples/`](doc/ci-examples/)（GitHub Actions + Jenkinsfile）。选定平台后复制模板到项目根目录即可启用。
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
