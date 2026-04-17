@@ -1,4 +1,4 @@
-import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
+import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
@@ -22,11 +22,11 @@ export async function POST(req: NextRequest) {
 
   const { code, name, initialPwd, quota, expiresAt } = await req.json();
   if (!code || !name || !initialPwd || !quota || !expiresAt) {
-    return NextResponse.json({ error: "请填写所有必填字段" }, { status: 400 });
+    return apiError("请填写所有必填字段", "VALIDATION_ERROR");
   }
 
   if (!/^[A-Za-z]{4,8}$/.test(code.trim())) {
-    return NextResponse.json({ error: "组织码只能为 4~8 位英文字母" }, { status: 400 });
+    return apiError("组织码只能为 4~8 位英文字母", "VALIDATION_ERROR");
   }
 
   const normalizedCode = code.trim().toUpperCase();
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 
   if (error) {
     if (error.code === "23505") {
-      return NextResponse.json({ error: "组织码已存在" }, { status: 409 });
+      return apiError("组织码已存在", "CONFLICT");
     }
     return dbError(error);
   }

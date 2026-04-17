@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -10,18 +10,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
   if (admin.role === "org_admin") {
-    return NextResponse.json({ error: "无权操作" }, { status: 403 });
+    return apiError("无权操作", "FORBIDDEN");
   }
 
   const { id } = await params;
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
-  if (!file) return NextResponse.json({ error: "未提供文件" }, { status: 400 });
+  if (!file) return apiError("未提供文件", "VALIDATION_ERROR");
 
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "png";
   const allowed = ["png", "jpg", "jpeg", "svg", "webp"];
   if (!allowed.includes(ext)) {
-    return NextResponse.json({ error: "只支持 PNG / SVG / JPG / WEBP 格式" }, { status: 400 });
+    return apiError("只支持 PNG / SVG / JPG / WEBP 格式", "VALIDATION_ERROR");
   }
 
   const path = `category-icons/cat-${id}.${ext}`;
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { error: uploadError } = await db.storage
     .from("uploads")
     .upload(path, buffer, { contentType: file.type, upsert: true });
-  if (uploadError) return NextResponse.json({ error: uploadError.message }, { status: 500 });
+  if (uploadError) return apiError("文件上传失败", "INTERNAL_ERROR");
 
   const { data: urlData } = db.storage.from("uploads").getPublicUrl(path);
   const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
@@ -46,7 +46,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
   if (admin.role === "org_admin") {
-    return NextResponse.json({ error: "无权操作" }, { status: 403 });
+    return apiError("无权操作", "FORBIDDEN");
   }
 
   const { id } = await params;

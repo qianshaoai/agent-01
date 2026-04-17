@@ -1,3 +1,4 @@
+import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -17,7 +18,7 @@ export async function POST(
     .eq("id", id)
     .single();
 
-  if (error || !src) return NextResponse.json({ error: "工作流不存在" }, { status: 404 });
+  if (error || !src) return apiError("工作流不存在", "NOT_FOUND");
 
   // 创建副本工作流
   const { data: newWf, error: wfErr } = await db
@@ -33,7 +34,7 @@ export async function POST(
     .select()
     .single();
 
-  if (wfErr || !newWf) return NextResponse.json({ error: wfErr?.message ?? "创建失败" }, { status: 500 });
+  if (wfErr || !newWf) return apiError("复制工作流失败", "INTERNAL_ERROR");
 
   // 复制步骤
   const steps = (src.workflow_steps ?? []) as {

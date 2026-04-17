@@ -1,3 +1,4 @@
+import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
@@ -8,7 +9,7 @@ import { withRequestLog } from "@/lib/request-logger";
 export const POST = withRequestLog(async (req: NextRequest) => {
   const { username, password } = await req.json();
   if (!username || !password) {
-    return NextResponse.json({ error: "请填写用户名和密码" }, { status: 400 });
+    return apiError("请填写用户名和密码", "VALIDATION_ERROR");
   }
 
   const identifier = username.trim();
@@ -34,7 +35,7 @@ export const POST = withRequestLog(async (req: NextRequest) => {
     const ok = await bcrypt.compare(password, admin.pwd_hash);
     if (!ok) {
       recordLoginFail(rateKey);
-      return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
+      return apiError("用户名或密码错误", "UNAUTHORIZED");
     }
     clearLoginFail(rateKey);
 
@@ -60,7 +61,7 @@ export const POST = withRequestLog(async (req: NextRequest) => {
 
   if (!userMatches || userMatches.length === 0) {
     recordLoginFail(rateKey);
-    return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
+    return apiError("用户名或密码错误", "UNAUTHORIZED");
   }
 
   // 手机号可能跨组织重复，尝试匹配所有候选
@@ -73,24 +74,24 @@ export const POST = withRequestLog(async (req: NextRequest) => {
   }
   if (!matchedUser) {
     recordLoginFail(rateKey);
-    return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 });
+    return apiError("用户名或密码错误", "UNAUTHORIZED");
   }
 
   // 状态检查
   if (matchedUser.status === "deleted") {
-    return NextResponse.json({ error: "账号不存在" }, { status: 401 });
+    return apiError("账号不存在", "UNAUTHORIZED");
   }
   if (matchedUser.status === "cancelled") {
-    return NextResponse.json({ error: "该账号已注销，无法登录" }, { status: 401 });
+    return apiError("该账号已注销，无法登录", "UNAUTHORIZED");
   }
   if (matchedUser.status === "disabled") {
-    return NextResponse.json({ error: "该账号已被禁用" }, { status: 401 });
+    return apiError("该账号已被禁用", "UNAUTHORIZED");
   }
 
   // 角色检查：必须是 super_admin / system_admin / org_admin 才能进后台
   const role = matchedUser.role as string;
   if (!["super_admin", "system_admin", "org_admin"].includes(role)) {
-    return NextResponse.json({ error: "该账号无后台访问权限" }, { status: 403 });
+    return apiError("该账号无后台访问权限", "FORBIDDEN");
   }
 
   // org_admin 需要校验租户是否启用/过期
@@ -101,10 +102,10 @@ export const POST = withRequestLog(async (req: NextRequest) => {
       .eq("code", matchedUser.tenant_code)
       .single();
     if (!tenant || !tenant.enabled) {
-      return NextResponse.json({ error: "所属组织已被禁用，无法登录" }, { status: 403 });
+      return apiError("所属组织已被禁用，无法登录", "FORBIDDEN");
     }
     if (tenant.expires_at && new Date(tenant.expires_at) < new Date()) {
-      return NextResponse.json({ error: "所属组织已过期，无法登录" }, { status: 403 });
+      return apiError("所属组织已过期，无法登录", "FORBIDDEN");
     }
   }
 

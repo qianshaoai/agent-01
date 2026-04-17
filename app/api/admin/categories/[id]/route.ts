@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -29,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const { name } = body;
-  if (!name?.trim()) return NextResponse.json({ error: "分类名称不能为空" }, { status: 400 });
+  if (!name?.trim()) return apiError("分类名称不能为空", "VALIDATION_ERROR");
 
   const { data, error } = await db
     .from("categories")

@@ -1,4 +1,4 @@
-import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
+import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
 
   const { name, description, tenantCode } = await req.json();
-  if (!name?.trim()) return NextResponse.json({ error: "分组名称不能为空" }, { status: 400 });
+  if (!name?.trim()) return apiError("分组名称不能为空", "VALIDATION_ERROR");
 
   const { data, error } = await db
     .from("user_groups")

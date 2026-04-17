@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
@@ -18,10 +18,10 @@ export async function POST(req: NextRequest) {
 
   const { oldPassword, newPassword } = await req.json();
   if (!newPassword || newPassword.length < 8) {
-    return NextResponse.json({ error: "新密码至少 8 位" }, { status: 400 });
+    return apiError("新密码至少 8 位", "VALIDATION_ERROR");
   }
   if (oldPassword === newPassword) {
-    return NextResponse.json({ error: "新密码不能与旧密码相同" }, { status: 400 });
+    return apiError("新密码不能与旧密码相同", "VALIDATION_ERROR");
   }
 
   // 先在 users 表找（被提升为管理员的普通用户）
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
 
   if (user) {
     const ok = await bcrypt.compare(oldPassword ?? "", user.pwd_hash);
-    if (!ok) return NextResponse.json({ error: "旧密码错误" }, { status: 401 });
+    if (!ok) return apiError("旧密码错误", "UNAUTHORIZED");
 
     const newHash = await bcrypt.hash(newPassword, 12);
     const { error } = await db
@@ -51,10 +51,10 @@ export async function POST(req: NextRequest) {
     .eq("id", admin.adminId)
     .single();
 
-  if (!adminRow) return NextResponse.json({ error: "账号不存在" }, { status: 404 });
+  if (!adminRow) return apiError("账号不存在", "NOT_FOUND");
 
   const ok = await bcrypt.compare(oldPassword ?? "", adminRow.pwd_hash);
-  if (!ok) return NextResponse.json({ error: "旧密码错误" }, { status: 401 });
+  if (!ok) return apiError("旧密码错误", "UNAUTHORIZED");
 
   const newHash = await bcrypt.hash(newPassword, 12);
   const { error } = await db

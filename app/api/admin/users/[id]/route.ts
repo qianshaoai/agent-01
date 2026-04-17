@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { canAssignRole, canManageTarget } from "@/lib/auth";
@@ -21,12 +21,12 @@ export async function PATCH(
     .select("id, role, status, tenant_code, user_type")
     .eq("id", id)
     .single();
-  if (!target) return NextResponse.json({ error: "用户不存在" }, { status: 404 });
+  if (!target) return apiError("用户不存在", "NOT_FOUND");
 
   // 组织管理员只能管理自己组织内的用户
   if (admin.role === "org_admin") {
     if (!admin.tenantCode || target.tenant_code !== admin.tenantCode) {
-      return NextResponse.json({ error: "无权操作该用户（不在你的组织内）" }, { status: 403 });
+      return apiError("无权操作该用户（不在你的组织内）", "FORBIDDEN");
     }
   }
 
@@ -34,7 +34,7 @@ export async function PATCH(
   const MANAGE_ACTIONS = ["set-status", "set-dept", "reset-password", "soft-delete", "delete"];
   if (MANAGE_ACTIONS.includes(body.action)) {
     if (!canManageTarget(admin.role, target.role)) {
-      return NextResponse.json({ error: "无权管理该用户（对方等级不低于你）" }, { status: 403 });
+      return apiError("无权管理该用户（对方等级不低于你）", "FORBIDDEN");
     }
   }
 
@@ -42,7 +42,7 @@ export async function PATCH(
   if (body.action === "set-status") {
     const { status } = body;
     if (!["active", "disabled"].includes(status)) {
-      return NextResponse.json({ error: "状态值无效" }, { status: 400 });
+      return apiError("状态值无效", "VALIDATION_ERROR");
     }
     const { error } = await db.from("users").update({ status }).eq("id", id);
     if (error) return dbError(error);
@@ -53,10 +53,10 @@ export async function PATCH(
   if (body.action === "set-role") {
     const { role } = body;
     if (!["super_admin", "system_admin", "org_admin", "user"].includes(role)) {
-      return NextResponse.json({ error: "角色值无效" }, { status: 400 });
+      return apiError("角色值无效", "VALIDATION_ERROR");
     }
     if (target.status === "deleted") {
-      return NextResponse.json({ error: "该用户已删除，不能修改角色" }, { status: 400 });
+      return apiError("该用户已删除，不能修改角色", "VALIDATION_ERROR");
     }
     // 业务校验：个人用户不能被设为组织管理员（组织管理员必须归属某个组织）
     if (role === "org_admin") {
@@ -71,10 +71,10 @@ export async function PATCH(
     //   1) 不能修改跟自己同级或更高级别的人
     //   2) 不能把别人改成 >= 自己的角色
     if (!canManageTarget(admin.role, target.role)) {
-      return NextResponse.json({ error: "无权修改该用户的角色（对方等级不低于你）" }, { status: 403 });
+      return apiError("无权修改该用户的角色（对方等级不低于你）", "FORBIDDEN");
     }
     if (!canAssignRole(admin.role, role, admin.adminId === id)) {
-      return NextResponse.json({ error: "无权将用户设置为该角色（不能高于或等于自己）" }, { status: 403 });
+      return apiError("无权将用户设置为该角色（不能高于或等于自己）", "FORBIDDEN");
     }
     const { error } = await db.from("users").update({ role }).eq("id", id);
     if (error) return dbError(error);
@@ -97,7 +97,7 @@ export async function PATCH(
   if (body.action === "reset-password") {
     const { newPassword } = body;
     if (!newPassword || newPassword.length < 8) {
-      return NextResponse.json({ error: "新密码至少 8 位" }, { status: 400 });
+      return apiError("新密码至少 8 位", "VALIDATION_ERROR");
     }
     const pwd_hash = await bcrypt.hash(newPassword, 12);
     const { error } = await db
@@ -117,5 +117,5 @@ export async function PATCH(
     return NextResponse.json({ ok: true });
   }
 
-  return NextResponse.json({ error: "未知操作" }, { status: 400 });
+  return apiError("未知操作", "VALIDATION_ERROR");
 }

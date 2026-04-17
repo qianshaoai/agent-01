@@ -1,4 +1,4 @@
-import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
+import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
 
   const { name, description, category, sortOrder, enabled, visibleTo, categoryIds, permissions } = await req.json();
 
-  if (!name) return NextResponse.json({ error: "请填写工作流名称" }, { status: 400 });
+  if (!name) return apiError("请填写工作流名称", "VALIDATION_ERROR");
 
   const { data, error } = await db
     .from("workflows")

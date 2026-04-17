@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { userIds } = await req.json();
 
   if (!Array.isArray(userIds) || userIds.length === 0) {
-    return NextResponse.json({ error: "请传入 userIds 数组" }, { status: 400 });
+    return apiError("请传入 userIds 数组", "VALIDATION_ERROR");
   }
 
   const rows = userIds.map((uid: string) => ({ group_id: id, user_id: uid }));

@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
@@ -18,14 +18,14 @@ export async function PATCH(
   if (body.quota !== undefined) {
     const q = Number(body.quota);
     if (isNaN(q) || !Number.isInteger(q) || q < 0 || q > 10_000_000) {
-      return NextResponse.json({ error: "配额必须为 0~10,000,000 的整数" }, { status: 400 });
+      return apiError("配额必须为 0~10,000,000 的整数", "VALIDATION_ERROR");
     }
     updates.quota = q;
   }
   if (body.expiresAt !== undefined) {
     const d = new Date(body.expiresAt);
     if (isNaN(d.getTime())) {
-      return NextResponse.json({ error: "到期日期格式不合法" }, { status: 400 });
+      return apiError("到期日期格式不合法", "VALIDATION_ERROR");
     }
     updates.expires_at = body.expiresAt;
   }
@@ -55,7 +55,7 @@ export async function DELETE(
 
   // 查出组织码
   const { data: tenant } = await db.from("tenants").select("code, name").eq("id", id).single();
-  if (!tenant) return NextResponse.json({ error: "组织不存在" }, { status: 404 });
+  if (!tenant) return apiError("组织不存在", "NOT_FOUND");
 
   // ── 只统计「有效用户」：active / disabled ────────────────────────
   // deleted / cancelled 都属于软删除，对管理员来说已经不可见，不应阻止组织删除

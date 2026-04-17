@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -15,9 +15,9 @@ export async function PATCH(
   // org_admin 权限校验：只能操作自己组织的公告
   if (admin.role === "org_admin") {
     const { data: notice } = await db.from("notices").select("tenant_code").eq("id", id).single();
-    if (!notice) return NextResponse.json({ error: "公告不存在" }, { status: 404 });
+    if (!notice) return apiError("公告不存在", "NOT_FOUND");
     if (!notice.tenant_code || notice.tenant_code !== admin.tenantCode) {
-      return NextResponse.json({ error: "无权修改该公告" }, { status: 403 });
+      return apiError("无权修改该公告", "FORBIDDEN");
     }
   }
 
@@ -54,9 +54,9 @@ export async function DELETE(
   // org_admin 权限校验：只能删除自己组织的公告
   if (admin.role === "org_admin") {
     const { data: notice } = await db.from("notices").select("tenant_code").eq("id", id).single();
-    if (!notice) return NextResponse.json({ error: "公告不存在" }, { status: 404 });
+    if (!notice) return apiError("公告不存在", "NOT_FOUND");
     if (!notice.tenant_code || notice.tenant_code !== admin.tenantCode) {
-      return NextResponse.json({ error: "无权删除该公告" }, { status: 403 });
+      return apiError("无权删除该公告", "FORBIDDEN");
     }
   }
 

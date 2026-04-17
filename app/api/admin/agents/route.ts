@@ -1,4 +1,4 @@
-import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
+import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
   const { agentCode, name, description, platform, agentType, externalUrl, apiEndpoint, apiKey, modelParams } = body;
 
   if (!agentCode || !name || !platform) {
-    return NextResponse.json({ error: "请填写编号、名称和平台" }, { status: 400 });
+    return apiError("请填写编号、名称和平台", "VALIDATION_ERROR");
   }
 
   // 兼容：categoryIds 多选 / categoryId 单选
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
 
   if (error) {
     if (error.code === "23505") {
-      return NextResponse.json({ error: "智能体编号已存在" }, { status: 409 });
+      return apiError("智能体编号已存在", "CONFLICT");
     }
     return dbError(error);
   }

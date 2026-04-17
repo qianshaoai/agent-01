@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
 
   const { resourceType, resourceId, scopeType, scopeId } = await req.json();
   if (!resourceType || !resourceId || !scopeType) {
-    return NextResponse.json({ error: "缺少必填字段" }, { status: 400 });
+    return apiError("缺少必填字段", "VALIDATION_ERROR");
   }
 
   const { data, error } = await db
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (error) {
-    if (error.code === "23505") return NextResponse.json({ error: "该权限已存在" }, { status: 409 });
+    if (error.code === "23505") return apiError("该权限已存在", "CONFLICT");
     return dbError(error);
   }
   return NextResponse.json(data, { status: 201 });

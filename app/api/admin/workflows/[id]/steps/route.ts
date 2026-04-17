@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -12,7 +12,7 @@ export async function POST(
   const { id: workflowId } = await params;
   const { stepOrder, title, description, execType, agentId, buttonText, enabled } = await req.json();
 
-  if (!title) return NextResponse.json({ error: "请填写步骤标题" }, { status: 400 });
+  if (!title) return apiError("请填写步骤标题", "VALIDATION_ERROR");
 
   const validExecTypes = ["agent", "manual", "review", "external"];
   const safeExecType = validExecTypes.includes(execType) ? execType : "agent";

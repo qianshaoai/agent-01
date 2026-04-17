@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -8,7 +8,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { id } = await params;
   const { name } = await req.json();
-  if (!name?.trim()) return NextResponse.json({ error: "分类名称不能为空" }, { status: 400 });
+  if (!name?.trim()) return apiError("分类名称不能为空", "VALIDATION_ERROR");
 
   const { data, error } = await db
     .from("wf_categories")
@@ -33,7 +33,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     .eq("category_id", id);
 
   if ((count ?? 0) > 0) {
-    return NextResponse.json({ error: `该分类下还有 ${count} 个工作流，请先移除后再删除` }, { status: 409 });
+    return apiError(`该分类下还有 ${count} 个工作流，请先移除后再删除`, "CONFLICT");
   }
 
   const { error } = await db.from("wf_categories").delete().eq("id", id);

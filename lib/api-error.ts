@@ -20,10 +20,10 @@ const STATUS_MAP: Record<ErrorCode, number> = {
   INTERNAL_ERROR: 500,
 };
 
-/** 生成统一错误响应，永远不暴露数据库原始错误 */
+/** 生成统一错误响应。error 保持字符串（前端兼容），code 供程序化处理 */
 export function apiError(message: string, code: ErrorCode = "INTERNAL_ERROR") {
   return NextResponse.json(
-    { error: message },
+    { error: message, code },
     { status: STATUS_MAP[code] }
   );
 }

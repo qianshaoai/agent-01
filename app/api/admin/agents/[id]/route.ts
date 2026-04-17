@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -59,7 +59,7 @@ export async function PATCH(
       .update(updates)
       .eq("id", id);
     if (error) {
-      if (error.code === "23505") return NextResponse.json({ error: "该编号已被其他智能体使用，请换一个编号" }, { status: 409 });
+      if (error.code === "23505") return apiError("该编号已被其他智能体使用，请换一个编号", "CONFLICT");
       return dbError(error);
     }
   }

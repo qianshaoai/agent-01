@@ -1,3 +1,4 @@
+import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -9,7 +10,7 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const agentId = searchParams.get("agentId");
-  if (!agentId) return NextResponse.json({ error: "缺少 agentId" }, { status: 400 });
+  if (!agentId) return apiError("缺少 agentId", "VALIDATION_ERROR");
 
   // 所有分类
   const { data: categories } = await db
@@ -76,14 +77,14 @@ export async function PATCH(req: NextRequest) {
 
   const body = await req.json();
   const { agentId } = body;
-  if (!agentId) return NextResponse.json({ error: "缺少 agentId" }, { status: 400 });
+  if (!agentId) return apiError("缺少 agentId", "VALIDATION_ERROR");
 
   // 统一为数组处理
   const items: { categoryId: string; isManual?: boolean; isHidden?: boolean }[] =
     Array.isArray(body.items) ? body.items : [{ categoryId: body.categoryId, isManual: body.isManual, isHidden: body.isHidden }];
 
   if (items.length === 0 || !items[0].categoryId) {
-    return NextResponse.json({ error: "缺少 categoryId" }, { status: 400 });
+    return apiError("缺少 categoryId", "VALIDATION_ERROR");
   }
 
   const toUpsert: { agent_id: string; category_id: string; is_manual: boolean; is_hidden: boolean; created_at: string }[] = [];

@@ -1,4 +1,4 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -30,7 +30,7 @@ export async function DELETE(
 
   const { count } = await db.from("users").select("id", { count: "exact", head: true }).eq("team_id", id);
   if (count && count > 0) {
-    return NextResponse.json({ error: `该小组下还有 ${count} 名用户，请先移除用户再删除` }, { status: 409 });
+    return apiError(`该小组下还有 ${count} 名用户，请先移除用户再删除`, "CONFLICT");
   }
 
   await db.from("teams").delete().eq("id", id);

@@ -1,3 +1,4 @@
+import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -8,12 +9,12 @@ export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
 
-  if (!file) return NextResponse.json({ error: "未提供文件" }, { status: 400 });
+  if (!file) return apiError("未提供文件", "VALIDATION_ERROR");
 
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "png";
   const allowed = ["png", "jpg", "jpeg", "svg", "webp", "gif"];
   if (!allowed.includes(ext)) {
-    return NextResponse.json({ error: "只支持 PNG / SVG / JPG / WEBP 格式" }, { status: 400 });
+    return apiError("只支持 PNG / SVG / JPG / WEBP 格式", "VALIDATION_ERROR");
   }
 
   // 固定路径，上传时自动覆盖旧 Logo
@@ -24,7 +25,7 @@ export async function POST(req: NextRequest) {
     .from("uploads")
     .upload(path, buffer, { contentType: file.type, upsert: true });
 
-  if (uploadError) return NextResponse.json({ error: uploadError.message }, { status: 500 });
+  if (uploadError) return apiError("文件上传失败", "INTERNAL_ERROR");
 
   const { data: urlData } = db.storage.from("uploads").getPublicUrl(path);
   // 附加时间戳避免浏览器缓存旧图

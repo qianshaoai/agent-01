@@ -1,4 +1,4 @@
-import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
+import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
 
   const { deptId, tenantCode, name, sortOrder } = await req.json();
   if (!deptId || !tenantCode || !name?.trim()) {
-    return NextResponse.json({ error: "请填写部门和小组名称" }, { status: 400 });
+    return apiError("请填写部门和小组名称", "VALIDATION_ERROR");
   }
 
   const { data, error } = await db

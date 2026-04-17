@@ -1,4 +1,4 @@
-import { dbError, parsePagination, paginatedResponse } from "@/lib/api-error";
+import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
@@ -31,13 +31,13 @@ export async function POST(req: NextRequest) {
 
   const { tenantCode, content } = await req.json();
   if (!content?.trim()) {
-    return NextResponse.json({ error: "公告内容不能为空" }, { status: 400 });
+    return apiError("公告内容不能为空", "VALIDATION_ERROR");
   }
 
   // 组织管理员：强制只能发自己组织的公告，禁止全局公告
   let finalTenantCode = tenantCode?.trim().toUpperCase() || null;
   if (admin.role === "org_admin") {
-    if (!admin.tenantCode) return NextResponse.json({ error: "你没有关联组织" }, { status: 403 });
+    if (!admin.tenantCode) return apiError("你没有关联组织", "FORBIDDEN");
     finalTenantCode = admin.tenantCode;
   }
 
