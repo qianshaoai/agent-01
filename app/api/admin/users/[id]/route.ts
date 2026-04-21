@@ -108,11 +108,17 @@ export async function PATCH(
     return NextResponse.json({ ok: true });
   }
 
-  // ── 删除用户（硬删除，不再沿用"已注销"语义）──────────────
-  //   为了保证数据安全，仍采用 status=deleted 软删除，
-  //   但列表查询会过滤掉这些行，对上层等同于"删除"。
+  // ── 删除用户（软删除 + 释放账号字段）──────────────
+  //   仍采用 status=deleted 软删除保留审计数据，
+  //   同步把 username/phone 改写成墓碑值，释放原账号信息以便后续重新注册复用。
+  //   nickname 改写为"已删除用户"避免后台继续暴露原账号信息。
   if (body.action === "soft-delete" || body.action === "delete") {
-    const { error } = await db.from("users").update({ status: "deleted" }).eq("id", id);
+    const { error } = await db.from("users").update({
+      status: "deleted",
+      username: `deleted_${id}`,
+      phone: `del_${id}`,
+      nickname: "已删除用户",
+    }).eq("id", id);
     if (error) return dbError(error);
     return NextResponse.json({ ok: true });
   }

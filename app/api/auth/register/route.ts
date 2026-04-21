@@ -77,11 +77,12 @@ export const POST = withRequestLog(async (req: NextRequest) => {
       }
     }
 
-    // ── 用户名唯一性校验 ──────────────────────────────────────
+    // ── 用户名唯一性校验（只统计有效用户；deleted 的占用已在删除时改写为墓碑值）──
     const { count: unameCount } = await db
       .from("users")
       .select("id", { count: "exact", head: true })
-      .eq("username", normalizedUsername);
+      .eq("username", normalizedUsername)
+      .in("status", ["active", "disabled"]);
     if (unameCount && unameCount > 0) {
       return NextResponse.json({ error: "该用户名已被使用" }, { status: 409 });
     }
