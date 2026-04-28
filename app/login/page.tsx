@@ -49,6 +49,12 @@ export default function LoginPage() {
       try {
         localStorage.setItem(LS_LOGIN_KEY, JSON.stringify({ identifier: form.identifier }));
       } catch {}
+      // 体验账号优先跳 /trial，绕开首次改密弹窗（DB 也已预置 first_login=false 兜底）
+      if (data.userType === "trial") {
+        router.push("/trial");
+        router.refresh();
+        return;
+      }
       if (data.firstLogin) {
         setShowFirstLogin(true);
       } else {

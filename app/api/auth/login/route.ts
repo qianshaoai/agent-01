@@ -100,7 +100,12 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(
-      { ok: true, firstLogin: user.first_login, tenantName },
+      {
+        ok: true,
+        firstLogin: user.first_login,
+        tenantName,
+        userType: user.user_type ?? "personal",
+      },
       { headers: { "Set-Cookie": buildSetCookieHeader(token) } }
     );
   } catch (e) {

@@ -8,6 +8,9 @@ export const revalidate = 0;
 export async function GET() {
   const user = await getActiveUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  if (user.userType === "trial") {
+    return NextResponse.json({ error: "体验账号不可调用此接口", code: "FORBIDDEN" }, { status: 403 });
+  }
 
   let quota = null;
   if (!user.isPersonal) {

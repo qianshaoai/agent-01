@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getPayloadFromRequest, ADMIN_COOKIE_NAME, verifyToken } from "@/lib/auth";
 
 // 需要登录才能访问的用户路由
-const USER_PROTECTED = ["/", "/agents", "/settings", "/user-agents"];
+const USER_PROTECTED = ["/", "/agents", "/settings", "/user-agents", "/trial"];
 // 需要管理员才能访问的路由
 const ADMIN_PROTECTED = [
   "/admin/dashboard",
@@ -60,6 +60,10 @@ export async function middleware(req: NextRequest) {
     const payload = await getPayloadFromRequest(req);
     if (!payload || payload.type !== "user") {
       return NextResponse.redirect(new URL("/login", req.url));
+    }
+    // 体验账号只允许停留在 /trial（4.28up）
+    if (payload.userType === "trial" && !pathname.startsWith("/trial")) {
+      return NextResponse.redirect(new URL("/trial", req.url));
     }
     return NextResponse.next();
   }
