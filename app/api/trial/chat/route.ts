@@ -223,6 +223,9 @@ export async function POST(req: NextRequest) {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      // 关键：告诉 Nginx / 宝塔反代不要 buffering 这个 SSE 响应
+      // 否则 stream chunk 会被反代缓存到超时切断 → 客户端 Failed to fetch
+      "X-Accel-Buffering": "no",
     },
   });
 }
