@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/ui/page-header";
@@ -94,8 +95,9 @@ export default function WorkflowsAdminPage() {
   const [activeTab, setActiveTab] = useState<"workflows" | "categories">("workflows");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // 4.27up 阶段一：流程图 / 列表 视图切换，按 workflow.id 维度记忆
+  // 4.29up：默认视图改为 list（列表为主，流程图为辅）
   const [viewModeMap, setViewModeMap] = useState<Record<string, "flow" | "list">>({});
-  function getViewMode(wfId: string): "flow" | "list" { return viewModeMap[wfId] ?? "flow"; }
+  function getViewMode(wfId: string): "flow" | "list" { return viewModeMap[wfId] ?? "list"; }
   function setViewMode(wfId: string, mode: "flow" | "list") {
     setViewModeMap((prev) => ({ ...prev, [wfId]: mode }));
   }
@@ -125,11 +127,31 @@ export default function WorkflowsAdminPage() {
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [editingCatName, setEditingCatName] = useState("");
 
+  // 4.29up：?focus=<wfId>&pageSize=100 跨页定位
+  const router = useRouter();
+  const [focusWfId, setFocusWfId] = useState<string | null>(null);
+  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
+  const [highlightedWfId, setHighlightedWfId] = useState<string | null>(null);
+  const focusFiredRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const f = sp.get("focus");
+    const ps = sp.get("pageSize");
+    if (f) setFocusWfId(f);
+    if (ps) {
+      const n = parseInt(ps);
+      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
+    }
+  }, []);
+
   async function load() {
     setLoading(true);
     try {
+      const wfPs = urlPageSize && urlPageSize > 0 ? `?pageSize=${urlPageSize}` : "";
       const [wr, ar, cr, tr, dr, teamsR] = await Promise.all([
-        fetch("/api/admin/workflows").then((r) => r.json()).then(d => d.data ?? d),
+        fetch(`/api/admin/workflows${wfPs}`).then((r) => r.json()).then(d => d.data ?? d),
         // 4.27up 阶段一：显式 pageSize=100（接口默认 50、上限 100）
         // 避免流程图节点把"不在第一页的智能体"误判为已删除。
         // > 100 智能体的场景作为已知短板，留待阶段二独立评估专用候选接口。
@@ -152,7 +174,29 @@ export default function WorkflowsAdminPage() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [urlPageSize]);
+
+  // focus 高亮：数据加载完成后展开 + 滚动 + ring 1.5s
+  useEffect(() => {
+    if (!focusWfId || loading || focusFiredRef.current) return;
+    if (workflows.length === 0) return;
+    focusFiredRef.current = true;
+    const target = workflows.find((w) => w.id === focusWfId);
+    if (!target) {
+      toast("目标工作流不在当前页，请翻页查找");
+      return;
+    }
+    // 自动展开（页面只允许同时展开一条）
+    setExpandedId(target.id);
+    setHighlightedWfId(target.id);
+    setTimeout(() => {
+      const el = document.querySelector(`[data-wf-card="${target.id}"]`);
+      if (el && el instanceof HTMLElement) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 80);
+    setTimeout(() => setHighlightedWfId(null), 1500);
+  }, [focusWfId, loading, workflows, toast]);
 
   // ── Workflow CRUD ──────────────────────────────────────────────
   function openAddWf() { setEditingWf(null); setWfForm(EMPTY_WF); setWfError(""); setShowWfModal(true); }
@@ -613,7 +657,13 @@ export default function WorkflowsAdminPage() {
               const isExpanded = expandedId === wf.id;
               const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
               return (
-                <div key={wf.id} className="card overflow-hidden">
+                <div
+                  key={wf.id}
+                  data-wf-card={wf.id}
+                  className={`card overflow-hidden transition-all ${
+                    highlightedWfId === wf.id ? "ring-2 ring-[#002FA7] ring-offset-2" : ""
+                  }`}
+                >
                   {/* Workflow header */}
                   <div className="flex items-center gap-3 px-5 py-4">
                     <button onClick={() => setExpandedId(isExpanded ? null : wf.id)} className="p-1 rounded-[8px] hover:bg-gray-100 text-gray-400">
@@ -667,7 +717,7 @@ export default function WorkflowsAdminPage() {
                     <div className="border-t border-gray-50 px-5 pb-4 pt-3">
                       {/* 4.27up 阶段一：视图切换 Tab */}
                       <div className="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-[8px] w-fit">
-                        {(["flow", "list"] as const).map((mode) => (
+                        {(["list", "flow"] as const).map((mode) => (
                           <button
                             key={mode}
                             onClick={() => setViewMode(wf.id, mode)}
@@ -733,12 +783,29 @@ export default function WorkflowsAdminPage() {
                                   </span>
                                 </div>
                                 {step.description && <p className="text-xs text-gray-400 mt-0.5">{step.description}</p>}
-                                {step.exec_type === "agent" && step.agent_id && (
-                                  <p className="text-xs text-[#002FA7] mt-1 flex items-center gap-1">
-                                    {getAgent(step.agent_id)?.agent_type === "external" ? <ExternalLink size={10} /> : <Bot size={10} />}
-                                    绑定：{getAgent(step.agent_id)?.name ?? step.agent_id}
-                                  </p>
-                                )}
+                                {step.exec_type === "agent" && step.agent_id && (() => {
+                                  const boundAgent = getAgent(step.agent_id);
+                                  if (!boundAgent) {
+                                    return (
+                                      <p className="text-xs text-gray-400 mt-1">
+                                        绑定：{step.agent_id}
+                                      </p>
+                                    );
+                                  }
+                                  return (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        router.push(`/admin/agents?focus=${boundAgent.id}&pageSize=100`);
+                                      }}
+                                      className="text-xs text-[#002FA7] hover:underline mt-1 flex items-center gap-1"
+                                      title="跳转到智能体管理"
+                                    >
+                                      {boundAgent.agent_type === "external" ? <ExternalLink size={10} /> : <Bot size={10} />}
+                                      <span className="truncate max-w-[260px]">绑定：{boundAgent.name}</span>
+                                    </button>
+                                  );
+                                })()}
                               </div>
                               <div className="flex items-center gap-1 shrink-0">
                                 <button onClick={() => toggleStepEnabled(step)} className={`p-1 rounded-[6px] transition-colors text-xs ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}>
@@ -1214,6 +1281,8 @@ function WorkflowFlowView(props: {
   const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep } = props;
   // 阶段二：当前激活绑定浮层的步骤 id（null = 关闭）。同一时间只允许一个浮层打开。
   const [bindingStepId, setBindingStepId] = useState<string | null>(null);
+  // 4.29up：跳转到智能体管理（流程图节点里的"已绑定智能体"chip 可点击）
+  const flowRouter = useRouter();
 
   if (steps.length === 0) {
     return (
@@ -1322,13 +1391,20 @@ function WorkflowFlowView(props: {
                           </div>
                         )}
                         {agent && (
-                          <p className="text-xs text-[#002FA7] flex items-center gap-1 truncate" title={agent.name}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              flowRouter.push(`/admin/agents?focus=${agent.id}&pageSize=100`);
+                            }}
+                            className="text-xs text-[#002FA7] hover:underline flex items-center gap-1 truncate text-left"
+                            title={`跳转到智能体：${agent.name}`}
+                          >
                             {isExternalAgent ? <ExternalLink size={10} /> : <Bot size={10} />}
                             <span className="truncate">{agent.name}</span>
                             <span className={`ml-1 text-[10px] px-1 py-px rounded ${isExternalAgent ? "bg-orange-50 text-orange-500" : "bg-blue-50 text-blue-500"}`}>
                               {isExternalAgent ? "外链" : "chat"}
                             </span>
-                          </p>
+                          </button>
                         )}
 
                         {/* 阶段二：绑定智能体浮层 */}
