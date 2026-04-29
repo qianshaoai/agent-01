@@ -128,21 +128,27 @@ export default function WorkflowsAdminPage() {
   const [editingCatName, setEditingCatName] = useState("");
 
   // 4.29up：?focus=<wfId>&pageSize=100 跨页定位
-  // 关键：lazy initial state 同步解析 URL，避免首次以默认 pageSize 加载导致的 focus 竞态
+  // 关键：客户端 hydrate 后才能读到 window.location.search（lazy state 在 SSR 首次执行时
+  //       window 不存在，会被钉成 null）；用 urlReady 防止 load() 抢跑
   const router = useRouter();
-  const [focusWfId] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("focus");
-  });
-  const [urlPageSize] = useState<number | null>(() => {
-    if (typeof window === "undefined") return null;
-    const ps = new URLSearchParams(window.location.search).get("pageSize");
-    if (!ps) return null;
-    const n = parseInt(ps);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  });
+  const [focusWfId, setFocusWfId] = useState<string | null>(null);
+  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
+  const [urlReady, setUrlReady] = useState(false);
   const [highlightedWfId, setHighlightedWfId] = useState<string | null>(null);
   const focusFiredRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const f = sp.get("focus");
+    const ps = sp.get("pageSize");
+    setFocusWfId(f);
+    if (ps) {
+      const n = parseInt(ps);
+      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
+    }
+    setUrlReady(true);
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -172,28 +178,44 @@ export default function WorkflowsAdminPage() {
     }
   }
 
-  // URL 已通过 lazy initial state 同步初始化，load 直接用对的 pageSize
-  useEffect(() => { load(); }, []);
+  // 等 URL 解析完成（hydrate 后才能读到 window.location.search）才发请求，避免抢跑
+  useEffect(() => {
+    if (!urlReady) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlReady]);
 
-  // focus 高亮：数据加载完成后展开 + 滚动 + ring 1.5s
+  // focus 高亮：数据加载完成后清掉筛选 + 展开 + 滚动 + ring 1.5s
   useEffect(() => {
     if (!focusWfId || loading || focusFiredRef.current) return;
     if (workflows.length === 0) return;
-    focusFiredRef.current = true;
     const target = workflows.find((w) => w.id === focusWfId);
     if (!target) {
+      // 找不到再下结论才"消耗"focus（数据已经加载完成、但目标不在当前 pageSize 范围内）
+      focusFiredRef.current = true;
       toast("目标工作流不在当前页，请翻页查找");
       return;
     }
+    focusFiredRef.current = true;
+    // 关键：清掉所有筛选条件，确保目标卡片在 filteredWorkflows 中能被渲染
+    // （否则即便 setExpandedId 设了，DOM 里也根本没有这张卡可展开）
+    setWfSearch("");
+    setWfCatFilter("");
+    setWfVisibleFilter("");
+    setWfStatusFilter("");
     // 自动展开（页面只允许同时展开一条）
     setExpandedId(target.id);
     setHighlightedWfId(target.id);
-    setTimeout(() => {
-      const el = document.querySelector(`[data-wf-card="${target.id}"]`);
-      if (el && el instanceof HTMLElement) {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    }, 80);
+    // 双 rAF：等"清筛选 + 展开"两帧 commit 完成后再滚动，避免高度还没变就滚到错位置
+    // block:"center" 比 "start" 更稳，避免被 sticky 顶栏遮挡
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-wf-card="${target.id}"]`);
+        if (el && el instanceof HTMLElement) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    });
     setTimeout(() => setHighlightedWfId(null), 1500);
   }, [focusWfId, loading, workflows, toast]);
 

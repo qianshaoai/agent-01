@@ -59,23 +59,29 @@ export default function AgentsAdminPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
   // 4.29up：?focus=<agentId>&pageSize=100 跨页定位
-  // 关键：使用 lazy initial state 在首次渲染前同步解析 URL，
-  //       避免"先用默认 pageSize 拉一次→目标不在前 50 条→focusFired 已 true"的竞态
-  const [focusAgentId] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("focus");
-  });
-  const [urlPageSize] = useState<number | null>(() => {
-    if (typeof window === "undefined") return null;
-    const ps = new URLSearchParams(window.location.search).get("pageSize");
-    if (!ps) return null;
-    const n = parseInt(ps);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  });
+  // 关键：客户端 hydrate 后才能读到 window.location.search（"use client" 页也走 SSR，
+  //       lazy state 首次在服务端执行 window 不存在，初值会被钉成 null），用 urlReady
+  //       防止 load() 在 URL 解析前抢跑
+  const [focusAgentId, setFocusAgentId] = useState<string | null>(null);
+  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
+  const [urlReady, setUrlReady] = useState(false);
   const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
   // 工作流引用列表"+N 更多"popover
   const [openMoreFor, setOpenMoreFor] = useState<string | null>(null);
   const focusFiredRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const f = sp.get("focus");
+    const ps = sp.get("pageSize");
+    setFocusAgentId(f);
+    if (ps) {
+      const n = parseInt(ps);
+      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
+    }
+    setUrlReady(true);
+  }, []);
   // 删除流程
   const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -135,27 +141,38 @@ export default function AgentsAdminPage() {
     }
   }
 
-  // URL 已通过 lazy initial state 同步初始化，load 直接用对的 pageSize
-  useEffect(() => { load(); }, []);
+  // 等 URL 解析完成（hydrate 后才能读到 window.location.search）才发请求，避免抢跑
+  useEffect(() => {
+    if (!urlReady) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlReady]);
 
-  // focus 高亮：数据加载完成后定位 + ring 1.5s
+  // focus 高亮：数据加载完成后清掉筛选 + 定位 + ring 1.5s
   useEffect(() => {
     if (!focusAgentId || loading || focusFiredRef.current) return;
     if (agents.length === 0) return;
-    focusFiredRef.current = true;
     const target = agents.find((a) => a.id === focusAgentId);
     if (!target) {
       // 数据被删 / 跨页（总数 > pageSize）→ 不报错、不空白，仅 toast 提示
+      focusFiredRef.current = true;
       toast("目标智能体不在当前页，请翻页查找");
       return;
     }
+    focusFiredRef.current = true;
+    // 清掉所有筛选条件，确保目标行在 filteredAgents 中能被渲染
+    setAgentTypeFilter("");
+    setAgentCategoryFilter("");
+    setAgentStatusFilter("");
     setHighlightedRowId(target.id);
-    setTimeout(() => {
-      const el = document.querySelector(`[data-agent-row="${target.id}"]`);
-      if (el && el instanceof HTMLElement) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    }, 50);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-agent-row="${target.id}"]`);
+        if (el && el instanceof HTMLElement) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    });
     setTimeout(() => setHighlightedRowId(null), 1500);
   }, [focusAgentId, loading, agents, toast]);
 
