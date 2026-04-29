@@ -16,6 +16,15 @@ export type TrialAgent = {
   apiEndpoint: string;
   botId: string;
   apiToken: string;
+  /**
+   * 4.30up：平台能力声明
+   * - nativeDocuments: true  → 平台能自己读 PDF/docx 等（如 Coze RAG），透传 file_id 即可
+   * - nativeDocuments: false → 平台不读文档，由 portal 后端用 pdf-parse/mammoth 提取文本
+   *                            塞进消息正文里发给 AI（Yuanqi / 大多数平台都这样）
+   */
+  capabilities: {
+    nativeDocuments: boolean;
+  };
 };
 
 const RAW_AGENTS: TrialAgent[] = [
@@ -29,6 +38,7 @@ const RAW_AGENTS: TrialAgent[] = [
     apiEndpoint: "https://api.coze.cn/v3/chat",
     botId: process.env.TRIAL_AGENT_001_BOT_ID ?? "",
     apiToken: process.env.TRIAL_AGENT_001_API_TOKEN ?? "",
+    capabilities: { nativeDocuments: false }, // 实测 bot 不读 docx → 走 portal 文本提取
   },
   {
     id: "agent_002",
@@ -40,6 +50,19 @@ const RAW_AGENTS: TrialAgent[] = [
     apiEndpoint: "https://api.coze.cn/v3/chat",
     botId: process.env.TRIAL_AGENT_002_BOT_ID ?? "",
     apiToken: process.env.TRIAL_AGENT_002_API_TOKEN ?? "",
+    capabilities: { nativeDocuments: false }, // 实测 bot 不读 docx → 走 portal 文本提取
+  },
+  {
+    id: "agent_003",
+    platform: "yuanqi",
+    name: "测试对话智能体2",
+    description: "用于测试元器（腾讯）智能体问答能力",
+    avatar: "",
+    category: "对话",
+    apiEndpoint: "https://yuanqi.tencent.com/openapi/v1/agent/chat/completions",
+    botId: process.env.TRIAL_AGENT_003_ASSISTANT_ID ?? "",
+    apiToken: process.env.TRIAL_AGENT_003_API_KEY ?? "",
+    capabilities: { nativeDocuments: false }, // 元器 OpenAPI 读不了文档，portal 预提取
   },
 ];
 

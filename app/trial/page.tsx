@@ -34,10 +34,15 @@ type TrialAgent = {
 };
 
 type Attachment = {
-  file_id: string;
   kind: "image" | "file";
   file_name?: string;
-  /** 仅本地刚上传时有 — 用于直接显示缩略图（ObjectURL，session 内有效）*/
+  /** Supabase Storage 公开 URL — 通用 */
+  url?: string;
+  /** Coze 私有 file_id — 仅 Coze 平台 */
+  cozeFileId?: string;
+  /** @deprecated 旧字段，保留向后兼容（旧消息从 DB 拉回时可能仍是这个字段名）*/
+  file_id?: string;
+  /** 仅本地刚上传时有 — ObjectURL 用于过渡显示，session 内有效 */
   previewUrl?: string;
 };
 
@@ -52,14 +57,17 @@ type Msg = {
 };
 
 type PendingAttachment = {
-  // 上传未完成时 file_id 为空
-  fileId: string;
+  // 本地临时 ID（uploadId）— 区分不同附件 chip
+  uploadId: string;
   fileName: string;
   bytes: number;
   kind: "image" | "file";
-  previewUrl?: string;
+  previewUrl?: string; // 本地 ObjectURL，仅本 session 内有效
   uploading: boolean;
   error?: string;
+  // 上传成功后填充：
+  url?: string; // Supabase Storage 公开 URL（所有平台都能用）
+  cozeFileId?: string; // Coze 私有 file_id（仅 Coze 平台时填）
 };
 
 type ChatRow = {
@@ -362,7 +370,7 @@ export default function TrialPage() {
     setPendingAttachments((prev) => [
       ...prev,
       {
-        fileId: localKey, // 临时 key；上传成功后替换为真 file_id
+        uploadId: localKey,
         fileName: file.name,
         bytes: file.size,
         kind: isImg ? "image" : "file",
@@ -381,8 +389,14 @@ export default function TrialPage() {
 
       setPendingAttachments((prev) =>
         prev.map((p) =>
-          p.fileId === localKey
-            ? { ...p, fileId: d.file_id, kind: d.kind, uploading: false }
+          p.uploadId === localKey
+            ? {
+                ...p,
+                kind: d.kind,
+                uploading: false,
+                url: d.url,
+                cozeFileId: d.cozeFileId,
+              }
             : p
         )
       );
@@ -390,7 +404,7 @@ export default function TrialPage() {
       const msg = e instanceof Error ? e.message : "上传失败";
       setPendingAttachments((prev) =>
         prev.map((p) =>
-          p.fileId === localKey ? { ...p, uploading: false, error: msg } : p
+          p.uploadId === localKey ? { ...p, uploading: false, error: msg } : p
         )
       );
     }
@@ -412,11 +426,11 @@ export default function TrialPage() {
     files.slice(0, room).forEach(uploadOne);
   }
 
-  function removePending(localFileId: string) {
+  function removePending(uploadId: string) {
     setPendingAttachments((prev) => {
-      const target = prev.find((p) => p.fileId === localFileId);
+      const target = prev.find((p) => p.uploadId === uploadId);
       if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
-      return prev.filter((p) => p.fileId !== localFileId);
+      return prev.filter((p) => p.uploadId !== uploadId);
     });
   }
 
@@ -466,9 +480,9 @@ export default function TrialPage() {
     const text = input.trim();
     if (!activeAgent || streaming) return;
 
-    // 仅取已上传成功且无错误的附件
+    // 仅取已上传成功且无错误的附件（必须有 url 或 cozeFileId）
     const usableAtts = pendingAttachments.filter(
-      (p) => !p.uploading && !p.error && p.fileId
+      (p) => !p.uploading && !p.error && (p.url || p.cozeFileId)
     );
     // 还有正在上传 / 出错的，提示用户
     if (pendingAttachments.some((p) => p.uploading)) {
@@ -494,10 +508,11 @@ export default function TrialPage() {
       attachments:
         usableAtts.length > 0
           ? usableAtts.map((a) => ({
-              file_id: a.fileId,
               kind: a.kind,
               file_name: a.fileName,
-              // 把本地 previewUrl 一并放进消息，用于缩略图直显
+              url: a.url,
+              cozeFileId: a.cozeFileId,
+              // 把本地 previewUrl 一并放进消息，用于上传 → 渲染期间过渡显示
               previewUrl: a.previewUrl,
             }))
           : undefined,
@@ -546,7 +561,12 @@ export default function TrialPage() {
           chat_id: chatIdAtSend ?? undefined,
           attachments:
             usableAtts.length > 0
-              ? usableAtts.map((a) => ({ file_id: a.fileId, kind: a.kind }))
+              ? usableAtts.map((a) => ({
+                  kind: a.kind,
+                  url: a.url,
+                  cozeFileId: a.cozeFileId,
+                  file_name: a.fileName,
+                }))
               : undefined,
         }),
       });
@@ -1147,35 +1167,35 @@ export default function TrialPage() {
                         {m.attachments && m.attachments.length > 0 && (
                           <div className="flex flex-wrap gap-1.5 mb-1.5">
                             {m.attachments.map((att, ai) => {
-                              // 图片 + 有 previewUrl 时直接显缩略图（仅本 session 刚发的图）
-                              if (att.kind === "image" && att.previewUrl) {
+                              // 图片：优先 url（持久化的，所有平台都能看），其次 previewUrl（本 session 刚上传）
+                              const imgSrc =
+                                att.kind === "image" ? att.url || att.previewUrl : null;
+                              if (imgSrc) {
                                 return (
                                   <a
-                                    key={`${att.file_id}_${ai}`}
-                                    href={att.previewUrl}
+                                    key={ai}
+                                    href={imgSrc}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="block rounded-[10px] overflow-hidden border border-white/30"
                                   >
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
-                                      src={att.previewUrl}
+                                      src={imgSrc}
                                       alt={att.file_name ?? "图片"}
                                       className="max-w-[220px] max-h-[200px] object-cover"
                                     />
                                   </a>
                                 );
                               }
-                              // 没 previewUrl 的（历史拉回的）退回 chip 形式
-                              return (
-                                <div
-                                  key={`${att.file_id}_${ai}`}
-                                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] text-[11px] ${
-                                    m.role === "user"
-                                      ? "bg-white/20 text-white"
-                                      : "bg-white border border-gray-200 text-gray-600"
-                                  }`}
-                                >
+                              // 文件 / 无图片源 → chip；有 url 时整 chip 包成可下载链接
+                              const chipClass = `inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] text-[11px] ${
+                                m.role === "user"
+                                  ? "bg-white/20 text-white hover:bg-white/30"
+                                  : "bg-white border border-gray-200 text-gray-600 hover:border-[#002FA7]/40"
+                              }`;
+                              const chipInner = (
+                                <>
                                   {att.kind === "image" ? (
                                     <ImageIcon size={11} />
                                   ) : (
@@ -1185,6 +1205,25 @@ export default function TrialPage() {
                                     {att.file_name ||
                                       (att.kind === "image" ? "图片" : "文件")}
                                   </span>
+                                </>
+                              );
+                              if (att.url) {
+                                return (
+                                  <a
+                                    key={ai}
+                                    href={att.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={chipClass + " transition-colors"}
+                                    title={att.file_name}
+                                  >
+                                    {chipInner}
+                                  </a>
+                                );
+                              }
+                              return (
+                                <div key={ai} className={chipClass}>
+                                  {chipInner}
                                 </div>
                               );
                             })}
@@ -1257,7 +1296,7 @@ export default function TrialPage() {
                   <div className="flex flex-wrap gap-2 mb-2">
                     {pendingAttachments.map((p) => (
                       <div
-                        key={p.fileId}
+                        key={p.uploadId}
                         className={`group/att relative flex items-center gap-2 pl-1 pr-7 py-1 rounded-[10px] border text-[12px] ${
                           p.error
                             ? "border-red-200 bg-red-50 text-red-600"
@@ -1287,7 +1326,7 @@ export default function TrialPage() {
                           </p>
                         </div>
                         <button
-                          onClick={() => removePending(p.fileId)}
+                          onClick={() => removePending(p.uploadId)}
                           className="absolute right-1.5 top-1.5 p-0.5 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-500 hover:text-gray-700 transition-colors"
                           title="移除"
                         >

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPayloadFromRequest, requireTrialUser } from "@/lib/auth";
 import { getTrialAgentRaw } from "@/lib/trial-agents";
+import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -22,15 +23,22 @@ function detectKind(filename: string, mimeType: string): Kind | null {
 /**
  * POST /api/trial/upload
  * multipart/form-data:
- *   - agent_id: string  （决定使用哪个智能体的 API Token 上传到 Coze）
+ *   - agent_id: string  （决定上传到 Coze 还是仅 Supabase）
  *   - file: File
  *
- * 返回 { file_id, file_name, bytes, kind }
+ * 4.30up 通用化：
+ *   - 所有附件都先上传到 Supabase Storage 拿公开 URL（任何平台 adapter 都能用）
+ *   - 如果 platform === "coze"，再额外上传到 Coze 拿 file_id（保留 Coze 原生文件能力）
+ *
+ * 返回 { file_name, bytes, kind, url, cozeFileId? }
  */
 export async function POST(req: NextRequest) {
   const payload = await getPayloadFromRequest(req);
   const guard = requireTrialUser(payload);
   if (guard) return guard;
+
+  const userId = payload!.type === "user" ? payload!.userId : "";
+  if (!userId) return NextResponse.json({ error: "无效会话" }, { status: 401 });
 
   let form: FormData;
   try {
@@ -75,36 +83,67 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 转发到 Coze
-  const cozeForm = new FormData();
-  cozeForm.append("file", file, fileName);
+  // ── 1. 必做：上传到 Supabase Storage 拿公开 URL ─────────────────────
+  const bucket = process.env.SUPABASE_STORAGE_BUCKET ?? "uploads";
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `trial/${userId}/${Date.now()}-${safeName}`;
 
-  let res: Response;
+  let buffer: Buffer;
   try {
-    res = await fetch("https://api.coze.cn/v1/files/upload", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${agent.apiToken}` },
-      body: cozeForm,
-    });
+    const ab = await file.arrayBuffer();
+    buffer = Buffer.from(ab);
   } catch {
-    return NextResponse.json(
-      { error: "上传到 Coze 失败", code: "UPSTREAM_ERROR" },
-      { status: 502 }
-    );
+    return NextResponse.json({ error: "读取文件失败" }, { status: 400 });
   }
 
-  const json = await res.json().catch(() => null);
-  if (!json || json.code !== 0 || !json.data?.id) {
+  const { error: storageErr } = await db.storage
+    .from(bucket)
+    .upload(path, buffer, { contentType: mimeType, upsert: false });
+  if (storageErr) {
+    console.error("[trial_upload] supabase storage error:", storageErr);
     return NextResponse.json(
-      { error: json?.msg ?? "Coze 拒绝上传", code: "UPSTREAM_ERROR" },
-      { status: 502 }
+      { error: "文件上传失败，请重试", code: "STORAGE_ERROR" },
+      { status: 500 }
     );
+  }
+  const { data: pub } = db.storage.from(bucket).getPublicUrl(path);
+  const publicUrl = pub.publicUrl;
+
+  // ── 2. 可选：Coze 平台 + （图片 或 nativeDocuments=true 的文档）才上传到 Coze ─
+  // 文档但 nativeDocuments=false 时跳过：portal 会在 chat 里文本提取后塞正文，
+  //   没必要花一次 Coze 上传
+  const needCozeUpload =
+    agent.platform === "coze" &&
+    (kind === "image" || agent.capabilities.nativeDocuments);
+
+  let cozeFileId: string | undefined;
+  if (needCozeUpload) {
+    const cozeForm = new FormData();
+    cozeForm.append("file", file, fileName);
+    try {
+      const res = await fetch("https://api.coze.cn/v1/files/upload", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${agent.apiToken}` },
+        body: cozeForm,
+      });
+      const json = await res.json().catch(() => null);
+      if (json && json.code === 0 && json.data?.id) {
+        cozeFileId = json.data.id;
+      } else {
+        // Coze 上传失败不阻断 — 退化到只用 Supabase URL（image 仍能 file_url 走，
+        // file 类型 Coze 看不懂会降级文本提示）
+        console.warn("[trial_upload] coze upload failed, fallback to URL:", json?.msg);
+      }
+    } catch (e) {
+      console.warn("[trial_upload] coze upload exception, fallback to URL:", e);
+    }
   }
 
   return NextResponse.json({
-    file_id: json.data.id,
-    file_name: json.data.file_name ?? fileName,
-    bytes: json.data.bytes ?? file.size,
+    file_name: fileName,
+    bytes: file.size,
     kind,
+    url: publicUrl,
+    ...(cozeFileId ? { cozeFileId } : {}),
   });
 }

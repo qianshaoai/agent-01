@@ -22,8 +22,15 @@ async function withRetry<T>(
 }
 
 export type ChatAttachment = {
-  fileId: string;
   kind: "image" | "file";
+  /** 文件名（用于显示和 file 类型降级渲染）*/
+  fileName?: string;
+  /** Supabase Storage 公开 URL — 所有平台都能读取 */
+  url?: string;
+  /** Coze 私有 file_id — 仅在 Coze 平台 + 上传到 Coze 时填 */
+  cozeFileId?: string;
+  /** @deprecated 旧字段，保留向后兼容；优先用 cozeFileId */
+  fileId?: string;
 };
 
 export type ChatMessage = {
@@ -89,7 +96,17 @@ async function* cozeStream(
         const parts: Array<Record<string, string>> = [];
         if (m.content) parts.push({ type: "text", text: m.content });
         for (const a of m.attachments) {
-          parts.push({ type: a.kind, file_id: a.fileId });
+          // 优先用 cozeFileId（Coze 原生），其次 legacy fileId，再次 file_url（仅 image）
+          const fid = a.cozeFileId || a.fileId;
+          if (fid) {
+            parts.push({ type: a.kind, file_id: fid });
+          } else if (a.kind === "image" && a.url) {
+            // Coze 图片类型支持外部 URL
+            parts.push({ type: "image", file_url: a.url });
+          } else if (a.url && a.kind === "file") {
+            // file 类型 Coze 不接受外部 URL，降级为文本提示
+            parts.push({ type: "text", text: `\n[文件: ${a.fileName ?? "附件"}](${a.url})` });
+          }
         }
         return {
           role,
@@ -217,10 +234,39 @@ async function* yuanqiStream(
     user_id: "portal_user",
     stream: true,
     chat_type: "published",
-    messages: messages.map((m) => ({
-      role: m.role === "assistant" ? "assistant" : "user",
-      content: [{ type: "text", text: m.content }],
-    })),
+    messages: messages.map((m) => {
+      // 元器 multimodal content 数组：image 用 image_url；file 用 text 降级
+      const parts: Array<Record<string, unknown>> = [];
+
+      // 文件类附件先收集到 text 末尾追加；image 插入独立 part
+      let textContent = m.content || "";
+      if (m.attachments && m.attachments.length > 0) {
+        const fileNotes: string[] = [];
+        const imageAtts: ChatAttachment[] = [];
+        for (const a of m.attachments) {
+          if (a.kind === "image" && a.url) {
+            imageAtts.push(a);
+          } else if (a.url) {
+            fileNotes.push(`[文件: ${a.fileName ?? "附件"}](${a.url})`);
+          }
+        }
+        if (fileNotes.length > 0) {
+          textContent = (textContent ? textContent + "\n\n" : "") + fileNotes.join("\n");
+        }
+        if (textContent) parts.push({ type: "text", text: textContent });
+        for (const img of imageAtts) {
+          // 元器走 OpenAI 兼容格式：type 必须是 "image_url"，不是 "image"
+          parts.push({ type: "image_url", image_url: { url: img.url } });
+        }
+      } else {
+        parts.push({ type: "text", text: textContent });
+      }
+
+      return {
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: parts,
+      };
+    }),
   };
 
   const res = await fetch(

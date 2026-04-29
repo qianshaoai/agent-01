@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPayloadFromRequest, requireTrialUser } from "@/lib/auth";
 import { getTrialAgentRaw } from "@/lib/trial-agents";
-import { streamChat } from "@/lib/adapters";
+import { streamChat, type ChatMessage } from "@/lib/adapters";
 import { db } from "@/lib/db";
+import { extractTextFromUrl } from "@/lib/trial-text-extract";
 
 const TITLE_MAX = 30;
 
@@ -28,15 +29,37 @@ export async function POST(req: NextRequest) {
   const clientChatId: string | null =
     typeof body.chat_id === "string" && body.chat_id ? body.chat_id : null;
 
-  // 附件：[{file_id, kind:"image"|"file"}]
-  type RawAttachment = { file_id?: unknown; kind?: unknown };
+  // 附件：4.30up 通用化后字段：{ kind, url?, cozeFileId?, file_name?, file_id? (legacy) }
+  // 至少要有 url 或 cozeFileId 或 file_id 之一
+  type RawAttachment = {
+    kind?: unknown;
+    url?: unknown;
+    cozeFileId?: unknown;
+    file_id?: unknown;
+    file_name?: unknown;
+  };
   const rawAttachments: RawAttachment[] = Array.isArray(body.attachments)
     ? (body.attachments as RawAttachment[])
     : [];
-  const attachments = rawAttachments
-    .filter((a): a is { file_id: string; kind: "image" | "file" } =>
-      typeof a.file_id === "string" && (a.kind === "image" || a.kind === "file")
-    )
+  type ParsedAtt = {
+    kind: "image" | "file";
+    url?: string;
+    cozeFileId?: string;
+    file_id?: string;
+    file_name?: string;
+  };
+  const attachments: ParsedAtt[] = rawAttachments
+    .map((a): ParsedAtt | null => {
+      if (a.kind !== "image" && a.kind !== "file") return null;
+      const url = typeof a.url === "string" ? a.url : undefined;
+      const cozeFileId = typeof a.cozeFileId === "string" ? a.cozeFileId : undefined;
+      const file_id = typeof a.file_id === "string" ? a.file_id : undefined;
+      const file_name = typeof a.file_name === "string" ? a.file_name : undefined;
+      // 至少要有一个引用方式
+      if (!url && !cozeFileId && !file_id) return null;
+      return { kind: a.kind, url, cozeFileId, file_id, file_name };
+    })
+    .filter((a): a is ParsedAtt => a !== null)
     .slice(0, 5);
 
   // 附件可以替代 message（仅发图也允许）；但消息和附件不能都为空
@@ -153,16 +176,80 @@ export async function POST(req: NextRequest) {
         },
       };
 
+      let assistantContent = "";
       try {
+        // 4.30up：通用文档支持
+        // 平台 capabilities.nativeDocuments === false 时，把 file 类型附件
+        // 在 portal 后端预提取文本 → 拼到 message 正文里发给 AI
+        // 这样元器（及任何不读文档的平台）也能"读"PDF/docx/txt
+        let expandedMessage = message;
+        let attachmentsForAdapter = attachments;
+        if (!agent.capabilities.nativeDocuments) {
+          const fileAtts = attachments.filter((a) => a.kind === "file" && a.url);
+          const otherAtts = attachments.filter((a) => !(a.kind === "file" && a.url));
+          if (fileAtts.length > 0) {
+            const blocks: string[] = [];
+            for (const a of fileAtts) {
+              const result = a.url
+                ? await extractTextFromUrl(a.url, a.file_name ?? "file")
+                : null;
+              if (result) {
+                const truncatedNote = result.truncated
+                  ? `\n[注：文档过长，已截取前 ${result.text.length} 字]`
+                  : "";
+                blocks.push(
+                  `[附件: ${a.file_name ?? "文件"}]\n${result.text}${truncatedNote}\n[/附件]`
+                );
+              } else {
+                // 提取失败，至少保留 URL 提示
+                blocks.push(
+                  `[附件: ${a.file_name ?? "文件"}（解析失败，URL: ${a.url}）]`
+                );
+              }
+            }
+            expandedMessage = blocks.join("\n\n") + (message ? "\n\n" + message : "");
+            attachmentsForAdapter = otherAtts; // file 类已变成文本，不再当附件传
+          }
+        }
+
         const userMessage = {
           role: "user" as const,
-          content: message,
+          content: expandedMessage,
           attachments:
-            attachments.length > 0
-              ? attachments.map((a) => ({ fileId: a.file_id, kind: a.kind }))
+            attachmentsForAdapter.length > 0
+              ? attachmentsForAdapter.map((a) => ({
+                  kind: a.kind,
+                  fileName: a.file_name,
+                  url: a.url,
+                  cozeFileId: a.cozeFileId,
+                  fileId: a.file_id, // legacy
+                }))
               : undefined,
         };
-        for await (const chunk of streamChat([userMessage], cfg)) {
+
+        // Phase 1：非 Coze 平台无平台侧 conversation 持久化，需要把本地历史拼成
+        // messages 数组发给 adapter；Coze 走自己 conversation_id + auto_save_history
+        // 不必重复送历史
+        let messagesForAdapter: ChatMessage[] = [userMessage];
+        if (agent.platform !== "coze") {
+          const { data: priorMsgs } = await db
+            .from("trial_messages")
+            .select("role, content")
+            .eq("chat_id", chatId)
+            .order("created_at", { ascending: true });
+          if (priorMsgs && priorMsgs.length > 0) {
+            messagesForAdapter = [
+              ...priorMsgs.map((m): ChatMessage => ({
+                role: m.role === "assistant" ? "assistant" : "user",
+                content: m.content,
+              })),
+              userMessage,
+            ];
+          }
+        }
+
+        for await (const chunk of streamChat(messagesForAdapter, cfg)) {
+          assistantContent += chunk;
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ delta: chunk })}\n\n`)
           );
@@ -175,8 +262,42 @@ export async function POST(req: NextRequest) {
           encoder.encode(`data: ${JSON.stringify({ error: errMsg })}\n\n`)
         );
       } finally {
-        // UPDATE chat 行：刷新 last_active_at；新会话时也要写入 coze_conversation_id
-        if (ok) {
+        // 流结束（成功 / abort / 错误）都保留 chat 行 + 入库 user 消息
+        // —— 不再回滚，避免前端拿到的 chat_id 失效导致后续消息 404 级联
+        // —— assistant 消息仅在有内容时入库（避免空回复打乱顺序）
+        {
+          // 入库 user 消息（保留所有附件字段：url 通用，cozeFileId/file_id 平台特定）
+          const { error: userInsertErr } = await db.from("trial_messages").insert({
+            chat_id: chatId,
+            role: "user",
+            content: message,
+            attachments:
+              attachments.length > 0
+                ? attachments.map((a) => ({
+                    kind: a.kind,
+                    file_name: a.file_name,
+                    url: a.url,
+                    cozeFileId: a.cozeFileId,
+                    file_id: a.file_id, // legacy
+                  }))
+                : null,
+          });
+          if (userInsertErr) {
+            console.error("[trial_chat] insert user msg failed:", userInsertErr);
+          }
+          // 入库 assistant 消息（即便 abort，partial 内容也保留）
+          if (assistantContent) {
+            const { error: assistantInsertErr } = await db.from("trial_messages").insert({
+              chat_id: chatId,
+              role: "assistant",
+              content: assistantContent,
+            });
+            if (assistantInsertErr) {
+              console.error("[trial_chat] insert assistant msg failed:", assistantInsertErr);
+            }
+          }
+
+          // UPDATE chat 行：刷新 last_active_at；新会话时也要写入 coze_conversation_id
           const updates: Record<string, unknown> = {
             last_active_at: new Date().toISOString(),
           };
@@ -191,9 +312,6 @@ export async function POST(req: NextRequest) {
           if (updErr) {
             console.error("[trial_chat] update trial_conversations failed:", updErr);
           }
-        } else if (isNewChat) {
-          // 新建后流式失败，回滚：删掉这条空行，避免列表里出现一条没消息的死记录
-          await db.from("trial_conversations").delete().eq("id", chatId).eq("user_id", userId);
         }
 
         // logs fire-and-forget

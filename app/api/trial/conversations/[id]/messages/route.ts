@@ -44,7 +44,45 @@ export async function GET(
     return NextResponse.json({ error: "聊天记录不存在或无权访问" }, { status: 404 });
   }
 
-  // 2) 没有 Coze conversation_id 时（刚创建未发送）返回空
+  // Phase 1：优先从本地 trial_messages 表读 —— 适用于所有平台（Coze/元器/...）
+  // 也是统一入口，性能更好，不需要每次调外部 API
+  type LocalMsg = {
+    role: "user" | "assistant";
+    content: string;
+    attachments: { file_id: string; kind: "image" | "file"; file_name?: string }[] | null;
+    created_at: string;
+  };
+  const { data: localMsgs } = await db
+    .from("trial_messages")
+    .select("role, content, attachments, created_at")
+    .eq("chat_id", id)
+    .order("created_at", { ascending: true });
+
+  if (localMsgs && localMsgs.length > 0) {
+    const messages = (localMsgs as LocalMsg[]).map((m) => {
+      const out: {
+        role: string;
+        content: string;
+        createdAt: number | null;
+        attachments?: { file_id: string; kind: "image" | "file"; file_name?: string }[];
+      } = {
+        role: m.role,
+        content: m.content,
+        createdAt: m.created_at ? new Date(m.created_at).getTime() : null,
+      };
+      if (m.attachments && m.attachments.length > 0) {
+        out.attachments = m.attachments;
+      }
+      return out;
+    });
+    return NextResponse.json({
+      conversation_id: row.coze_conversation_id,
+      title: row.title,
+      messages,
+    });
+  }
+
+  // 2) 没有本地消息 + 没有 Coze conversation_id（刚创建未发送）→ 空
   if (!row.coze_conversation_id) {
     return NextResponse.json({
       conversation_id: null,
@@ -53,7 +91,8 @@ export async function GET(
     });
   }
 
-  // 3) 用 agent 配置的 token 调 Coze
+  // 3) 历史回退：本地空但有 Coze conversation_id（旧 chat，Phase 1 之前创建的）
+  // → 从 Coze 拉一次（向后兼容）
   const agent = getTrialAgentRaw(row.agent_id);
   if (!agent || !agent.botId || !agent.apiToken) {
     return NextResponse.json(
