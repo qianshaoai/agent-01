@@ -132,17 +132,22 @@ export default function WorkflowsAdminPage() {
   //       window 不存在，会被钉成 null）；用 urlReady 防止 load() 抢跑
   const router = useRouter();
   const [focusWfId, setFocusWfId] = useState<string | null>(null);
+  const [focusFromAgentId, setFocusFromAgentId] = useState<string | null>(null);
   const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
   const [urlReady, setUrlReady] = useState(false);
   const [highlightedWfId, setHighlightedWfId] = useState<string | null>(null);
+  // 4.29up：从智能体跳过来时，把使用该 agent 的步骤一并高亮
+  const [highlightedStepAgentId, setHighlightedStepAgentId] = useState<string | null>(null);
   const focusFiredRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sp = new URLSearchParams(window.location.search);
     const f = sp.get("focus");
+    const fa = sp.get("fromAgent");
     const ps = sp.get("pageSize");
     setFocusWfId(f);
+    setFocusFromAgentId(fa);
     if (ps) {
       const n = parseInt(ps);
       if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
@@ -206,6 +211,8 @@ export default function WorkflowsAdminPage() {
     // 自动展开（页面只允许同时展开一条）
     setExpandedId(target.id);
     setHighlightedWfId(target.id);
+    // 同步设置 step 高亮（来自智能体页跳转时使用该 agent 的步骤会发亮）
+    if (focusFromAgentId) setHighlightedStepAgentId(focusFromAgentId);
     // 双 rAF：等"清筛选 + 展开"两帧 commit 完成后再滚动，避免高度还没变就滚到错位置
     // block:"center" 比 "start" 更稳，避免被 sticky 顶栏遮挡
     requestAnimationFrame(() => {
@@ -216,8 +223,11 @@ export default function WorkflowsAdminPage() {
         }
       });
     });
-    setTimeout(() => setHighlightedWfId(null), 1500);
-  }, [focusWfId, loading, workflows, toast]);
+    setTimeout(() => {
+      setHighlightedWfId(null);
+      setHighlightedStepAgentId(null);
+    }, 1500);
+  }, [focusWfId, focusFromAgentId, loading, workflows, toast]);
 
   // ── Workflow CRUD ──────────────────────────────────────────────
   function openAddWf() { setEditingWf(null); setWfForm(EMPTY_WF); setWfError(""); setShowWfModal(true); }
@@ -767,6 +777,7 @@ export default function WorkflowsAdminPage() {
                           moveStep={moveStep}
                           moving={moving}
                           openAddStep={openAddStep}
+                          highlightedStepAgentId={highlightedStepAgentId}
                         />
                       ) : (
                       <>
@@ -785,7 +796,7 @@ export default function WorkflowsAdminPage() {
                                   <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
                                 </button>
                               )}
-                            <div className={`flex items-start gap-3 p-3 rounded-[12px] ${step.enabled ? "bg-gray-50" : "bg-gray-50/50 opacity-60"}`}>
+                            <div className={`flex items-start gap-3 p-3 rounded-[12px] transition-all ${step.enabled ? "bg-gray-50" : "bg-gray-50/50 opacity-60"} ${highlightedStepAgentId && step.agent_id === highlightedStepAgentId ? "ring-2 ring-[#002FA7] bg-[#002FA7]/5" : ""}`}>
                               <GripVertical size={14} className="text-gray-300 mt-0.5 shrink-0" />
                               <div className="w-6 h-6 rounded-full bg-[#002FA7]/10 text-[#002FA7] text-xs font-bold flex items-center justify-center shrink-0">{idx + 1}</div>
                               <div className="flex-1 min-w-0">
@@ -1298,8 +1309,10 @@ function WorkflowFlowView(props: {
   moveStep: (step: WorkflowStep, direction: "up" | "down") => Promise<void>;
   moving: { stepId: string; direction: "up" | "down" } | null;
   openAddStep: (workflowId: string, defaultOrder: number) => void;
+  // 4.29up：从智能体跳过来时高亮使用该 agent 的步骤
+  highlightedStepAgentId?: string | null;
 }) {
-  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep } = props;
+  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId } = props;
   // 阶段二：当前激活绑定浮层的步骤 id（null = 关闭）。同一时间只允许一个浮层打开。
   const [bindingStepId, setBindingStepId] = useState<string | null>(null);
   // 4.29up：跳转到智能体管理（流程图节点里的"已绑定智能体"chip 可点击）
@@ -1348,12 +1361,14 @@ function WorkflowFlowView(props: {
             const noAgentBound  = isAgent && !step.agent_id;
             const isExternalAgent = isAgent && agent?.agent_type === "external";
 
+            const isStepHighlighted = !!highlightedStepAgentId && step.agent_id === highlightedStepAgentId;
             return (
               <div key={step.id} className="flex items-stretch">
                 {/* 节点卡片 */}
                 <div
-                  className={`flex flex-col w-[240px] flex-shrink-0 rounded-[12px] border bg-white ${style.border} ${
+                  className={`flex flex-col w-[240px] flex-shrink-0 rounded-[12px] border bg-white transition-all ${style.border} ${
                     step.enabled ? "" : "opacity-60"
+                  } ${isStepHighlighted ? "ring-2 ring-[#002FA7] ring-offset-2 shadow-[0_0_0_4px_rgba(0,47,167,0.08)]" : ""
                   }`}
                   style={{ minHeight: "150px" }}
                 >

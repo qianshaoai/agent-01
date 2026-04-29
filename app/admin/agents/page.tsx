@@ -491,7 +491,7 @@ export default function AgentsAdminPage() {
                                   key={w.id}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    router.push(`/admin/workflows?focus=${w.id}&pageSize=100`);
+                                    router.push(`/admin/workflows?focus=${w.id}&fromAgent=${a.id}&pageSize=100`);
                                   }}
                                   className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-[#002FA7]/8 text-[#002FA7] border border-[#002FA7]/20 hover:bg-[#002FA7]/15 transition-colors max-w-[180px]"
                                   title={`跳转到工作流：${w.name}`}
@@ -527,7 +527,7 @@ export default function AgentsAdminPage() {
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             setOpenMoreFor(null);
-                                            router.push(`/admin/workflows?focus=${w.id}&pageSize=100`);
+                                            router.push(`/admin/workflows?focus=${w.id}&fromAgent=${a.id}&pageSize=100`);
                                           }}
                                           className="text-left text-[12px] px-2 py-1.5 rounded-[6px] hover:bg-[#002FA7]/8 hover:text-[#002FA7] flex items-center gap-2 transition-colors"
                                         >
@@ -969,8 +969,9 @@ export default function AgentsAdminPage() {
                 <button
                   key={wf.id}
                   onClick={() => {
+                    const aid = usedByModal.agent.id;
                     setUsedByModal(null);
-                    router.push(`/admin/workflows?focus=${wf.id}&pageSize=100`);
+                    router.push(`/admin/workflows?focus=${wf.id}&fromAgent=${aid}&pageSize=100`);
                   }}
                   className="flex items-center justify-between gap-2 px-3 py-2 rounded-[8px] hover:bg-[#002FA7]/8 transition-colors text-left"
                 >
