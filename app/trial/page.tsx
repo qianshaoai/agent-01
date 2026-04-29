@@ -1,6 +1,9 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 import {
   Bot,
   Send,
@@ -16,6 +19,10 @@ import {
   X,
   ImageIcon,
   FileText,
+  Square,
+  Copy,
+  Check,
+  Menu,
 } from "lucide-react";
 
 type TrialAgent = {
@@ -30,12 +37,18 @@ type Attachment = {
   file_id: string;
   kind: "image" | "file";
   file_name?: string;
+  /** 仅本地刚上传时有 — 用于直接显示缩略图（ObjectURL，session 内有效）*/
+  previewUrl?: string;
 };
 
 type Msg = {
   role: "user" | "assistant";
   content: string;
   attachments?: Attachment[];
+  /** ISO 时间或时间戳；本地刚发的消息用 Date.now()；从后端拉的历史消息用 Coze 返回的 created_at */
+  createdAt?: string | number;
+  /** 用户主动中断时标记，气泡末尾显示「已停止」徽章 */
+  aborted?: boolean;
 };
 
 type PendingAttachment = {
@@ -87,8 +100,8 @@ const emptyAgentState = (): AgentState => ({
   bodies: {},
 });
 
-function relativeTime(iso: string): string {
-  const t = new Date(iso).getTime();
+function relativeTime(iso: string | number): string {
+  const t = typeof iso === "number" ? iso : new Date(iso).getTime();
   const diff = Date.now() - t;
   const m = Math.floor(diff / 60000);
   if (m < 1) return "刚刚";
@@ -97,8 +110,38 @@ function relativeTime(iso: string): string {
   if (h < 24) return `${h} 小时前`;
   const d = Math.floor(h / 24);
   if (d < 7) return `${d} 天前`;
-  return new Date(iso).toLocaleDateString("zh-CN");
+  return new Date(t).toLocaleDateString("zh-CN");
 }
+
+/** 把聊天列表按时间桶分组：今天 / 昨天 / 7 天内 / 更早 */
+function bucketChatsByTime(chats: ChatRow[]): { label: string; items: ChatRow[] }[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 3600 * 1000;
+  const sevenDaysAgo = startOfToday - 7 * 24 * 3600 * 1000;
+  const buckets: Record<string, ChatRow[]> = { 今天: [], 昨天: [], "7 天内": [], 更早: [] };
+  for (const c of chats) {
+    const t = new Date(c.last_active_at).getTime();
+    if (t >= startOfToday) buckets["今天"].push(c);
+    else if (t >= startOfYesterday) buckets["昨天"].push(c);
+    else if (t >= sevenDaysAgo) buckets["7 天内"].push(c);
+    else buckets["更早"].push(c);
+  }
+  return [
+    { label: "今天", items: buckets["今天"] },
+    { label: "昨天", items: buckets["昨天"] },
+    { label: "7 天内", items: buckets["7 天内"] },
+    { label: "更早", items: buckets["更早"] },
+  ].filter((g) => g.items.length > 0);
+}
+
+/** 通用建议提问 chip（每个智能体共用）*/
+const SUGGESTIONS = [
+  "介绍一下你能帮我做什么",
+  "用更通俗的语言解释一下",
+  "请用 markdown 格式回复",
+  "给我一个具体例子",
+];
 
 export default function TrialPage() {
   const router = useRouter();
@@ -107,6 +150,20 @@ export default function TrialPage() {
   const [activeAgent, setActiveAgent] = useState<TrialAgent | null>(null);
   const [agentStates, setAgentStates] = useState<Record<string, AgentState>>({});
   const [input, setInput] = useState("");
+  // 复制气泡内容的反馈：刚复制过的 message index → 显示对勾 1.5s
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  // 移动端聊天历史抽屉
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+
+  async function copyMessage(idx: number, content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx((cur) => (cur === idx ? null : cur)), 1500);
+    } catch {
+      // 静默失败，浏览器太老
+    }
+  }
   const [streaming, setStreaming] = useState(false);
   const [loadErr, setLoadErr] = useState("");
   const [loading, setLoading] = useState(true);
@@ -114,6 +171,9 @@ export default function TrialPage() {
   const [siteLogoUrl, setSiteLogoUrl] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 流式中断
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // 拉取站点 logo（与正式版头部保持一致）
   useEffect(() => {
@@ -182,6 +242,15 @@ export default function TrialPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length, activeBody.loadingMessages]);
 
+  // ── textarea auto-resize ────────────────────────────────────────────
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    const next = Math.min(ta.scrollHeight, 200); // max 200px 后开滚
+    ta.style.height = next + "px";
+  }, [input]);
+
   // ── 进入某个 agent：拉聊天列表 ────────────────────────────────────
   useEffect(() => {
     if (!activeAgent) return;
@@ -203,8 +272,8 @@ export default function TrialPage() {
           chats,
           loadedChats: true,
           loadingChats: false,
-          // 自动激活最近的一条；没有则 null（新建态）
-          activeChatId: chats.length > 0 ? chats[0].id : null,
+          // 4.29up：进入智能体默认新建会话，历史会话在左栏列出按需点击进入
+          activeChatId: null,
         }));
       })
       .catch(() => {
@@ -250,12 +319,9 @@ export default function TrialPage() {
   }, [activeAgent, aState.activeChatId, aState.bodies, updateBody]);
 
   function clearPending() {
-    setPendingAttachments((cur) => {
-      cur.forEach((p) => {
-        if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
-      });
-      return [];
-    });
+    // 注意：不 revoke previewUrl —— 消息气泡里仍引用着这个 URL 显示缩略图
+    // 否则缩略图会立即失效。session 内 ObjectURL 内存占用很小，可接受
+    setPendingAttachments(() => []);
   }
 
   function enterChat(a: TrialAgent) {
@@ -275,6 +341,7 @@ export default function TrialPage() {
     updateAgentState(activeAgent.id, (s) => ({ ...s, activeChatId: null }));
     setInput("");
     clearPending();
+    setMobileDrawerOpen(false);
   }
 
   function selectChat(chatId: string) {
@@ -282,6 +349,7 @@ export default function TrialPage() {
     updateAgentState(activeAgent.id, (s) => ({ ...s, activeChatId: chatId }));
     setInput("");
     clearPending();
+    setMobileDrawerOpen(false);
   }
 
   // ── 文件上传 ──────────────────────────────────────────────────────
@@ -389,6 +457,11 @@ export default function TrialPage() {
     router.push("/login");
   }
 
+  function stopStreaming() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+  }
+
   async function send() {
     const text = input.trim();
     if (!activeAgent || streaming) return;
@@ -417,12 +490,15 @@ export default function TrialPage() {
     const userBubble: Msg = {
       role: "user",
       content: text,
+      createdAt: Date.now(),
       attachments:
         usableAtts.length > 0
           ? usableAtts.map((a) => ({
               file_id: a.fileId,
               kind: a.kind,
               file_name: a.fileName,
+              // 把本地 previewUrl 一并放进消息，用于缩略图直显
+              previewUrl: a.previewUrl,
             }))
           : undefined,
     };
@@ -447,6 +523,10 @@ export default function TrialPage() {
     clearPending();
     setStreaming(true);
 
+    // 创建 AbortController 让用户可以中断流式
+    const abortCtrl = new AbortController();
+    abortControllerRef.current = abortCtrl;
+
     let realChatId: string | null = chatIdAtSend;
 
     // 把对 localKey 的写入"重定向"到实际 chat id（首次响应后）
@@ -458,6 +538,7 @@ export default function TrialPage() {
     try {
       const res = await fetch("/api/trial/chat", {
         method: "POST",
+        signal: abortCtrl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           agent_id: agentId,
@@ -564,13 +645,28 @@ export default function TrialPage() {
         }
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "网络错误，请重试";
-      writeToBody((b) => {
-        const copy = [...b.messages];
-        copy[copy.length - 1] = { role: "assistant", content: `（${msg}）` };
-        return { ...b, messages: copy };
-      });
+      // 用户主动中断：保留已收到的部分，标记 aborted 让气泡末尾出现「已停止」徽章
+      const isAbort = e instanceof DOMException && e.name === "AbortError";
+      if (isAbort) {
+        writeToBody((b) => {
+          const copy = [...b.messages];
+          const last = copy[copy.length - 1];
+          copy[copy.length - 1] = {
+            ...last,
+            aborted: true,
+          };
+          return { ...b, messages: copy };
+        });
+      } else {
+        const msg = e instanceof Error ? e.message : "网络错误，请重试";
+        writeToBody((b) => {
+          const copy = [...b.messages];
+          copy[copy.length - 1] = { role: "assistant", content: `（${msg}）` };
+          return { ...b, messages: copy };
+        });
+      }
     } finally {
+      abortControllerRef.current = null;
       setStreaming(false);
       // 把当前 chat 顶到列表第一位（last_active_at 更新）
       if (realChatId) {
@@ -604,8 +700,8 @@ export default function TrialPage() {
 
       {/* ── 顶部导航（深色保留） ─────────────────────────────── */}
       <header className="relative z-10 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-b border-white/10 shadow-[0_4px_20px_rgba(0,47,167,0.12)]">
-        <div className="max-w-[1280px] mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="max-w-[1480px] mx-auto px-5 sm:px-8 lg:pl-8 lg:pr-20 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3 lg:-ml-16">
             {activeAgent ? (
               <button
                 onClick={backToList}
@@ -646,7 +742,7 @@ export default function TrialPage() {
             </span>
             <button
               onClick={handleLogout}
-              className="flex items-center gap-1.5 text-sm text-white/60 hover:text-white transition-colors px-3 py-1.5 rounded-[10px] hover:bg-white/5"
+              className="flex items-center gap-1.5 text-sm text-white/85 hover:text-white transition-colors px-3 py-1.5 rounded-[10px] hover:bg-white/10"
               title="退出登录"
             >
               <LogOut size={15} />
@@ -767,11 +863,11 @@ export default function TrialPage() {
                       {[...Array(3)].map((_, i) => (
                         <div
                           key={i}
-                          className="bg-gray-50 border border-gray-100 rounded-[20px] p-6 h-44 animate-pulse"
+                          className="bg-white/40 backdrop-blur border border-white/40 rounded-[20px] p-6 h-44 overflow-hidden"
                         >
-                          <div className="w-12 h-12 bg-gray-200 rounded-[12px] mb-4" />
-                          <div className="h-4 bg-gray-200 rounded w-3/4 mb-2" />
-                          <div className="h-3 bg-gray-200 rounded w-full" />
+                          <div className="w-12 h-12 rounded-[14px] mb-4 trial-shimmer" />
+                          <div className="h-4 rounded w-3/4 mb-2 trial-shimmer" />
+                          <div className="h-3 rounded w-full trial-shimmer" />
                         </div>
                       ))}
                     </div>
@@ -859,14 +955,38 @@ export default function TrialPage() {
         {activeAgent && (
           <div className="flex gap-5 items-stretch h-[calc(100vh-128px)]">
             {/* 左侧聊天历史栏 */}
-            <aside className="hidden md:flex w-64 shrink-0 flex-col bg-white border border-gray-200 rounded-[20px] overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
-              <div className="px-4 pt-4 pb-3 border-b border-gray-100">
+            {/* 移动端遮罩 */}
+            {mobileDrawerOpen && (
+              <div
+                className="md:hidden fixed inset-0 z-40 bg-black/40 animate-in fade-in duration-150"
+                onClick={() => setMobileDrawerOpen(false)}
+              />
+            )}
+            <aside
+              className={`shrink-0 flex flex-col bg-white border border-gray-200 overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.04)]
+                md:flex md:w-64 md:rounded-[20px] md:relative md:shadow-[0_2px_10px_rgba(0,0,0,0.04)]
+                ${
+                  mobileDrawerOpen
+                    ? "fixed inset-y-0 left-0 z-50 w-[280px] rounded-none animate-in slide-in-from-left duration-200"
+                    : "hidden"
+                }`}
+            >
+              <div className="px-4 pt-4 pb-3 border-b border-gray-100 flex items-center gap-2">
                 <button
                   onClick={newChat}
                   disabled={streaming}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-[12px] bg-[#002FA7] text-white text-sm font-medium hover:bg-[#001f7a] disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_4px_16px_rgba(0,47,167,0.25)] transition-all"
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-[12px] bg-[#002FA7] text-white text-sm font-medium hover:bg-[#001f7a] disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_4px_16px_rgba(0,47,167,0.25)] transition-all"
                 >
                   <Plus size={15} /> 新建对话
+                </button>
+                {/* 移动端关闭抽屉按钮（仅小屏 + 抽屉打开时显示）*/}
+                <button
+                  onClick={() => setMobileDrawerOpen(false)}
+                  className="md:hidden p-2 rounded-[10px] hover:bg-gray-100 text-gray-500"
+                  title="关闭"
+                  aria-label="关闭"
+                >
+                  <X size={16} />
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto px-2 py-2">
@@ -881,52 +1001,61 @@ export default function TrialPage() {
                     点击上方开始第一段对话
                   </div>
                 ) : (
-                  <div className="flex flex-col gap-1">
-                    {aState.chats.map((c) => {
-                      const isActive = aState.activeChatId === c.id;
-                      return (
-                        <div
-                          key={c.id}
-                          onClick={() => selectChat(c.id)}
-                          className={`group/chat relative flex items-start gap-2 px-3 py-2.5 rounded-[10px] cursor-pointer transition-all ${
-                            isActive
-                              ? "bg-[#002FA7]/8 border border-[#002FA7]/20"
-                              : "border border-transparent hover:bg-gray-50"
-                          }`}
-                        >
-                          <MessageCircle
-                            size={13}
-                            className={`mt-0.5 shrink-0 ${
-                              isActive ? "text-[#002FA7]" : "text-gray-400"
-                            }`}
-                          />
-                          <div className="flex-1 min-w-0">
-                            <p
-                              className={`text-[13px] truncate ${
-                                isActive
-                                  ? "text-[#002FA7] font-medium"
-                                  : "text-gray-700"
-                              }`}
-                            >
-                              {c.title || "未命名对话"}
-                            </p>
-                            <p className="text-[10px] text-gray-400 mt-0.5">
-                              {relativeTime(c.last_active_at)}
-                            </p>
-                          </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteChat(c.id);
-                            }}
-                            className="opacity-0 group-hover/chat:opacity-100 transition-opacity p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-500"
-                            title="删除"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                  <div className="flex flex-col gap-3">
+                    {bucketChatsByTime(aState.chats).map((group) => (
+                      <div key={group.label}>
+                        <p className="text-[10px] font-semibold text-gray-400 tracking-wider px-3 mb-1 uppercase">
+                          {group.label}
+                        </p>
+                        <div className="flex flex-col gap-0.5">
+                          {group.items.map((c) => {
+                            const isActive = aState.activeChatId === c.id;
+                            return (
+                              <div
+                                key={c.id}
+                                onClick={() => selectChat(c.id)}
+                                className={`group/chat relative flex items-start gap-2 px-3 py-2.5 rounded-[10px] cursor-pointer transition-all ${
+                                  isActive
+                                    ? "bg-[#002FA7]/8 border border-[#002FA7]/20"
+                                    : "border border-transparent hover:bg-gray-50"
+                                }`}
+                              >
+                                <MessageCircle
+                                  size={13}
+                                  className={`mt-0.5 shrink-0 ${
+                                    isActive ? "text-[#002FA7]" : "text-gray-400"
+                                  }`}
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p
+                                    className={`text-[13px] truncate ${
+                                      isActive
+                                        ? "text-[#002FA7] font-medium"
+                                        : "text-gray-700"
+                                    }`}
+                                  >
+                                    {c.title || "未命名对话"}
+                                  </p>
+                                  <p className="text-[10px] text-gray-400 mt-0.5">
+                                    {relativeTime(c.last_active_at)}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteChat(c.id);
+                                  }}
+                                  className="opacity-0 group-hover/chat:opacity-100 transition-opacity p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-500"
+                                  title="删除"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -935,6 +1064,15 @@ export default function TrialPage() {
             {/* 右侧对话面板 */}
             <div className="flex-1 flex flex-col bg-white border border-gray-200 rounded-[20px] overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
               <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 bg-gray-50/40">
+                {/* 移动端汉堡 → 唤出聊天历史抽屉 */}
+                <button
+                  onClick={() => setMobileDrawerOpen(true)}
+                  className="md:hidden p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors -ml-1"
+                  title="历史会话"
+                  aria-label="打开历史会话"
+                >
+                  <Menu size={18} />
+                </button>
                 <div className="w-11 h-11 rounded-[12px] flex items-center justify-center bg-[#002FA7]/8 border border-[#002FA7]/15">
                   {activeAgent.avatar ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -964,23 +1102,39 @@ export default function TrialPage() {
                     <p className="text-xs text-gray-400">正在加载历史对话…</p>
                   </div>
                 ) : messages.length === 0 ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center">
+                  <div className="flex-1 flex flex-col items-center justify-center text-center px-4">
                     <div className="w-16 h-16 rounded-[18px] bg-[#002FA7]/8 border border-[#002FA7]/15 flex items-center justify-center mb-4">
                       <Bot size={26} className="text-[#002FA7]" />
                     </div>
                     <p className="text-sm text-gray-700">
                       向 {activeAgent.name} 发起对话
                     </p>
-                    <p className="text-xs text-gray-400 mt-1">
+                    <p className="text-xs text-gray-400 mt-1 mb-6">
                       支持多轮上下文，记录将自动保存
                     </p>
+                    {/* 建议提问 chip */}
+                    <div className="flex flex-wrap justify-center gap-2 max-w-[520px]">
+                      {SUGGESTIONS.map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => {
+                            setInput(s);
+                            // 等下一帧让 input state 落，然后聚焦输入框
+                            requestAnimationFrame(() => textareaRef.current?.focus());
+                          }}
+                          className="text-[12px] px-3 py-1.5 rounded-full bg-white border border-gray-200 text-gray-600 hover:border-[#002FA7] hover:text-[#002FA7] hover:bg-[#002FA7]/5 transition-colors"
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   messages.map((m, i) => (
                     <div
                       key={i}
-                      className={`flex ${
-                        m.role === "user" ? "justify-end" : "justify-start"
+                      className={`group/bubble flex flex-col ${
+                        m.role === "user" ? "items-end" : "items-start"
                       }`}
                     >
                       <div
@@ -992,42 +1146,105 @@ export default function TrialPage() {
                       >
                         {m.attachments && m.attachments.length > 0 && (
                           <div className="flex flex-wrap gap-1.5 mb-1.5">
-                            {m.attachments.map((att, ai) => (
-                              <div
-                                key={`${att.file_id}_${ai}`}
-                                className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] text-[11px] ${
-                                  m.role === "user"
-                                    ? "bg-white/20 text-white"
-                                    : "bg-white border border-gray-200 text-gray-600"
-                                }`}
-                              >
-                                {att.kind === "image" ? (
-                                  <ImageIcon size={11} />
-                                ) : (
-                                  <FileText size={11} />
-                                )}
-                                <span className="max-w-[140px] truncate">
-                                  {att.file_name ||
-                                    (att.kind === "image" ? "图片" : "文件")}
-                                </span>
-                              </div>
-                            ))}
+                            {m.attachments.map((att, ai) => {
+                              // 图片 + 有 previewUrl 时直接显缩略图（仅本 session 刚发的图）
+                              if (att.kind === "image" && att.previewUrl) {
+                                return (
+                                  <a
+                                    key={`${att.file_id}_${ai}`}
+                                    href={att.previewUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block rounded-[10px] overflow-hidden border border-white/30"
+                                  >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={att.previewUrl}
+                                      alt={att.file_name ?? "图片"}
+                                      className="max-w-[220px] max-h-[200px] object-cover"
+                                    />
+                                  </a>
+                                );
+                              }
+                              // 没 previewUrl 的（历史拉回的）退回 chip 形式
+                              return (
+                                <div
+                                  key={`${att.file_id}_${ai}`}
+                                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] text-[11px] ${
+                                    m.role === "user"
+                                      ? "bg-white/20 text-white"
+                                      : "bg-white border border-gray-200 text-gray-600"
+                                  }`}
+                                >
+                                  {att.kind === "image" ? (
+                                    <ImageIcon size={11} />
+                                  ) : (
+                                    <FileText size={11} />
+                                  )}
+                                  <span className="max-w-[140px] truncate">
+                                    {att.file_name ||
+                                      (att.kind === "image" ? "图片" : "文件")}
+                                  </span>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
-                        <div className="whitespace-pre-wrap break-words">
-                          {m.content ||
-                            (streaming &&
-                            i === messages.length - 1 &&
-                            m.role === "assistant" ? (
-                              <Loader2
-                                size={14}
-                                className="animate-spin text-gray-400"
-                              />
-                            ) : (
-                              ""
-                            ))}
-                        </div>
+                        {m.content ? (
+                          m.role === "assistant" ? (
+                            <div className="trial-md break-words">
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                rehypePlugins={[rehypeHighlight]}
+                              >
+                                {m.content}
+                              </ReactMarkdown>
+                            </div>
+                          ) : (
+                            <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                          )
+                        ) : streaming &&
+                          i === messages.length - 1 &&
+                          m.role === "assistant" ? (
+                          <Loader2 size={14} className="animate-spin text-gray-400" />
+                        ) : (
+                          ""
+                        )}
+                        {m.aborted && (
+                          <div className="mt-2 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">
+                            <Square size={9} className="fill-gray-500 text-gray-500" />
+                            已停止
+                          </div>
+                        )}
                       </div>
+                      {/* hover 工具栏：复制按钮 + 相对时间 */}
+                      {m.content && (
+                        <div className="opacity-0 group-hover/bubble:opacity-100 transition-opacity flex items-center gap-1.5 mt-1 px-1">
+                          <button
+                            onClick={() => copyMessage(i, m.content)}
+                            className="text-[11px] text-gray-400 hover:text-[#002FA7] flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] hover:bg-[#002FA7]/8 transition-colors"
+                            title="复制"
+                          >
+                            {copiedIdx === i ? (
+                              <>
+                                <Check size={11} className="text-[#002FA7]" /> 已复制
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={11} /> 复制
+                              </>
+                            )}
+                          </button>
+                          {m.createdAt && (
+                            <span
+                              className="text-[10px] text-gray-400"
+                              title={new Date(m.createdAt).toLocaleString("zh-CN")}
+                            >
+                              {relativeTime(m.createdAt)}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
@@ -1099,6 +1316,7 @@ export default function TrialPage() {
                     <Paperclip size={16} />
                   </button>
                   <textarea
+                    ref={textareaRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => {
@@ -1107,24 +1325,45 @@ export default function TrialPage() {
                         send();
                       }
                     }}
-                    placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+                    onPaste={(e) => {
+                      // 粘贴图片直传：拦截剪贴板里的 image item
+                      if (streaming || pendingAttachments.length >= 5) return;
+                      const items = Array.from(e.clipboardData?.items ?? []);
+                      const images = items
+                        .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+                        .map((it) => it.getAsFile())
+                        .filter((f): f is File => !!f);
+                      if (images.length === 0) return;
+                      e.preventDefault();
+                      const room = 5 - pendingAttachments.length;
+                      images.slice(0, room).forEach(uploadOne);
+                    }}
+                    placeholder="输入消息（支持 Markdown，可粘贴图片）"
                     rows={2}
-                    className="flex-1 resize-none border border-gray-200 rounded-[12px] px-3 py-2 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 bg-white text-gray-900 placeholder:text-gray-400"
+                    className="flex-1 resize-none border border-gray-200 rounded-[12px] px-3 py-2 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 bg-white text-gray-900 placeholder:text-gray-400 leading-relaxed"
                   />
-                  <button
-                    onClick={send}
-                    disabled={
-                      streaming ||
-                      (!input.trim() &&
-                        pendingAttachments.filter((p) => !p.error).length === 0)
-                    }
-                    className="h-10 px-5 rounded-[12px] bg-[#002FA7] text-white text-sm font-medium hover:bg-[#001f7a] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0 shadow-[0_4px_16px_rgba(0,47,167,0.25)] transition-all"
-                  >
-                    <Send size={14} />
-                    <span className="hidden sm:inline">
-                      {streaming ? "回复中…" : "发送"}
-                    </span>
-                  </button>
+                  {streaming ? (
+                    <button
+                      onClick={stopStreaming}
+                      title="停止生成"
+                      className="h-10 px-5 rounded-[12px] bg-gray-700 text-white text-sm font-medium hover:bg-gray-800 flex items-center gap-1.5 shrink-0 shadow-[0_4px_16px_rgba(31,41,55,0.25)] transition-all"
+                    >
+                      <Square size={12} className="fill-white" />
+                      <span className="hidden sm:inline">停止</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={send}
+                      disabled={
+                        !input.trim() &&
+                        pendingAttachments.filter((p) => !p.error).length === 0
+                      }
+                      className="h-10 px-5 rounded-[12px] bg-[#002FA7] text-white text-sm font-medium hover:bg-[#001f7a] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0 shadow-[0_4px_16px_rgba(0,47,167,0.25)] transition-all"
+                    >
+                      <Send size={14} />
+                      <span className="hidden sm:inline">发送</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

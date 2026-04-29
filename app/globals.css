@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "highlight.js/styles/github.css";
 
 :root {
   /* ─ 品牌色 ─────────────────────────────────── */
@@ -149,4 +150,88 @@ table td, table th { vertical-align: middle; }
   background: transparent;
   padding: 0;
   font-size: 0.85em;
+}
+
+/* ─ Trial markdown 渲染（仅作用 .trial-md 容器） ─ */
+.trial-md { font-size: 14px; line-height: 1.65; color: rgb(31 41 55); }
+.trial-md p { margin: 0; }
+.trial-md p + p,
+.trial-md p + ul,
+.trial-md p + ol,
+.trial-md p + pre,
+.trial-md p + blockquote,
+.trial-md p + h1,
+.trial-md p + h2,
+.trial-md p + h3,
+.trial-md ul + p,
+.trial-md ol + p,
+.trial-md pre + p,
+.trial-md h1 + p,
+.trial-md h2 + p,
+.trial-md h3 + p { margin-top: 0.6em; }
+
+.trial-md h1 { font-size: 1.25em; font-weight: 600; margin: 0.4em 0; }
+.trial-md h2 { font-size: 1.15em; font-weight: 600; margin: 0.4em 0; }
+.trial-md h3 { font-size: 1.05em; font-weight: 600; margin: 0.4em 0; }
+.trial-md strong { font-weight: 600; color: rgb(17 24 39); }
+.trial-md em { font-style: italic; }
+.trial-md a { color: var(--klein); text-decoration: underline; text-underline-offset: 2px; }
+.trial-md ul, .trial-md ol { padding-left: 1.4em; margin: 0.4em 0; }
+.trial-md ul { list-style: disc; }
+.trial-md ol { list-style: decimal; }
+.trial-md li { margin: 0.15em 0; }
+.trial-md li > p { display: inline; }
+.trial-md blockquote {
+  border-left: 3px solid rgb(229 231 235);
+  padding-left: 0.8em;
+  color: rgb(75 85 99);
+  margin: 0.6em 0;
+}
+.trial-md code:not(pre code) {
+  background: rgb(243 244 246);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.88em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: rgb(220 38 38);
+}
+.trial-md pre {
+  background: rgb(248 250 252);
+  border: 1px solid rgb(229 231 235);
+  border-radius: 10px;
+  padding: 0.8em 1em;
+  margin: 0.6em 0;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.trial-md pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 13px;
+  color: rgb(31 41 55);
+}
+.trial-md table { border-collapse: collapse; margin: 0.6em 0; font-size: 0.9em; }
+.trial-md th, .trial-md td {
+  border: 1px solid rgb(229 231 235);
+  padding: 0.4em 0.7em;
+}
+.trial-md th { background: rgb(249 250 251); font-weight: 600; }
+.trial-md hr { border: none; border-top: 1px solid rgb(229 231 235); margin: 0.8em 0; }
+.trial-md input[type="checkbox"] { accent-color: var(--klein); margin-right: 0.3em; }
+
+/* ─ Trial 加载骨架屏 shimmer 动画 ─ */
+@keyframes trial-shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+.trial-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 47, 167, 0.04) 0%,
+    rgba(0, 47, 167, 0.12) 50%,
+    rgba(0, 47, 167, 0.04) 100%
+  );
+  background-size: 1000px 100%;
+  animation: trial-shimmer 1.6s infinite linear;
 }

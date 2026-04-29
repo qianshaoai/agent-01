@@ -136,9 +136,11 @@ export async function GET(
     })
     .filter((m) => m.content || (m.attachments && m.attachments.length > 0))
     .sort((a, b) => a.created_at - b.created_at)
-    .map(({ role, content, attachments }) => ({
+    .map(({ role, content, attachments, created_at }) => ({
       role,
       content,
+      // Coze created_at 是 unix 秒；前端按毫秒处理
+      createdAt: created_at ? created_at * 1000 : null,
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     }));
 
