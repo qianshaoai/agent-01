@@ -56,6 +56,27 @@ export async function GET(req: NextRequest) {
     agentCatMap.set(row.agent_id, arr);
   }
 
+  // 4.29up：拉当前页 agent 引用的工作流（仅当前页范围，避免全表扫）
+  const pageAgentIds = agents.map((a) => a.id);
+  const wfMap = new Map<string, { id: string; name: string }[]>();
+  if (pageAgentIds.length > 0) {
+    const { data: wfRefs } = await db
+      .from("workflow_steps")
+      .select("agent_id, workflows(id, name)")
+      .in("agent_id", pageAgentIds);
+    type WfRef = { agent_id: string; workflows: { id: string; name: string } | null };
+    for (const r of (wfRefs ?? []) as unknown as WfRef[]) {
+      const wf = r.workflows;
+      if (!wf?.id) continue;
+      const arr = wfMap.get(r.agent_id) ?? [];
+      // 同 agent 在同 workflow 多 step 时只保留 1 条
+      if (!arr.find((x) => x.id === wf.id)) {
+        arr.push({ id: wf.id, name: wf.name });
+      }
+      wfMap.set(r.agent_id, arr);
+    }
+  }
+
   const masked = agents.map((a) => {
     const categoryIds = agentCatMap.get(a.id) ?? [];
     const cats = categoryIds.map((cid) => catMap.get(cid)).filter(Boolean) as { id: string; name: string; icon_url: string | null }[];
@@ -69,6 +90,7 @@ export async function GET(req: NextRequest) {
       categoryIds,
       categories: primaryCategory ? { name: primaryCategory.name, icon_url: primaryCategory.icon_url } : null,
       categoriesAll: cats,
+      workflows: wfMap.get(a.id) ?? [],
     };
   });
 

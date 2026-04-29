@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/ui/page-header";
@@ -22,6 +23,9 @@ import {
   ToggleLeft,
   ToggleRight,
   GripVertical,
+  ArrowUp,
+  ArrowDown,
+  Loader2,
   Copy,
   Search,
   X,
@@ -90,6 +94,13 @@ export default function WorkflowsAdminPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"workflows" | "categories">("workflows");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // 4.27up 阶段一：流程图 / 列表 视图切换，按 workflow.id 维度记忆
+  // 4.29up：默认视图改为 list（列表为主，流程图为辅）
+  const [viewModeMap, setViewModeMap] = useState<Record<string, "flow" | "list">>({});
+  function getViewMode(wfId: string): "flow" | "list" { return viewModeMap[wfId] ?? "list"; }
+  function setViewMode(wfId: string, mode: "flow" | "list") {
+    setViewModeMap((prev) => ({ ...prev, [wfId]: mode }));
+  }
   const [wfSearch, setWfSearch] = useState("");
   const [wfCatFilter, setWfCatFilter] = useState("");
   const [wfVisibleFilter, setWfVisibleFilter] = useState("");
@@ -116,12 +127,35 @@ export default function WorkflowsAdminPage() {
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [editingCatName, setEditingCatName] = useState("");
 
+  // 4.29up：?focus=<wfId>&pageSize=100 跨页定位
+  const router = useRouter();
+  const [focusWfId, setFocusWfId] = useState<string | null>(null);
+  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
+  const [highlightedWfId, setHighlightedWfId] = useState<string | null>(null);
+  const focusFiredRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const f = sp.get("focus");
+    const ps = sp.get("pageSize");
+    if (f) setFocusWfId(f);
+    if (ps) {
+      const n = parseInt(ps);
+      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
+    }
+  }, []);
+
   async function load() {
     setLoading(true);
     try {
+      const wfPs = urlPageSize && urlPageSize > 0 ? `?pageSize=${urlPageSize}` : "";
       const [wr, ar, cr, tr, dr, teamsR] = await Promise.all([
-        fetch("/api/admin/workflows").then((r) => r.json()).then(d => d.data ?? d),
-        fetch("/api/admin/agents").then((r) => r.json()).then(d => d.data ?? d),
+        fetch(`/api/admin/workflows${wfPs}`).then((r) => r.json()).then(d => d.data ?? d),
+        // 4.27up 阶段一：显式 pageSize=100（接口默认 50、上限 100）
+        // 避免流程图节点把"不在第一页的智能体"误判为已删除。
+        // > 100 智能体的场景作为已知短板，留待阶段二独立评估专用候选接口。
+        fetch("/api/admin/agents?pageSize=100").then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/wf-categories").then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/departments").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
@@ -140,7 +174,29 @@ export default function WorkflowsAdminPage() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [urlPageSize]);
+
+  // focus 高亮：数据加载完成后展开 + 滚动 + ring 1.5s
+  useEffect(() => {
+    if (!focusWfId || loading || focusFiredRef.current) return;
+    if (workflows.length === 0) return;
+    focusFiredRef.current = true;
+    const target = workflows.find((w) => w.id === focusWfId);
+    if (!target) {
+      toast("目标工作流不在当前页，请翻页查找");
+      return;
+    }
+    // 自动展开（页面只允许同时展开一条）
+    setExpandedId(target.id);
+    setHighlightedWfId(target.id);
+    setTimeout(() => {
+      const el = document.querySelector(`[data-wf-card="${target.id}"]`);
+      if (el && el instanceof HTMLElement) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 80);
+    setTimeout(() => setHighlightedWfId(null), 1500);
+  }, [focusWfId, loading, workflows, toast]);
 
   // ── Workflow CRUD ──────────────────────────────────────────────
   function openAddWf() { setEditingWf(null); setWfForm(EMPTY_WF); setWfError(""); setShowWfModal(true); }
@@ -316,6 +372,155 @@ export default function WorkflowsAdminPage() {
     load();
   }
 
+  // 4.27up 阶段三（第一轮）：上移 / 下移按钮
+  // 严格按方案 §5.2 失败处理：
+  //   - 第一次 PATCH 失败 → toast "排序失败"，无须补偿
+  //   - 第二次 PATCH 失败 → 启动补偿写回（反向 PATCH 把第一次的 step_order 写回原值），
+  //     无论补偿是否成功，强制 load() 重拉
+  //   - 补偿成功："排序未生效，已恢复原顺序"
+  //   - 补偿失败："排序可能未完全保存，请刷新确认"
+  //   - 补偿只尝试一次，不重试
+  // 操作期间相邻按钮禁用，由 moving 控制；同时记录方向以便正确按钮上显示 loading
+  const [moving, setMoving] = useState<{ stepId: string; direction: "up" | "down" } | null>(null);
+
+  async function moveStep(step: WorkflowStep, direction: "up" | "down") {
+    if (moving) return; // 已有进行中的排序操作
+    const wf = workflows.find((w) => w.workflow_steps?.some((s) => s.id === step.id));
+    if (!wf) return;
+    const sortedSteps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
+    const idx = sortedSteps.findIndex((s) => s.id === step.id);
+    if (idx === -1) return;
+    const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= sortedSteps.length) return;
+
+    const a = step;
+    const b = sortedSteps[targetIdx];
+    const aOldOrder = a.step_order;
+    const bOldOrder = b.step_order;
+
+    setMoving({ stepId: step.id, direction });
+
+    // 乐观更新：在前端先把两个 step_order 交换
+    setWorkflows((prev) =>
+      prev.map((w) => ({
+        ...w,
+        workflow_steps: (w.workflow_steps ?? []).map((s) => {
+          if (s.id === a.id) return { ...s, step_order: bOldOrder };
+          if (s.id === b.id) return { ...s, step_order: aOldOrder };
+          return s;
+        }),
+      }))
+    );
+
+    // 第一次 PATCH：把 a 的 step_order 改成 b 原值
+    let r1Ok = false;
+    try {
+      const r1 = await fetch(`/api/admin/workflow-steps/${a.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stepOrder: bOldOrder }),
+      });
+      r1Ok = r1.ok;
+    } catch (e) {
+      console.error("[moveStep r1]", e);
+      r1Ok = false;
+    }
+    if (!r1Ok) {
+      // 第一次失败（HTTP 非 2xx 或网络异常）→ 数据库未变更，回滚前端 state，提示
+      setWorkflows((prev) =>
+        prev.map((w) => ({
+          ...w,
+          workflow_steps: (w.workflow_steps ?? []).map((s) => {
+            if (s.id === a.id) return { ...s, step_order: aOldOrder };
+            if (s.id === b.id) return { ...s, step_order: bOldOrder };
+            return s;
+          }),
+        }))
+      );
+      toast("排序失败");
+      setMoving(null);
+      return;
+    }
+
+    // 第二次 PATCH：把 b 的 step_order 改成 a 原值
+    // 注意：HTTP 非 2xx 与网络 throw 都视为"第二次失败"，必须走补偿 + load() 重拉
+    let r2Ok = false;
+    try {
+      const r2 = await fetch(`/api/admin/workflow-steps/${b.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stepOrder: aOldOrder }),
+      });
+      r2Ok = r2.ok;
+    } catch (e) {
+      console.error("[moveStep r2]", e);
+      r2Ok = false;
+    }
+    if (r2Ok) {
+      setMoving(null);
+      return; // 全部成功
+    }
+
+    // 第二次失败 → 局部成功（a 已落库为 bOldOrder，但 a 和 b 现在 step_order 相同）
+    // 启动补偿：把 a 写回原值；补偿只尝试一次
+    let compensated = false;
+    try {
+      const rc = await fetch(`/api/admin/workflow-steps/${a.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stepOrder: aOldOrder }),
+      });
+      compensated = rc.ok;
+    } catch (e) {
+      console.error("[moveStep compensate]", e);
+      compensated = false;
+    }
+
+    // 无论补偿成功与否，强制重拉
+    try {
+      await load();
+    } catch (e) {
+      console.error("[moveStep load]", e);
+    }
+    toast(compensated ? "排序未生效，已恢复原顺序" : "排序可能未完全保存，请刷新确认");
+    setMoving(null);
+  }
+
+  // 4.27up 阶段二：节点内快捷绑定智能体
+  // 必须同时传 execType 和 agentId（见接口逻辑：只传 agentId 时 exec_type 为 undefined，会被改写成 null）
+  async function bindAgentToStep(step: WorkflowStep, agentId: string) {
+    const prevAgentId = step.agent_id;
+    // 乐观更新
+    setWorkflows((prev) =>
+      prev.map((wf) => ({
+        ...wf,
+        workflow_steps: (wf.workflow_steps ?? []).map((s) =>
+          s.id === step.id ? { ...s, agent_id: agentId } : s
+        ),
+      }))
+    );
+    try {
+      const res = await fetch(`/api/admin/workflow-steps/${step.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ execType: "agent", agentId }),
+      });
+      if (!res.ok) throw new Error("PATCH failed");
+    } catch (e) {
+      // 回滚到原 agent_id
+      setWorkflows((prev) =>
+        prev.map((wf) => ({
+          ...wf,
+          workflow_steps: (wf.workflow_steps ?? []).map((s) =>
+            s.id === step.id ? { ...s, agent_id: prevAgentId } : s
+          ),
+        }))
+      );
+      console.error("[bindAgentToStep]", e);
+      toast("绑定智能体失败，请重试");
+    }
+  }
+
   const getAgent = (agentId: string | null): Agent | null => {
     if (!agentId) return null;
     return agents.find((a) => a.id === agentId) ?? null;
@@ -452,7 +657,13 @@ export default function WorkflowsAdminPage() {
               const isExpanded = expandedId === wf.id;
               const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
               return (
-                <div key={wf.id} className="card overflow-hidden">
+                <div
+                  key={wf.id}
+                  data-wf-card={wf.id}
+                  className={`card overflow-hidden transition-all ${
+                    highlightedWfId === wf.id ? "ring-2 ring-[#002FA7] ring-offset-2" : ""
+                  }`}
+                >
                   {/* Workflow header */}
                   <div className="flex items-center gap-3 px-5 py-4">
                     <button onClick={() => setExpandedId(isExpanded ? null : wf.id)} className="p-1 rounded-[8px] hover:bg-gray-100 text-gray-400">
@@ -504,6 +715,40 @@ export default function WorkflowsAdminPage() {
                   {/* Steps */}
                   {isExpanded && (
                     <div className="border-t border-gray-50 px-5 pb-4 pt-3">
+                      {/* 4.27up 阶段一：视图切换 Tab */}
+                      <div className="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-[8px] w-fit">
+                        {(["list", "flow"] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            onClick={() => setViewMode(wf.id, mode)}
+                            className={`px-3 py-1 text-xs rounded-[6px] transition-colors ${
+                              getViewMode(wf.id) === mode
+                                ? "bg-white text-[#002FA7] shadow-sm font-medium"
+                                : "text-gray-500 hover:text-gray-700"
+                            }`}
+                          >
+                            {mode === "flow" ? "流程图" : "列表"}
+                          </button>
+                        ))}
+                      </div>
+
+                      {getViewMode(wf.id) === "flow" ? (
+                        <WorkflowFlowView
+                          wfId={wf.id}
+                          steps={steps}
+                          agents={agents}
+                          getAgent={getAgent}
+                          openInsertStep={openInsertStep}
+                          openEditStep={openEditStep}
+                          deleteStep={deleteStep}
+                          toggleStepEnabled={toggleStepEnabled}
+                          bindAgentToStep={bindAgentToStep}
+                          moveStep={moveStep}
+                          moving={moving}
+                          openAddStep={openAddStep}
+                        />
+                      ) : (
+                      <>
                       <div className="space-y-2">
                         {steps.length === 0 ? (
                           <p className="text-sm text-gray-400 py-3 text-center">暂无步骤</p>
@@ -538,12 +783,29 @@ export default function WorkflowsAdminPage() {
                                   </span>
                                 </div>
                                 {step.description && <p className="text-xs text-gray-400 mt-0.5">{step.description}</p>}
-                                {step.exec_type === "agent" && step.agent_id && (
-                                  <p className="text-xs text-[#002FA7] mt-1 flex items-center gap-1">
-                                    {getAgent(step.agent_id)?.agent_type === "external" ? <ExternalLink size={10} /> : <Bot size={10} />}
-                                    绑定：{getAgent(step.agent_id)?.name ?? step.agent_id}
-                                  </p>
-                                )}
+                                {step.exec_type === "agent" && step.agent_id && (() => {
+                                  const boundAgent = getAgent(step.agent_id);
+                                  if (!boundAgent) {
+                                    return (
+                                      <p className="text-xs text-gray-400 mt-1">
+                                        绑定：{step.agent_id}
+                                      </p>
+                                    );
+                                  }
+                                  return (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        router.push(`/admin/agents?focus=${boundAgent.id}&pageSize=100`);
+                                      }}
+                                      className="text-xs text-[#002FA7] hover:underline mt-1 flex items-center gap-1"
+                                      title="跳转到智能体管理"
+                                    >
+                                      {boundAgent.agent_type === "external" ? <ExternalLink size={10} /> : <Bot size={10} />}
+                                      <span className="truncate max-w-[260px]">绑定：{boundAgent.name}</span>
+                                    </button>
+                                  );
+                                })()}
                               </div>
                               <div className="flex items-center gap-1 shrink-0">
                                 <button onClick={() => toggleStepEnabled(step)} className={`p-1 rounded-[6px] transition-colors text-xs ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}>
@@ -567,6 +829,8 @@ export default function WorkflowsAdminPage() {
                       <button onClick={() => openAddStep(wf.id, steps.length)} className="mt-3 w-full py-2 border border-dashed border-gray-200 rounded-[10px] text-sm text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors flex items-center justify-center gap-1">
                         <Plus size={14} /> 添加步骤
                       </button>
+                      </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -986,5 +1250,376 @@ export default function WorkflowsAdminPage() {
         </div>
       )}
     </AdminLayout>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 4.27up 阶段一：流程图视图（私有组件，同文件维护）
+// 严格约束：
+//   - 不发起任何额外请求；绑定智能体名称必须复用父组件传入的 getAgent
+//   - 不改任何 API、不改 schema、不引入新依赖
+//   - 节点显示步骤序号、标题、执行类型徽章、绑定智能体、启停状态、编辑/删除
+//   - 节点之间提供"+ 插入"按钮，复用父组件 openInsertStep
+//   - 异常态：未绑定智能体 / 智能体已删除 / 已停用，视觉区分
+//   - 列表视图行为完全保留，本组件只负责"流程图"分支
+// ─────────────────────────────────────────────────────────────────────────
+function WorkflowFlowView(props: {
+  wfId: string;
+  steps: WorkflowStep[];
+  agents: Agent[];
+  getAgent: (agentId: string | null) => Agent | null;
+  openInsertStep: (workflowId: string, insertAfterOrder: number) => void;
+  openEditStep: (workflowId: string, step: WorkflowStep) => void;
+  deleteStep: (step: WorkflowStep) => void;
+  toggleStepEnabled: (step: WorkflowStep) => Promise<void> | void;
+  bindAgentToStep: (step: WorkflowStep, agentId: string) => Promise<void>;
+  // 4.27up 阶段三（第一轮）：上移/下移
+  moveStep: (step: WorkflowStep, direction: "up" | "down") => Promise<void>;
+  moving: { stepId: string; direction: "up" | "down" } | null;
+  openAddStep: (workflowId: string, defaultOrder: number) => void;
+}) {
+  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep } = props;
+  // 阶段二：当前激活绑定浮层的步骤 id（null = 关闭）。同一时间只允许一个浮层打开。
+  const [bindingStepId, setBindingStepId] = useState<string | null>(null);
+  // 4.29up：跳转到智能体管理（流程图节点里的"已绑定智能体"chip 可点击）
+  const flowRouter = useRouter();
+
+  if (steps.length === 0) {
+    return (
+      <div className="rounded-[12px] bg-gray-50/60 border border-dashed border-gray-200 px-4 py-8 text-center">
+        <p className="text-sm text-gray-400 mb-3">暂无步骤</p>
+        <button
+          onClick={() => openAddStep(wfId, 0)}
+          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs text-[#002FA7] border border-[#002FA7]/30 rounded-[8px] hover:bg-[#002FA7]/5 transition-colors"
+        >
+          <Plus size={12} /> 添加第一个步骤
+        </button>
+      </div>
+    );
+  }
+
+  // 执行类型 → 视觉
+  const typeStyle: Record<WorkflowStep["exec_type"], { bg: string; border: string; text: string; label: string }> = {
+    agent:    { bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-600",   label: "智能体" },
+    manual:   { bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-600",  label: "人工执行" },
+    review:   { bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-600", label: "人工审核" },
+    external: { bg: "bg-gray-50",   border: "border-gray-200",   text: "text-gray-600",   label: "外部工具" },
+  };
+  const TypeIcon = (t: WorkflowStep["exec_type"]) => {
+    if (t === "agent")    return <Bot size={11} />;
+    if (t === "manual")   return <User size={11} />;
+    if (t === "review")   return <Eye size={11} />;
+    return <Wrench size={11} />;
+  };
+
+  return (
+    <div>
+      <div className="overflow-x-auto -mx-1 px-1 pb-2">
+        <div className="flex items-stretch gap-0 min-w-min">
+          {/* 第一个节点前的插入按钮 */}
+          <InsertSlot onClick={() => openInsertStep(wfId, 0)} disabled={moving !== null} />
+
+          {steps.map((step, idx) => {
+            const style = typeStyle[step.exec_type];
+            const isAgent = step.exec_type === "agent";
+            const agent = isAgent ? getAgent(step.agent_id) : null;
+            const agentMissingId = isAgent && step.agent_id && !agent;
+            const noAgentBound  = isAgent && !step.agent_id;
+            const isExternalAgent = isAgent && agent?.agent_type === "external";
+
+            return (
+              <div key={step.id} className="flex items-stretch">
+                {/* 节点卡片 */}
+                <div
+                  className={`flex flex-col w-[240px] flex-shrink-0 rounded-[12px] border bg-white ${style.border} ${
+                    step.enabled ? "" : "opacity-60"
+                  }`}
+                  style={{ minHeight: "150px" }}
+                >
+                  {/* 头部：序号 + 类型徽章 */}
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-[#002FA7]/10 text-[#002FA7] text-[11px] font-bold flex items-center justify-center">
+                        {idx + 1}
+                      </span>
+                      <span className={`text-[11px] px-1.5 py-0.5 rounded-full font-medium flex items-center gap-1 ${style.bg} ${style.text}`}>
+                        {TypeIcon(step.exec_type)}
+                        {style.label}
+                      </span>
+                    </div>
+                    {!step.enabled && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">已停用</span>
+                    )}
+                  </div>
+
+                  {/* 主体 */}
+                  <div className="flex-1 px-3 py-2 min-h-0">
+                    <p className="text-sm font-medium text-gray-800 truncate" title={step.title}>
+                      {step.title}
+                    </p>
+                    {/* 智能体绑定状态 */}
+                    {isAgent && (
+                      <div className="mt-2 relative">
+                        {noAgentBound && (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200">
+                              未绑定智能体
+                            </span>
+                            <button
+                              onClick={() => setBindingStepId((cur) => (cur === step.id ? null : step.id))}
+                              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-[#002FA7]/10 text-[#002FA7] hover:bg-[#002FA7]/20 transition-colors"
+                              title="绑定智能体"
+                              aria-label="绑定智能体"
+                            >
+                              <Plus size={10} /> 绑定智能体
+                            </button>
+                          </div>
+                        )}
+                        {agentMissingId && (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-red-50 text-red-500 border border-red-200">
+                              智能体已删除
+                            </span>
+                            <button
+                              onClick={() => setBindingStepId((cur) => (cur === step.id ? null : step.id))}
+                              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-[#002FA7]/10 text-[#002FA7] hover:bg-[#002FA7]/20 transition-colors"
+                              title="重新绑定智能体"
+                              aria-label="重新绑定智能体"
+                            >
+                              <Plus size={10} /> 重新绑定
+                            </button>
+                          </div>
+                        )}
+                        {agent && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              flowRouter.push(`/admin/agents?focus=${agent.id}&pageSize=100`);
+                            }}
+                            className="text-xs text-[#002FA7] hover:underline flex items-center gap-1 truncate text-left"
+                            title={`跳转到智能体：${agent.name}`}
+                          >
+                            {isExternalAgent ? <ExternalLink size={10} /> : <Bot size={10} />}
+                            <span className="truncate">{agent.name}</span>
+                            <span className={`ml-1 text-[10px] px-1 py-px rounded ${isExternalAgent ? "bg-orange-50 text-orange-500" : "bg-blue-50 text-blue-500"}`}>
+                              {isExternalAgent ? "外链" : "chat"}
+                            </span>
+                          </button>
+                        )}
+
+                        {/* 阶段二：绑定智能体浮层 */}
+                        {bindingStepId === step.id && (
+                          <AgentBindPopover
+                            agents={agents}
+                            currentAgentId={step.agent_id ?? null}
+                            onPick={async (agentId) => {
+                              setBindingStepId(null);
+                              await bindAgentToStep(step, agentId);
+                            }}
+                            onClose={() => setBindingStepId(null)}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 操作区 */}
+                  <div className="flex items-center justify-end gap-1 px-2 py-1.5 border-t border-gray-100">
+                    {/* 阶段三：上移 / 下移按钮（操作期间所有相邻按钮禁用，避免快速连点导致顺序错乱） */}
+                    {/* loading 显示在被点击的方向按钮上：避免下移时上移按钮转圈的反直觉 */}
+                    <button
+                      onClick={() => moveStep(step, "up")}
+                      disabled={idx === 0 || moving !== null}
+                      className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
+                      title="上移"
+                      aria-label="上移"
+                    >
+                      {moving?.stepId === step.id && moving.direction === "up" ? <Loader2 size={12} className="animate-spin" /> : <ArrowUp size={12} />}
+                    </button>
+                    <button
+                      onClick={() => moveStep(step, "down")}
+                      disabled={idx === steps.length - 1 || moving !== null}
+                      className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
+                      title="下移"
+                      aria-label="下移"
+                    >
+                      {moving?.stepId === step.id && moving.direction === "down" ? <Loader2 size={12} className="animate-spin" /> : <ArrowDown size={12} />}
+                    </button>
+                    <button
+                      onClick={() => toggleStepEnabled(step)}
+                      disabled={moving !== null}
+                      className={`p-1 rounded-[6px] transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}
+                      title={step.enabled ? "停用" : "启用"}
+                      aria-label={step.enabled ? "停用" : "启用"}
+                    >
+                      {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                    </button>
+                    <button
+                      onClick={() => openEditStep(wfId, step)}
+                      disabled={moving !== null}
+                      className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
+                      title="编辑"
+                      aria-label="编辑"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                    <button
+                      onClick={() => deleteStep(step)}
+                      disabled={moving !== null}
+                      className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
+                      title="删除"
+                      aria-label="删除"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* 节点之间的连接线 + 插入按钮 */}
+                <ConnectorWithInsert
+                  dimmed={!step.enabled || (idx + 1 < steps.length && !steps[idx + 1].enabled)}
+                  onInsert={() => openInsertStep(wfId, idx + 1)}
+                  disabled={moving !== null}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <button
+        onClick={() => openAddStep(wfId, steps.length)}
+        disabled={moving !== null}
+        className="mt-3 w-full py-2 border border-dashed border-gray-200 rounded-[10px] text-sm text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors flex items-center justify-center gap-1 disabled:opacity-30 disabled:hover:text-gray-400 disabled:hover:border-gray-200 disabled:cursor-not-allowed"
+      >
+        <Plus size={14} /> 添加步骤
+      </button>
+    </div>
+  );
+}
+
+// 第一个节点之前的插入"+"位
+function InsertSlot({ onClick, disabled = false }: { onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="self-center mx-1 w-6 h-6 rounded-full border border-dashed border-gray-300 text-gray-300 hover:text-[#002FA7] hover:border-[#002FA7] flex items-center justify-center transition-colors disabled:opacity-30 disabled:hover:text-gray-300 disabled:hover:border-gray-300 disabled:cursor-not-allowed"
+      title="在此插入步骤"
+      aria-label="在此插入步骤"
+    >
+      <Plus size={12} />
+    </button>
+  );
+}
+
+// 节点之间：箭头连接线 + 插入按钮
+function ConnectorWithInsert({ dimmed, onInsert, disabled = false }: { dimmed: boolean; onInsert: () => void; disabled?: boolean }) {
+  const lineColor = dimmed ? "bg-gray-200" : "bg-gray-300";
+  return (
+    <div className="self-center flex items-center mx-1">
+      <div className={`h-px w-3 ${lineColor}`} />
+      <button
+        onClick={onInsert}
+        disabled={disabled}
+        className="w-6 h-6 rounded-full border border-dashed border-gray-300 text-gray-300 hover:text-[#002FA7] hover:border-[#002FA7] flex items-center justify-center transition-colors disabled:opacity-30 disabled:hover:text-gray-300 disabled:hover:border-gray-300 disabled:cursor-not-allowed"
+        title="在此插入步骤"
+        aria-label="在此插入步骤"
+      >
+        <Plus size={12} />
+      </button>
+      <div className={`h-px w-3 ${lineColor}`} />
+      <span className={`text-[10px] ${dimmed ? "text-gray-300" : "text-gray-400"}`}>›</span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 4.27up 阶段二：智能体快捷绑定浮层（私有组件）
+// 严格约束：
+//   - 不发起任何额外请求；agents 列表来自父组件已加载的 state（pageSize=100）
+//   - 选中后通过 props.onPick 上抛，由父组件统一调用 PATCH（{ execType, agentId }）
+//   - 不引入新依赖；纯 div + Tailwind + lucide
+//   - 同一时间只允许一个浮层打开（由父组件 bindingStepId 控制）
+// ─────────────────────────────────────────────────────────────────────────
+function AgentBindPopover(props: {
+  agents: Agent[];
+  currentAgentId: string | null;
+  onPick: (agentId: string) => void | Promise<void>;
+  onClose: () => void;
+}) {
+  const { agents, currentAgentId, onPick, onClose } = props;
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const keyword = q.trim().toLowerCase();
+  const list = keyword
+    ? agents.filter(
+        (a) =>
+          a.name.toLowerCase().includes(keyword) ||
+          a.agent_code.toLowerCase().includes(keyword)
+      )
+    : agents;
+
+  return (
+    <>
+      {/* 透明遮罩：点击外部关闭 */}
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        className="absolute z-50 left-0 right-0 mt-1 bg-white rounded-[10px] shadow-lg border border-gray-200 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-2 border-b border-gray-100">
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="搜索智能体..."
+            className="w-full h-8 px-2 text-xs border border-gray-200 rounded-[6px] focus:outline-none focus:border-[#002FA7]"
+          />
+        </div>
+        <div className="max-h-[320px] overflow-y-auto">
+          {list.length === 0 ? (
+            <p className="text-xs text-gray-400 text-center py-4">没有匹配的智能体</p>
+          ) : (
+            list.map((a) => {
+              const isExternal = a.agent_type === "external";
+              const isCurrent = a.id === currentAgentId;
+              return (
+                <button
+                  key={a.id}
+                  onClick={() => onPick(a.id)}
+                  disabled={isCurrent}
+                  className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs hover:bg-gray-50 transition-colors text-left ${
+                    isCurrent ? "opacity-50 cursor-not-allowed" : ""
+                  }`}
+                  title={isCurrent ? "当前已绑定该智能体" : "选择此智能体"}
+                  aria-label={isCurrent ? "当前已绑定该智能体" : "选择此智能体"}
+                >
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    {isExternal ? (
+                      <ExternalLink size={11} className="text-orange-500 shrink-0" />
+                    ) : (
+                      <Bot size={11} className="text-[#002FA7] shrink-0" />
+                    )}
+                    <span className="truncate text-gray-800">{a.name}</span>
+                  </span>
+                  <span className={`shrink-0 text-[10px] px-1 py-px rounded ${isExternal ? "bg-orange-50 text-orange-500" : "bg-blue-50 text-blue-500"}`}>
+                    {isExternal ? "外链" : "chat"}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </>
   );
 }

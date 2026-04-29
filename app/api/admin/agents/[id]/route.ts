@@ -66,3 +66,63 @@ export async function PATCH(
 
   return NextResponse.json({ ok: true });
 }
+
+/**
+ * 删除智能体
+ * 4.29up：被工作流步骤引用时硬阻止（409 + used_by 引用列表）
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+
+  const { id } = await params;
+  if (!id) return apiError("id 必填", "VALIDATION_ERROR");
+
+  // 1) 引用检查：聚合到工作流维度
+  const { data: refs, error: refsErr } = await db
+    .from("workflow_steps")
+    .select("workflow_id, workflows(id, name)")
+    .eq("agent_id", id);
+  if (refsErr) return dbError(refsErr);
+
+  if (refs && refs.length > 0) {
+    type WfRow = { workflow_id: string; workflows: { id: string; name: string } | null };
+    const map = new Map<string, { id: string; name: string; stepCount: number }>();
+    for (const r of refs as unknown as WfRow[]) {
+      const wf = r.workflows;
+      if (!wf?.id) continue;
+      const cur = map.get(wf.id) ?? { id: wf.id, name: wf.name, stepCount: 0 };
+      cur.stepCount += 1;
+      map.set(wf.id, cur);
+    }
+    const used_by = [...map.values()];
+    if (used_by.length > 0) {
+      // 现有 apiError 只收 (message, code) 2 参且 ErrorCode 不含 "AGENT_IN_USE"
+      // 此处直接 NextResponse.json，避免改全局 apiError 类型签名
+      return NextResponse.json(
+        {
+          error: `该智能体被 ${used_by.length} 个工作流引用，无法删除`,
+          code: "AGENT_IN_USE",
+          used_by,
+        },
+        { status: 409 }
+      );
+    }
+  }
+
+  // 2) 真删；用 .select("id") 区分"被删了 N 行" vs "记录不存在"
+  const { data: deleted, error: delErr } = await db
+    .from("agents")
+    .delete()
+    .eq("id", id)
+    .select("id");
+  if (delErr) return dbError(delErr);
+  if (!deleted || deleted.length === 0) {
+    return apiError("智能体不存在或已被删除", "NOT_FOUND");
+  }
+
+  return NextResponse.json({ ok: true });
+}

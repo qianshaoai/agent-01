@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/ui/page-header";
@@ -7,7 +8,10 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon, GitBranch, Trash2, AlertTriangle } from "lucide-react";
+
+type WorkflowRef = { id: string; name: string };
+type UsedByEntry = { id: string; name: string; stepCount: number };
 
 type Agent = {
   id: string;
@@ -27,6 +31,7 @@ type Agent = {
   categoriesAll?: { id: string; name: string; icon_url: string | null }[];
   tenant_codes?: string[];
   permissions?: { scope_type: string; scope_id: string | null }[];
+  workflows?: WorkflowRef[];
 };
 type Category = { id: string; name: string; icon_url?: string | null };
 type Tenant = { id: string; code: string; name: string };
@@ -51,7 +56,20 @@ const EMPTY_API = { endpoint: "", apiKey: "", modelParams: '{"temperature": 0.7,
 
 export default function AgentsAdminPage() {
   const { toast } = useToast();
+  const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
+  // 4.29up：?focus=<agentId>&pageSize=100 跨页定位
+  const [focusAgentId, setFocusAgentId] = useState<string | null>(null);
+  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
+  const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
+  // 工作流引用列表"+N 更多"popover
+  const [openMoreFor, setOpenMoreFor] = useState<string | null>(null);
+  const focusFiredRef = useRef(false);
+  // 删除流程
+  const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  // 引用阻止弹窗
+  const [usedByModal, setUsedByModal] = useState<{ agent: Agent; usedBy: UsedByEntry[] } | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,8 +107,10 @@ export default function AgentsAdminPage() {
   async function load() {
     setLoading(true);
     try {
+      // 4.29up：尊重 URL 上的 pageSize（跨页 focus 用），否则走后端默认 50
+      const ps = urlPageSize && urlPageSize > 0 ? `?pageSize=${urlPageSize}` : "";
       const [ar, cr, tr] = await Promise.all([
-        fetch("/api/admin/agents").then((r) => r.json()).then(d => d.data ?? d),
+        fetch(`/api/admin/agents${ps}`).then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/categories").then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
       ]);
@@ -104,7 +124,41 @@ export default function AgentsAdminPage() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  // 解析 URL 上的 focus / pageSize（避免使用 useSearchParams 的 Suspense boundary 要求）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const f = sp.get("focus");
+    const ps = sp.get("pageSize");
+    if (f) setFocusAgentId(f);
+    if (ps) {
+      const n = parseInt(ps);
+      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [urlPageSize]);
+
+  // focus 高亮：数据加载完成后定位 + ring 1.5s
+  useEffect(() => {
+    if (!focusAgentId || loading || focusFiredRef.current) return;
+    if (agents.length === 0) return;
+    focusFiredRef.current = true;
+    const target = agents.find((a) => a.id === focusAgentId);
+    if (!target) {
+      // 数据被删 / 跨页（总数 > pageSize）→ 不报错、不空白，仅 toast 提示
+      toast("目标智能体不在当前页，请翻页查找");
+      return;
+    }
+    setHighlightedRowId(target.id);
+    setTimeout(() => {
+      const el = document.querySelector(`[data-agent-row="${target.id}"]`);
+      if (el && el instanceof HTMLElement) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 50);
+    setTimeout(() => setHighlightedRowId(null), 1500);
+  }, [focusAgentId, loading, agents, toast]);
 
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
@@ -179,6 +233,40 @@ export default function AgentsAdminPage() {
     // 刷新展示配置
     const data = await fetch(`/api/admin/category-display?agentId=${agentId}`).then((r) => r.json()).catch(() => []);
     setDisplayConfig(Array.isArray(data) ? data : []);
+  }
+
+  // 4.29up：删除智能体
+  async function handleDeleteAgent(agent: Agent) {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/agents/${agent.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && Array.isArray(data.used_by)) {
+        // 被引用：弹引用阻止弹窗
+        setUsedByModal({ agent, usedBy: data.used_by });
+        setDeletingAgent(null);
+        setShowAgentModal(false);
+        return;
+      }
+      if (res.status === 404) {
+        toast("智能体不存在或已被删除");
+        setDeletingAgent(null);
+        setShowAgentModal(false);
+        load();
+        return;
+      }
+      if (!res.ok) {
+        toast(data.error ?? "删除失败");
+        return;
+      }
+      // 删除成功
+      setDeletingAgent(null);
+      setShowAgentModal(false);
+      load();
+      toast("智能体已删除");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function handleSaveAgent() {
@@ -328,12 +416,20 @@ export default function AgentsAdminPage() {
                 <table className="w-full text-sm table-sticky-head">
                   <thead>
                     <tr>
-                      {["编号/名称", "分类", "类型/平台", "操作"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                      {["编号/名称", "分类", "类型/平台", "引用工作流", "操作"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {filteredAgents.map((a) => (
-                      <tr key={a.id} className="hover:bg-gray-50/50 transition-colors">
+                      <tr
+                        key={a.id}
+                        data-agent-row={a.id}
+                        className={`hover:bg-gray-50/50 transition-all ${
+                          highlightedRowId === a.id
+                            ? "bg-[#002FA7]/5 ring-2 ring-[#002FA7] ring-inset"
+                            : ""
+                        }`}
+                      >
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-3">
                             <div className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${a.agent_type === "external" ? "bg-orange-50" : "bg-[#002FA7]/8"}`}>
@@ -369,6 +465,67 @@ export default function AgentsAdminPage() {
                             )}
                           </div>
                         </td>
+                        <td className="px-5 py-4 relative">
+                          {(a.workflows?.length ?? 0) === 0 ? (
+                            <span className="text-[11px] text-gray-400">未被工作流引用</span>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {a.workflows!.slice(0, 2).map((w) => (
+                                <button
+                                  key={w.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    router.push(`/admin/workflows?focus=${w.id}&pageSize=100`);
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-[#002FA7]/8 text-[#002FA7] border border-[#002FA7]/20 hover:bg-[#002FA7]/15 transition-colors max-w-[180px]"
+                                  title={`跳转到工作流：${w.name}`}
+                                >
+                                  <GitBranch size={10} />
+                                  <span className="truncate">{w.name}</span>
+                                </button>
+                              ))}
+                              {a.workflows!.length > 2 && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenMoreFor(openMoreFor === a.id ? null : a.id);
+                                  }}
+                                  className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 transition-colors"
+                                >
+                                  +{a.workflows!.length - 2} 更多
+                                </button>
+                              )}
+                              {openMoreFor === a.id && (
+                                <>
+                                  {/* 点击空白关闭 popover */}
+                                  <div
+                                    className="fixed inset-0 z-40"
+                                    onClick={() => setOpenMoreFor(null)}
+                                  />
+                                  <div className="absolute z-50 top-full left-0 mt-1 bg-white border border-gray-200 rounded-[10px] shadow-lg p-2 min-w-[240px] max-w-[360px]">
+                                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2 py-1">引用工作流（{a.workflows!.length}）</p>
+                                    <div className="flex flex-col gap-0.5 max-h-[280px] overflow-y-auto">
+                                      {a.workflows!.map((w) => (
+                                        <button
+                                          key={w.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setOpenMoreFor(null);
+                                            router.push(`/admin/workflows?focus=${w.id}&pageSize=100`);
+                                          }}
+                                          className="text-left text-[12px] px-2 py-1.5 rounded-[6px] hover:bg-[#002FA7]/8 hover:text-[#002FA7] flex items-center gap-2 transition-colors"
+                                        >
+                                          <GitBranch size={11} className="text-gray-400 shrink-0" />
+                                          <span className="truncate">{w.name}</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </td>
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-1">
                             <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
@@ -377,6 +534,7 @@ export default function AgentsAdminPage() {
                             )}
                             <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置" aria-label="权限设置"><Settings2 size={14} /></button>
                             <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="分类展示配置" aria-label="分类展示配置"><LayoutGrid size={14} /></button>
+                            <button onClick={() => setDeletingAgent(a)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
                           </div>
                         </td>
                       </tr>
@@ -744,6 +902,76 @@ export default function AgentsAdminPage() {
               {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无组织，请先新增</p>}
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowCatAssignModal(null)}>取消</Button><Button onClick={handleCatAssign} loading={saving}>保存分配</Button></div>
+          </div>
+        </div>
+      )}
+
+      {/* 4.29up：删除智能体二次确认 */}
+      {deletingAgent && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-[10px] bg-red-50 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} className="text-red-500" />
+              </div>
+              <h3 className="font-semibold text-gray-900">确认删除？</h3>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed mb-1">
+              即将删除智能体「<span className="font-medium text-gray-900">{deletingAgent.name}</span>」
+            </p>
+            <p className="text-xs text-gray-400 mb-5">此操作不可恢复</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setDeletingAgent(null)} disabled={deleting}>取消</Button>
+              <button
+                onClick={() => handleDeleteAgent(deletingAgent)}
+                disabled={deleting}
+                className="px-4 py-2 rounded-[10px] text-sm font-medium bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+              >
+                {deleting ? "删除中…" : "确认删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4.29up：引用阻止弹窗 */}
+      {usedByModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-[10px] bg-amber-50 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} className="text-amber-500" />
+              </div>
+              <h3 className="font-semibold text-gray-900">无法删除</h3>
+            </div>
+            <p className="text-sm text-gray-700 leading-relaxed mb-1">
+              智能体「<span className="font-medium">{usedByModal.agent.name}</span>」被以下 {usedByModal.usedBy.length} 个工作流引用：
+            </p>
+            <p className="text-xs text-gray-400 mb-3">请先在对应工作流中解绑该智能体后再删除</p>
+            <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto mb-5 border border-gray-100 rounded-[10px] p-2">
+              {usedByModal.usedBy.map((wf) => (
+                <button
+                  key={wf.id}
+                  onClick={() => {
+                    setUsedByModal(null);
+                    router.push(`/admin/workflows?focus=${wf.id}&pageSize=100`);
+                  }}
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-[8px] hover:bg-[#002FA7]/8 transition-colors text-left"
+                >
+                  <span className="flex items-center gap-2 min-w-0 flex-1">
+                    <GitBranch size={13} className="text-[#002FA7] shrink-0" />
+                    <span className="text-sm text-gray-800 truncate">{wf.name}</span>
+                  </span>
+                  <span className="flex items-center gap-1 shrink-0">
+                    <span className="text-[11px] text-gray-400">{wf.stepCount} 步</span>
+                    <span className="text-[12px] text-[#002FA7]">前往 →</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end">
+              <Button variant="ghost" onClick={() => setUsedByModal(null)}>关闭</Button>
+            </div>
           </div>
         </div>
       )}
