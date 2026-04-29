@@ -128,23 +128,21 @@ export default function WorkflowsAdminPage() {
   const [editingCatName, setEditingCatName] = useState("");
 
   // 4.29up：?focus=<wfId>&pageSize=100 跨页定位
+  // 关键：lazy initial state 同步解析 URL，避免首次以默认 pageSize 加载导致的 focus 竞态
   const router = useRouter();
-  const [focusWfId, setFocusWfId] = useState<string | null>(null);
-  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
+  const [focusWfId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("focus");
+  });
+  const [urlPageSize] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const ps = new URLSearchParams(window.location.search).get("pageSize");
+    if (!ps) return null;
+    const n = parseInt(ps);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  });
   const [highlightedWfId, setHighlightedWfId] = useState<string | null>(null);
   const focusFiredRef = useRef(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sp = new URLSearchParams(window.location.search);
-    const f = sp.get("focus");
-    const ps = sp.get("pageSize");
-    if (f) setFocusWfId(f);
-    if (ps) {
-      const n = parseInt(ps);
-      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
-    }
-  }, []);
 
   async function load() {
     setLoading(true);
@@ -174,7 +172,8 @@ export default function WorkflowsAdminPage() {
     }
   }
 
-  useEffect(() => { load(); }, [urlPageSize]);
+  // URL 已通过 lazy initial state 同步初始化，load 直接用对的 pageSize
+  useEffect(() => { load(); }, []);
 
   // focus 高亮：数据加载完成后展开 + 滚动 + ring 1.5s
   useEffect(() => {
@@ -1568,58 +1567,123 @@ function AgentBindPopover(props: {
       )
     : agents;
 
+  const currentAgent = currentAgentId ? agents.find((a) => a.id === currentAgentId) : null;
+
   return (
-    <>
-      {/* 透明遮罩：点击外部关闭 */}
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-in fade-in duration-150"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
       <div
-        className="absolute z-50 left-0 right-0 mt-1 bg-white rounded-[10px] shadow-lg border border-gray-200 overflow-hidden"
+        className="bg-white rounded-[16px] shadow-2xl border border-gray-100 w-full max-w-[440px] flex flex-col overflow-hidden animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-2 border-b border-gray-100">
-          <input
-            autoFocus
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索智能体..."
-            className="w-full h-8 px-2 text-xs border border-gray-200 rounded-[6px] focus:outline-none focus:border-[#002FA7]"
-          />
+        {/* 标题 */}
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-[15px] font-semibold text-gray-900">绑定智能体</h3>
+            {currentAgent && (
+              <p className="text-[11px] text-gray-500 mt-0.5 flex items-center gap-1">
+                当前：<span className="font-medium text-gray-700 truncate max-w-[280px]">{currentAgent.name}</span>
+              </p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-[8px] text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+            title="关闭"
+          >
+            <X size={16} />
+          </button>
         </div>
-        <div className="max-h-[320px] overflow-y-auto">
+
+        {/* 搜索 */}
+        <div className="px-5 pt-3 pb-2 border-b border-gray-50">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              autoFocus
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="搜索智能体名称或编号"
+              className="w-full h-10 pl-9 pr-3 text-sm border border-gray-200 rounded-[10px] focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 bg-white"
+            />
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1.5 px-0.5">
+            共 {agents.length} 个可用智能体{keyword && `，匹配 ${list.length} 个`}
+          </p>
+        </div>
+
+        {/* 列表 */}
+        <div className="flex-1 overflow-y-auto py-2 px-2 max-h-[400px]">
           {list.length === 0 ? (
-            <p className="text-xs text-gray-400 text-center py-4">没有匹配的智能体</p>
+            <div className="py-12 text-center">
+              <Search size={22} className="mx-auto text-gray-200 mb-2" />
+              <p className="text-[12px] text-gray-400">没有匹配的智能体</p>
+            </div>
           ) : (
-            list.map((a) => {
-              const isExternal = a.agent_type === "external";
-              const isCurrent = a.id === currentAgentId;
-              return (
-                <button
-                  key={a.id}
-                  onClick={() => onPick(a.id)}
-                  disabled={isCurrent}
-                  className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs hover:bg-gray-50 transition-colors text-left ${
-                    isCurrent ? "opacity-50 cursor-not-allowed" : ""
-                  }`}
-                  title={isCurrent ? "当前已绑定该智能体" : "选择此智能体"}
-                  aria-label={isCurrent ? "当前已绑定该智能体" : "选择此智能体"}
-                >
-                  <span className="flex items-center gap-1.5 min-w-0">
-                    {isExternal ? (
-                      <ExternalLink size={11} className="text-orange-500 shrink-0" />
-                    ) : (
-                      <Bot size={11} className="text-[#002FA7] shrink-0" />
-                    )}
-                    <span className="truncate text-gray-800">{a.name}</span>
-                  </span>
-                  <span className={`shrink-0 text-[10px] px-1 py-px rounded ${isExternal ? "bg-orange-50 text-orange-500" : "bg-blue-50 text-blue-500"}`}>
-                    {isExternal ? "外链" : "chat"}
-                  </span>
-                </button>
-              );
-            })
+            <div className="flex flex-col gap-0.5">
+              {list.map((a) => {
+                const isExternal = a.agent_type === "external";
+                const isCurrent = a.id === currentAgentId;
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => !isCurrent && onPick(a.id)}
+                    disabled={isCurrent}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-left transition-all ${
+                      isCurrent
+                        ? "bg-[#002FA7]/8 border border-[#002FA7]/20 cursor-not-allowed"
+                        : "border border-transparent hover:bg-gray-50 hover:border-gray-100"
+                    }`}
+                    title={isCurrent ? "当前已绑定" : `选择：${a.name}`}
+                  >
+                    <div
+                      className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${
+                        isExternal ? "bg-orange-50" : "bg-[#002FA7]/8"
+                      }`}
+                    >
+                      {isExternal ? (
+                        <ExternalLink size={15} className="text-orange-500" />
+                      ) : (
+                        <Bot size={16} className="text-[#002FA7]" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-[14px] truncate ${isCurrent ? "text-[#002FA7] font-medium" : "text-gray-800"}`}>
+                        {a.name}
+                      </p>
+                      <p className="text-[11px] text-gray-400 font-mono truncate mt-0.5">{a.agent_code}</p>
+                    </div>
+                    {isCurrent ? (
+                      <span className="shrink-0 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-[#002FA7]/15 text-[#002FA7] font-medium">
+                        <Check size={11} /> 已绑定
+                      </span>
+                    ) : isExternal ? (
+                      <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-500 border border-orange-100">
+                        外链
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
+
+        {/* 底部 */}
+        <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
+          <p className="text-[11px] text-gray-400">点击列表项即可绑定</p>
+          <button
+            onClick={onClose}
+            className="text-[12px] text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors"
+          >
+            取消
+          </button>
+        </div>
       </div>
-    </>
+    </div>
   );
 }

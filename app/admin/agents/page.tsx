@@ -59,8 +59,19 @@ export default function AgentsAdminPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
   // 4.29up：?focus=<agentId>&pageSize=100 跨页定位
-  const [focusAgentId, setFocusAgentId] = useState<string | null>(null);
-  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
+  // 关键：使用 lazy initial state 在首次渲染前同步解析 URL，
+  //       避免"先用默认 pageSize 拉一次→目标不在前 50 条→focusFired 已 true"的竞态
+  const [focusAgentId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("focus");
+  });
+  const [urlPageSize] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const ps = new URLSearchParams(window.location.search).get("pageSize");
+    if (!ps) return null;
+    const n = parseInt(ps);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  });
   const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
   // 工作流引用列表"+N 更多"popover
   const [openMoreFor, setOpenMoreFor] = useState<string | null>(null);
@@ -124,20 +135,8 @@ export default function AgentsAdminPage() {
     }
   }
 
-  // 解析 URL 上的 focus / pageSize（避免使用 useSearchParams 的 Suspense boundary 要求）
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sp = new URLSearchParams(window.location.search);
-    const f = sp.get("focus");
-    const ps = sp.get("pageSize");
-    if (f) setFocusAgentId(f);
-    if (ps) {
-      const n = parseInt(ps);
-      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [urlPageSize]);
+  // URL 已通过 lazy initial state 同步初始化，load 直接用对的 pageSize
+  useEffect(() => { load(); }, []);
 
   // focus 高亮：数据加载完成后定位 + ring 1.5s
   useEffect(() => {

@@ -60,10 +60,12 @@ export async function GET(req: NextRequest) {
   const pageAgentIds = agents.map((a) => a.id);
   const wfMap = new Map<string, { id: string; name: string }[]>();
   if (pageAgentIds.length > 0) {
-    const { data: wfRefs } = await db
+    const { data: wfRefs, error: wfErr } = await db
       .from("workflow_steps")
       .select("agent_id, workflows(id, name)")
       .in("agent_id", pageAgentIds);
+    // 工作流引用查询失败时不静默：交由 dbError 处理，避免"未被引用"误判
+    if (wfErr) return dbError(wfErr);
     type WfRef = { agent_id: string; workflows: { id: string; name: string } | null };
     for (const r of (wfRefs ?? []) as unknown as WfRef[]) {
       const wf = r.workflows;
