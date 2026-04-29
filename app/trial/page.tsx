@@ -111,8 +111,17 @@ export default function TrialPage() {
   const [loadErr, setLoadErr] = useState("");
   const [loading, setLoading] = useState(true);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [siteLogoUrl, setSiteLogoUrl] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 拉取站点 logo（与正式版头部保持一致）
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => setSiteLogoUrl(d?.logo_url ?? ""))
+      .catch(() => {});
+  }, []);
 
   // ── 当前激活 agent 的状态视图（含 active chat body）
   const aState: AgentState = activeAgent
@@ -587,15 +596,14 @@ export default function TrialPage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col relative overflow-hidden bg-[#050a1f]">
-      {/* 背景渐变 + 装饰光晕 */}
-      <div className="absolute inset-0 bg-gradient-to-br from-[#050a1f] via-[#0a1444] to-[#001f7a] pointer-events-none" />
-      <div className="absolute -top-32 -left-32 w-[600px] h-[600px] rounded-full bg-[#002FA7]/30 blur-[120px] pointer-events-none" />
-      <div className="absolute top-1/3 -right-40 w-[700px] h-[700px] rounded-full bg-[#1a47c0]/20 blur-[140px] pointer-events-none" />
-      <div className="absolute bottom-0 left-1/3 w-[500px] h-[500px] rounded-full bg-[#3b5fff]/15 blur-[120px] pointer-events-none" />
+    <div className="min-h-screen flex flex-col relative overflow-hidden bg-gradient-to-br from-[#cdd9ff] via-[#dfe6ff] to-[#aebcff]">
+      {/* 浅色环境光晕 */}
+      <div className="absolute -top-40 -left-40 w-[600px] h-[600px] rounded-full bg-[#7a93ff]/30 blur-[140px] pointer-events-none" />
+      <div className="absolute top-1/3 -right-48 w-[640px] h-[640px] rounded-full bg-[#8da4ff]/35 blur-[160px] pointer-events-none" />
+      <div className="absolute bottom-0 left-1/4 w-[420px] h-[420px] rounded-full bg-[#a4b8ff]/40 blur-[140px] pointer-events-none" />
 
-      {/* ── 顶部导航 ─────────────────────────────────────────── */}
-      <header className="relative z-10 backdrop-blur-md bg-white/[0.03] border-b border-white/10">
+      {/* ── 顶部导航（深色保留） ─────────────────────────────── */}
+      <header className="relative z-10 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-b border-white/10 shadow-[0_4px_20px_rgba(0,47,167,0.12)]">
         <div className="max-w-[1280px] mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             {activeAgent ? (
@@ -607,22 +615,33 @@ export default function TrialPage() {
               </button>
             ) : (
               <>
-                <div className="w-10 h-10 rounded-[12px] flex items-center justify-center bg-gradient-to-br from-[#3b5fff] to-[#002FA7] shadow-[0_4px_20px_rgba(59,95,255,0.5)]">
-                  <span className="text-white text-base font-bold tracking-tight">Q</span>
+                <div className="w-12 h-12 rounded-[12px] overflow-hidden shrink-0 flex items-center justify-center bg-gradient-to-br from-[#002FA7] to-[#1a47c0] shadow-[0_4px_12px_rgba(0,47,167,0.25)]">
+                  {siteLogoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={siteLogoUrl}
+                      alt="Logo"
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                        (e.target as HTMLImageElement).parentElement
+                          ?.querySelector("span")
+                          ?.removeAttribute("hidden");
+                      }}
+                    />
+                  ) : null}
+                  <span hidden={!!siteLogoUrl} className="text-white text-sm font-bold">
+                    AI
+                  </span>
                 </div>
-                <div>
-                  <p className="text-[16px] font-bold text-white leading-tight tracking-tight">
-                    {PLATFORM_NAME}
-                  </p>
-                  <p className="text-[10px] text-white/50 leading-none mt-0.5 tracking-[0.15em]">
-                    QIANSHAO TECH
-                  </p>
-                </div>
+                <p className="text-[18px] font-bold text-white leading-tight tracking-tight">
+                  {PLATFORM_NAME}
+                </p>
               </>
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-medium text-[#3b5fff] bg-[#3b5fff]/15 border border-[#3b5fff]/30 px-2 py-1 rounded-[6px] backdrop-blur">
+            <span className="text-[12px] font-semibold text-[#002FA7] bg-white px-2.5 py-1 rounded-[8px] shadow-[0_2px_6px_rgba(0,0,0,0.15)]">
               体验版
             </span>
             <button
@@ -639,7 +658,7 @@ export default function TrialPage() {
 
       <main className="relative z-10 flex-1 max-w-[1480px] mx-auto w-full px-5 sm:px-8 lg:pl-8 lg:pr-20 py-8 flex flex-col">
         {loadErr && !activeAgent && (
-          <div className="mb-6 p-3 bg-red-500/10 border border-red-500/30 text-red-300 rounded-[12px] text-sm backdrop-blur">
+          <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-600 rounded-[12px] text-sm">
             {loadErr}
           </div>
         )}
@@ -660,30 +679,27 @@ export default function TrialPage() {
             return (
               <div className="flex gap-12 items-start pt-4 lg:-ml-16">
                 {/* 左侧筛选栏 */}
-                <aside className="hidden lg:block w-40 shrink-0 sticky top-24">
-                  <p className="text-[10px] font-semibold text-white/40 tracking-[0.2em] mb-4 px-2">
-                    CATEGORY
-                  </p>
-                  <nav className="flex flex-col gap-0.5">
+                <aside className="hidden lg:block w-44 shrink-0 sticky top-24">
+                  <nav className="flex flex-col gap-1 pt-2">
                     <button
                       onClick={() => setActiveCategory("__all__")}
-                      className={`group/item flex items-center justify-between px-3 py-2 rounded-[8px] text-[13px] transition-all duration-150 ${
+                      className={`group/item flex items-center justify-between px-3 py-2.5 rounded-[10px] text-[15px] transition-all duration-150 ${
                         activeCategory === "__all__"
-                          ? "text-white font-semibold"
-                          : "text-white/50 hover:text-white/90"
+                          ? "text-[#002FA7] font-semibold"
+                          : "text-gray-500 hover:text-gray-900"
                       }`}
                     >
-                      <span className="flex items-center gap-2.5">
+                      <span className="flex items-center gap-3">
                         <span
-                          className={`w-[3px] h-4 rounded-full transition-all duration-200 ${
+                          className={`w-[3px] h-5 rounded-full transition-all duration-200 ${
                             activeCategory === "__all__"
-                              ? "bg-[#3b5fff]"
-                              : "bg-transparent group-hover/item:bg-white/20"
+                              ? "bg-[#002FA7]"
+                              : "bg-transparent group-hover/item:bg-gray-300"
                           }`}
                         />
                         全部
                       </span>
-                      <span className="text-[11px] text-white/30 font-mono">
+                      <span className="text-[12px] text-gray-400 font-mono">
                         {agents.length}
                       </span>
                     </button>
@@ -691,23 +707,23 @@ export default function TrialPage() {
                       <button
                         key={cat}
                         onClick={() => setActiveCategory(cat)}
-                        className={`group/item flex items-center justify-between px-3 py-2 rounded-[8px] text-[13px] transition-all duration-150 ${
+                        className={`group/item flex items-center justify-between px-3 py-2.5 rounded-[10px] text-[15px] transition-all duration-150 ${
                           activeCategory === cat
-                            ? "text-white font-semibold"
-                            : "text-white/50 hover:text-white/90"
+                            ? "text-[#002FA7] font-semibold"
+                            : "text-gray-500 hover:text-gray-900"
                         }`}
                       >
-                        <span className="flex items-center gap-2.5 min-w-0">
+                        <span className="flex items-center gap-3 min-w-0">
                           <span
-                            className={`w-[3px] h-4 rounded-full transition-all duration-200 shrink-0 ${
+                            className={`w-[3px] h-5 rounded-full transition-all duration-200 shrink-0 ${
                               activeCategory === cat
-                                ? "bg-[#3b5fff]"
-                                : "bg-transparent group-hover/item:bg-white/20"
+                                ? "bg-[#002FA7]"
+                                : "bg-transparent group-hover/item:bg-gray-300"
                             }`}
                           />
                           <span className="truncate">{cat}</span>
                         </span>
-                        <span className="text-[11px] text-white/30 font-mono shrink-0">
+                        <span className="text-[12px] text-gray-400 font-mono shrink-0">
                           {countByCat(cat)}
                         </span>
                       </button>
@@ -724,8 +740,8 @@ export default function TrialPage() {
                         onClick={() => setActiveCategory("__all__")}
                         className={`shrink-0 px-3 py-1.5 rounded-full text-xs whitespace-nowrap border transition-colors ${
                           activeCategory === "__all__"
-                            ? "bg-[#3b5fff]/20 text-white border-[#3b5fff]/40"
-                            : "bg-white/5 text-white/60 border-white/10"
+                            ? "bg-[#002FA7] text-white border-[#002FA7]"
+                            : "bg-white text-gray-600 border-gray-200"
                         }`}
                       >
                         全部 ({agents.length})
@@ -736,8 +752,8 @@ export default function TrialPage() {
                           onClick={() => setActiveCategory(cat)}
                           className={`shrink-0 px-3 py-1.5 rounded-full text-xs whitespace-nowrap border transition-colors ${
                             activeCategory === cat
-                              ? "bg-[#3b5fff]/20 text-white border-[#3b5fff]/40"
-                              : "bg-white/5 text-white/60 border-white/10"
+                              ? "bg-[#002FA7] text-white border-[#002FA7]"
+                              : "bg-white text-gray-600 border-gray-200"
                           }`}
                         >
                           {cat} ({countByCat(cat)})
@@ -751,35 +767,35 @@ export default function TrialPage() {
                       {[...Array(3)].map((_, i) => (
                         <div
                           key={i}
-                          className="bg-white/[0.04] border border-white/10 rounded-[20px] p-6 h-44 animate-pulse backdrop-blur-sm"
+                          className="bg-gray-50 border border-gray-100 rounded-[20px] p-6 h-44 animate-pulse"
                         >
-                          <div className="w-12 h-12 bg-white/5 rounded-[12px] mb-4" />
-                          <div className="h-4 bg-white/5 rounded w-3/4 mb-2" />
-                          <div className="h-3 bg-white/5 rounded w-full" />
+                          <div className="w-12 h-12 bg-gray-200 rounded-[12px] mb-4" />
+                          <div className="h-4 bg-gray-200 rounded w-3/4 mb-2" />
+                          <div className="h-3 bg-gray-200 rounded w-full" />
                         </div>
                       ))}
                     </div>
                   ) : agents.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-20 text-center">
-                      <div className="w-16 h-16 rounded-[18px] bg-white/5 border border-white/10 flex items-center justify-center mb-4 backdrop-blur">
-                        <MessageSquare size={28} className="text-white/30" />
+                      <div className="w-16 h-16 rounded-[18px] bg-gray-50 border border-gray-100 flex items-center justify-center mb-4">
+                        <MessageSquare size={28} className="text-gray-300" />
                       </div>
-                      <p className="text-sm font-medium text-white/70 mb-1">
+                      <p className="text-sm font-medium text-gray-600 mb-1">
                         暂无可用智能体
                       </p>
-                      <p className="text-xs text-white/40">
+                      <p className="text-xs text-gray-400">
                         请联系管理员配置体验版智能体
                       </p>
                     </div>
                   ) : filtered.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-20 text-center">
-                      <div className="w-14 h-14 rounded-[16px] bg-white/5 border border-white/10 flex items-center justify-center mb-4">
-                        <MessageSquare size={22} className="text-white/30" />
+                      <div className="w-14 h-14 rounded-[16px] bg-gray-50 border border-gray-100 flex items-center justify-center mb-4">
+                        <MessageSquare size={22} className="text-gray-300" />
                       </div>
-                      <p className="text-sm text-white/60 mb-2">该分类下暂无智能体</p>
+                      <p className="text-sm text-gray-500 mb-2">该分类下暂无智能体</p>
                       <button
                         onClick={() => setActiveCategory("__all__")}
-                        className="text-xs text-[#a4b8ff] hover:text-white"
+                        className="text-xs text-[#002FA7] hover:underline"
                       >
                         查看全部
                       </button>
@@ -790,12 +806,16 @@ export default function TrialPage() {
                         <button
                           key={a.id}
                           onClick={() => enterChat(a)}
-                          className="group relative overflow-hidden bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 hover:border-[#3b5fff]/50 backdrop-blur-md rounded-[20px] p-6 transition-all duration-300 flex flex-col gap-4 cursor-pointer text-left hover:-translate-y-1 hover:shadow-[0_20px_50px_rgba(59,95,255,0.25)]"
+                          className="group relative overflow-hidden bg-gradient-to-br from-[#001f7a] via-[#002FA7] to-[#3b5fff] rounded-[20px] p-6 transition-all duration-500 flex flex-col gap-4 cursor-pointer text-left hover:-translate-y-1 shadow-[0_4px_16px_rgba(0,47,167,0.2)] hover:shadow-[0_24px_60px_rgba(59,95,255,0.45)]"
                         >
-                          <div className="absolute -top-20 -right-20 w-40 h-40 rounded-full bg-[#3b5fff]/0 group-hover:bg-[#3b5fff]/20 blur-[60px] transition-all duration-500 pointer-events-none" />
+                          {/* 多层渐变光晕：右上主光 + 左下辅光 + 顶部高光 */}
+                          <div className="absolute -top-24 -right-20 w-56 h-56 rounded-full bg-[#6b87ff]/40 blur-[60px] pointer-events-none transition-all duration-500 group-hover:bg-[#a4b8ff]/55 group-hover:scale-110" />
+                          <div className="absolute -bottom-20 -left-16 w-48 h-48 rounded-full bg-[#3b5fff]/35 blur-[70px] pointer-events-none transition-all duration-500 group-hover:bg-[#6b87ff]/45" />
+                          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent pointer-events-none" />
+                          <div className="absolute inset-0 bg-gradient-to-br from-white/[0.08] via-transparent to-transparent pointer-events-none" />
 
-                          <div className="relative flex items-start justify-between">
-                            <div className="w-12 h-12 rounded-[14px] flex items-center justify-center bg-gradient-to-br from-[#3b5fff]/30 to-[#002FA7]/30 border border-[#3b5fff]/30 shadow-[0_4px_16px_rgba(59,95,255,0.3)]">
+                          <div className="relative">
+                            <div className="w-12 h-12 rounded-[14px] flex items-center justify-center bg-white/15 border border-white/20 backdrop-blur shadow-[0_4px_16px_rgba(0,0,0,0.08)]">
                               {a.avatar ? (
                                 // eslint-disable-next-line @next/next/no-img-element
                                 <img
@@ -804,28 +824,25 @@ export default function TrialPage() {
                                   className="w-full h-full object-cover rounded-[14px]"
                                 />
                               ) : (
-                                <Bot size={22} className="text-[#a4b8ff]" />
+                                <Bot size={22} className="text-white" />
                               )}
                             </div>
-                            <span className="text-[10px] text-white/30 font-mono mt-1.5 tracking-wider">
-                              {a.id}
-                            </span>
                           </div>
 
                           <div className="relative flex-1 min-h-0">
-                            <h3 className="text-[16px] font-semibold text-white mb-2 transition-colors group-hover:text-[#a4b8ff]">
+                            <h3 className="text-[16px] font-semibold text-white mb-2">
                               {a.name}
                             </h3>
-                            <p className="text-[13px] text-white/60 leading-relaxed line-clamp-2">
+                            <p className="text-[13px] text-white/75 leading-relaxed line-clamp-2">
                               {a.description}
                             </p>
                           </div>
 
-                          <div className="relative flex items-center justify-between pt-2 border-t border-white/5">
-                            <span className="inline-flex items-center text-[11px] px-2.5 py-1 rounded-full bg-white/5 text-white/60 border border-white/10">
+                          <div className="relative flex items-center justify-between pt-2 border-t border-white/15">
+                            <span className="inline-flex items-center text-[11px] px-2.5 py-1 rounded-full bg-white/15 text-white border border-white/20">
                               {a.category || "体验版"}
                             </span>
-                            <div className="flex items-center gap-1 text-[12px] font-medium text-[#a4b8ff] group-hover:translate-x-1 transition-transform">
+                            <div className="flex items-center gap-1 text-[12px] font-medium text-white group-hover:translate-x-1 transition-transform">
                               开始对话 <ChevronRight size={14} />
                             </div>
                           </div>
@@ -842,12 +859,12 @@ export default function TrialPage() {
         {activeAgent && (
           <div className="flex gap-5 items-stretch h-[calc(100vh-128px)]">
             {/* 左侧聊天历史栏 */}
-            <aside className="hidden md:flex w-64 shrink-0 flex-col bg-white/[0.04] border border-white/10 backdrop-blur-md rounded-[20px] overflow-hidden">
-              <div className="px-4 pt-4 pb-3 border-b border-white/10">
+            <aside className="hidden md:flex w-64 shrink-0 flex-col bg-white border border-gray-200 rounded-[20px] overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
+              <div className="px-4 pt-4 pb-3 border-b border-gray-100">
                 <button
                   onClick={newChat}
                   disabled={streaming}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-[12px] bg-gradient-to-r from-[#3b5fff] to-[#002FA7] text-white text-sm font-medium hover:from-[#5577ff] hover:to-[#1a47c0] disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_4px_16px_rgba(59,95,255,0.3)] transition-all"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-[12px] bg-[#002FA7] text-white text-sm font-medium hover:bg-[#001f7a] disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_4px_16px_rgba(0,47,167,0.25)] transition-all"
                 >
                   <Plus size={15} /> 新建对话
                 </button>
@@ -855,10 +872,10 @@ export default function TrialPage() {
               <div className="flex-1 overflow-y-auto px-2 py-2">
                 {aState.loadingChats ? (
                   <div className="py-8 flex justify-center">
-                    <Loader2 size={18} className="text-white/40 animate-spin" />
+                    <Loader2 size={18} className="text-gray-400 animate-spin" />
                   </div>
                 ) : aState.chats.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-white/40">
+                  <div className="py-8 text-center text-xs text-gray-400">
                     还没有聊天记录
                     <br />
                     点击上方开始第一段对话
@@ -873,27 +890,27 @@ export default function TrialPage() {
                           onClick={() => selectChat(c.id)}
                           className={`group/chat relative flex items-start gap-2 px-3 py-2.5 rounded-[10px] cursor-pointer transition-all ${
                             isActive
-                              ? "bg-[#3b5fff]/20 border border-[#3b5fff]/40"
-                              : "border border-transparent hover:bg-white/5"
+                              ? "bg-[#002FA7]/8 border border-[#002FA7]/20"
+                              : "border border-transparent hover:bg-gray-50"
                           }`}
                         >
                           <MessageCircle
                             size={13}
                             className={`mt-0.5 shrink-0 ${
-                              isActive ? "text-[#a4b8ff]" : "text-white/40"
+                              isActive ? "text-[#002FA7]" : "text-gray-400"
                             }`}
                           />
                           <div className="flex-1 min-w-0">
                             <p
                               className={`text-[13px] truncate ${
                                 isActive
-                                  ? "text-white font-medium"
-                                  : "text-white/70"
+                                  ? "text-[#002FA7] font-medium"
+                                  : "text-gray-700"
                               }`}
                             >
                               {c.title || "未命名对话"}
                             </p>
-                            <p className="text-[10px] text-white/30 mt-0.5">
+                            <p className="text-[10px] text-gray-400 mt-0.5">
                               {relativeTime(c.last_active_at)}
                             </p>
                           </div>
@@ -902,7 +919,7 @@ export default function TrialPage() {
                               e.stopPropagation();
                               deleteChat(c.id);
                             }}
-                            className="opacity-0 group-hover/chat:opacity-100 transition-opacity p-1 rounded-[6px] hover:bg-red-500/20 text-white/40 hover:text-red-300"
+                            className="opacity-0 group-hover/chat:opacity-100 transition-opacity p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-500"
                             title="删除"
                           >
                             <Trash2 size={12} />
@@ -916,9 +933,9 @@ export default function TrialPage() {
             </aside>
 
             {/* 右侧对话面板 */}
-            <div className="flex-1 flex flex-col bg-white/[0.04] border border-white/10 backdrop-blur-md rounded-[20px] overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.4)]">
-              <div className="flex items-center gap-3 px-6 py-4 border-b border-white/10 bg-white/[0.02]">
-                <div className="w-11 h-11 rounded-[12px] flex items-center justify-center bg-gradient-to-br from-[#3b5fff]/40 to-[#002FA7]/40 border border-[#3b5fff]/40">
+            <div className="flex-1 flex flex-col bg-white border border-gray-200 rounded-[20px] overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
+              <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 bg-gray-50/40">
+                <div className="w-11 h-11 rounded-[12px] flex items-center justify-center bg-[#002FA7]/8 border border-[#002FA7]/15">
                   {activeAgent.avatar ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -927,34 +944,34 @@ export default function TrialPage() {
                       className="w-full h-full object-cover rounded-[12px]"
                     />
                   ) : (
-                    <Bot size={20} className="text-[#a4b8ff]" />
+                    <Bot size={20} className="text-[#002FA7]" />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[15px] font-semibold text-white leading-tight truncate">
+                  <p className="text-[15px] font-semibold text-gray-900 leading-tight truncate">
                     {activeAgent.name}
                   </p>
-                  <p className="text-[12px] text-white/50 mt-0.5 truncate">
+                  <p className="text-[12px] text-gray-500 mt-0.5 truncate">
                     {activeAgent.description}
                   </p>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-3">
+              <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-3 bg-white">
                 {activeBody.loadingMessages ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-center">
-                    <Loader2 size={22} className="text-white/40 animate-spin mb-3" />
-                    <p className="text-xs text-white/40">正在加载历史对话…</p>
+                    <Loader2 size={22} className="text-gray-400 animate-spin mb-3" />
+                    <p className="text-xs text-gray-400">正在加载历史对话…</p>
                   </div>
                 ) : messages.length === 0 ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-center">
-                    <div className="w-16 h-16 rounded-[18px] bg-white/5 border border-white/10 flex items-center justify-center mb-4 backdrop-blur">
-                      <Bot size={26} className="text-[#a4b8ff]" />
+                    <div className="w-16 h-16 rounded-[18px] bg-[#002FA7]/8 border border-[#002FA7]/15 flex items-center justify-center mb-4">
+                      <Bot size={26} className="text-[#002FA7]" />
                     </div>
-                    <p className="text-sm text-white/70">
+                    <p className="text-sm text-gray-700">
                       向 {activeAgent.name} 发起对话
                     </p>
-                    <p className="text-xs text-white/40 mt-1">
+                    <p className="text-xs text-gray-400 mt-1">
                       支持多轮上下文，记录将自动保存
                     </p>
                   </div>
@@ -969,8 +986,8 @@ export default function TrialPage() {
                       <div
                         className={`max-w-[78%] px-4 py-2.5 text-[14px] leading-relaxed ${
                           m.role === "user"
-                            ? "bg-gradient-to-br from-[#3b5fff] to-[#002FA7] text-white rounded-[16px] rounded-tr-[4px] shadow-[0_4px_16px_rgba(59,95,255,0.4)]"
-                            : "bg-white/[0.06] border border-white/10 text-white/90 rounded-[16px] rounded-tl-[4px] backdrop-blur"
+                            ? "bg-[#002FA7] text-white rounded-[16px] rounded-tr-[4px] shadow-[0_4px_12px_rgba(0,47,167,0.25)]"
+                            : "bg-gray-50 border border-gray-100 text-gray-800 rounded-[16px] rounded-tl-[4px]"
                         }`}
                       >
                         {m.attachments && m.attachments.length > 0 && (
@@ -980,8 +997,8 @@ export default function TrialPage() {
                                 key={`${att.file_id}_${ai}`}
                                 className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-[8px] text-[11px] ${
                                   m.role === "user"
-                                    ? "bg-white/15"
-                                    : "bg-white/5 border border-white/10"
+                                    ? "bg-white/20 text-white"
+                                    : "bg-white border border-gray-200 text-gray-600"
                                 }`}
                               >
                                 {att.kind === "image" ? (
@@ -1004,7 +1021,7 @@ export default function TrialPage() {
                             m.role === "assistant" ? (
                               <Loader2
                                 size={14}
-                                className="animate-spin text-white/60"
+                                className="animate-spin text-gray-400"
                               />
                             ) : (
                               ""
@@ -1017,17 +1034,17 @@ export default function TrialPage() {
                 <div ref={messagesEndRef} />
               </div>
 
-              <div className="px-6 py-4 border-t border-white/10 bg-white/[0.02]">
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/40">
                 {/* 待发送附件 chips */}
                 {pendingAttachments.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-2">
                     {pendingAttachments.map((p) => (
                       <div
                         key={p.fileId}
-                        className={`group/att relative flex items-center gap-2 pl-1 pr-7 py-1 rounded-[10px] border text-[12px] backdrop-blur ${
+                        className={`group/att relative flex items-center gap-2 pl-1 pr-7 py-1 rounded-[10px] border text-[12px] ${
                           p.error
-                            ? "border-red-400/40 bg-red-500/10 text-red-300"
-                            : "border-white/15 bg-white/[0.06] text-white/80"
+                            ? "border-red-200 bg-red-50 text-red-600"
+                            : "border-gray-200 bg-white text-gray-700"
                         }`}
                       >
                         {p.previewUrl ? (
@@ -1038,13 +1055,13 @@ export default function TrialPage() {
                             className="w-9 h-9 object-cover rounded-[6px]"
                           />
                         ) : (
-                          <div className="w-9 h-9 rounded-[6px] bg-white/10 flex items-center justify-center">
-                            <FileText size={14} className="text-white/60" />
+                          <div className="w-9 h-9 rounded-[6px] bg-[#002FA7]/8 flex items-center justify-center">
+                            <FileText size={14} className="text-[#002FA7]" />
                           </div>
                         )}
                         <div className="max-w-[140px]">
                           <p className="truncate leading-tight">{p.fileName}</p>
-                          <p className="text-[10px] text-white/40 leading-tight mt-0.5">
+                          <p className="text-[10px] text-gray-400 leading-tight mt-0.5">
                             {p.uploading
                               ? "上传中…"
                               : p.error
@@ -1054,7 +1071,7 @@ export default function TrialPage() {
                         </div>
                         <button
                           onClick={() => removePending(p.fileId)}
-                          className="absolute right-1.5 top-1.5 p-0.5 rounded-full bg-black/30 hover:bg-black/60 text-white/70 hover:text-white transition-colors"
+                          className="absolute right-1.5 top-1.5 p-0.5 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-500 hover:text-gray-700 transition-colors"
                           title="移除"
                         >
                           <X size={11} />
@@ -1077,7 +1094,7 @@ export default function TrialPage() {
                     onClick={pickFiles}
                     disabled={streaming || pendingAttachments.length >= 5}
                     title="添加附件（最多 5 个，图片 ≤10MB / 文档 ≤20MB）"
-                    className="h-10 w-10 shrink-0 flex items-center justify-center rounded-[12px] border border-white/10 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    className="h-10 w-10 shrink-0 flex items-center justify-center rounded-[12px] border border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#002FA7] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     <Paperclip size={16} />
                   </button>
@@ -1092,7 +1109,7 @@ export default function TrialPage() {
                     }}
                     placeholder="输入消息，Enter 发送，Shift+Enter 换行"
                     rows={2}
-                    className="flex-1 resize-none border border-white/10 rounded-[12px] px-3 py-2 text-sm focus:outline-none focus:border-[#3b5fff]/50 focus:ring-2 focus:ring-[#3b5fff]/20 bg-white/5 text-white placeholder:text-white/30 backdrop-blur"
+                    className="flex-1 resize-none border border-gray-200 rounded-[12px] px-3 py-2 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 bg-white text-gray-900 placeholder:text-gray-400"
                   />
                   <button
                     onClick={send}
@@ -1101,7 +1118,7 @@ export default function TrialPage() {
                       (!input.trim() &&
                         pendingAttachments.filter((p) => !p.error).length === 0)
                     }
-                    className="h-10 px-5 rounded-[12px] bg-gradient-to-r from-[#3b5fff] to-[#002FA7] text-white text-sm font-medium hover:from-[#5577ff] hover:to-[#1a47c0] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0 shadow-[0_4px_16px_rgba(59,95,255,0.4)] transition-all"
+                    className="h-10 px-5 rounded-[12px] bg-[#002FA7] text-white text-sm font-medium hover:bg-[#001f7a] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0 shadow-[0_4px_16px_rgba(0,47,167,0.25)] transition-all"
                   >
                     <Send size={14} />
                     <span className="hidden sm:inline">
