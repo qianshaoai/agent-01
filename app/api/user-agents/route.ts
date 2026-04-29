@@ -1,12 +1,14 @@
 import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireFullUser(user);
+  if (guard) return guard;
 
   const { data } = await db
     .from("user_agents")
@@ -25,6 +27,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireFullUser(user);
+  if (guard) return guard;
 
   const body = await req.json();
   const { name, description, agentType, platform, apiUrl, apiKey, externalUrl, modelParams } = body;

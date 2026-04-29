@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { v4 as uuidv4 } from "uuid";
 import { withRequestLog } from "@/lib/request-logger";
@@ -19,6 +19,8 @@ function getAudioFormat(mimeType: string): { format: string; codec: string; rate
 export const POST = withRequestLog(async (req: NextRequest) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireFullUser(user);
+  if (guard) return guard;
 
   const apiKey = process.env.VOLCENGINE_API_KEY;
   if (!apiKey) {
@@ -105,6 +107,8 @@ export const POST = withRequestLog(async (req: NextRequest) => {
 export const GET = withRequestLog(async (req: NextRequest) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireFullUser(user);
+  if (guard) return guard;
 
   const apiKey = process.env.VOLCENGINE_API_KEY;
   if (!apiKey) {

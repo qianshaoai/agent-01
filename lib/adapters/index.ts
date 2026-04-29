@@ -21,9 +21,16 @@ async function withRetry<T>(
   throw new Error("unreachable");
 }
 
+export type ChatAttachment = {
+  fileId: string;
+  kind: "image" | "file";
+};
+
 export type ChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
+  /** 多模态附件（仅部分平台支持，目前 coze） */
+  attachments?: ChatAttachment[];
 };
 
 export type AdapterConfig = {
@@ -66,19 +73,42 @@ async function* cozeStream(
   messages: ChatMessage[],
   config: AdapterConfig
 ): AsyncGenerator<string> {
+  // 仅当调用方明确想要持久化（提供了 platformConvId 或 onPlatformConvId 回调）时
+  // 才让 Coze 持久化此次会话；否则保持原有"无状态单轮"行为。
+  const wantsPersistence = Boolean(config.platformConvId) || Boolean(config.onPlatformConvId);
+
   const body = {
     bot_id: config.modelParams["bot_id"] ?? config.agentCode,
     user_id: "portal_user",
     stream: true,
-    auto_save_history: false,
-    additional_messages: messages.map((m) => ({
-      role: m.role === "assistant" ? "assistant" : "user",
-      content: m.content,
-      content_type: "text",
-    })),
+    auto_save_history: wantsPersistence,
+    additional_messages: messages.map((m) => {
+      const role = m.role === "assistant" ? "assistant" : "user";
+      // 有附件时走 Coze 多模态格式（object_string）
+      if (m.attachments && m.attachments.length > 0) {
+        const parts: Array<Record<string, string>> = [];
+        if (m.content) parts.push({ type: "text", text: m.content });
+        for (const a of m.attachments) {
+          parts.push({ type: a.kind, file_id: a.fileId });
+        }
+        return {
+          role,
+          content: JSON.stringify(parts),
+          content_type: "object_string",
+        };
+      }
+      return { role, content: m.content, content_type: "text" };
+    }),
   };
 
-  const res = await fetch(config.apiEndpoint || "https://api.coze.cn/v3/chat", {
+  // 用 URL 对象拼 conversation_id 查询参数；不破坏调用方传入的其他参数
+  const baseUrl = config.apiEndpoint || "https://api.coze.cn/v3/chat";
+  const url = new URL(baseUrl);
+  if (config.platformConvId) {
+    url.searchParams.set("conversation_id", config.platformConvId);
+  }
+
+  const res = await fetch(url.toString(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -91,6 +121,9 @@ async function* cozeStream(
     throw new Error(`Coze API error: ${res.status} ${await res.clone().text()}`);
   }
 
+  // 用闭包变量去重：同一 conversation_id 多次出现时只回调一次
+  let notifiedConvId: string | null = config.platformConvId ?? null;
+
   yield* parseSSEStream(res, (data, event) => {
     let obj: Record<string, unknown>;
     try {
@@ -99,6 +132,22 @@ async function* cozeStream(
       return null;
     }
     const evtType = event || (obj.event as string);
+
+    // 捕获 conversation_id：chat.created 事件的 data 里有 conversation_id 字段
+    if (config.onPlatformConvId) {
+      const cid =
+        (obj.conversation_id as string | undefined) ??
+        ((obj.data as { conversation_id?: string } | undefined)?.conversation_id);
+      if (cid && cid !== notifiedConvId) {
+        notifiedConvId = cid;
+        try {
+          config.onPlatformConvId(cid);
+        } catch {
+          // 回调里抛错不影响流式
+        }
+      }
+    }
+
     if (evtType === "conversation.chat.failed") {
       const errMsg = (obj.last_error as { msg?: string } | undefined)?.msg ?? JSON.stringify(obj);
       throw new Error(`Coze 错误: ${errMsg}`);

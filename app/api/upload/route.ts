@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { withRequestLog } from "@/lib/request-logger";
 
@@ -40,6 +40,8 @@ function verifyMagicBytes(buffer: Buffer, declaredType: string): boolean {
 export const POST = withRequestLog(async (req: NextRequest) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireFullUser(user);
+  if (guard) return guard;
 
   const formData = await req.formData();
   const file = formData.get("file") as File | null;

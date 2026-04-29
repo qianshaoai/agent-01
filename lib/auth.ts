@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { AUTH } from "@/lib/config";
 
 // JWT_SECRET 必须在环境变量中配置，缺失时立即报错防止使用不安全的默认值
@@ -32,7 +32,7 @@ export type UserPayload = {
   tenantName: string;
   isPersonal: boolean;
   role: "super_admin" | "system_admin" | "org_admin" | "user";
-  userType: "personal" | "organization";
+  userType: "personal" | "organization" | "trial";
 };
 
 export type AdminRole = "super_admin" | "system_admin" | "org_admin";
@@ -152,3 +152,36 @@ export function buildAdminClearCookieHeader(): string {
 }
 
 export { COOKIE_NAME, ADMIN_COOKIE_NAME };
+
+// ─── Trial 守卫 helpers（4.28up 体验版模块）─────────────────────────────────
+//
+// 调用约定：返回 NextResponse 表示已拦截（调用方直接 return 即可）；
+//          返回 null 表示通过，继续执行业务逻辑。
+
+/** 拦截体验账号访问正式业务接口（user-JWT 接口入口处统一调用） */
+export function requireFullUser(payload: TokenPayload | null): NextResponse | null {
+  if (!payload || payload.type !== "user") {
+    return NextResponse.json({ error: "未登录", code: "UNAUTHORIZED" }, { status: 401 });
+  }
+  if (payload.userType === "trial") {
+    return NextResponse.json(
+      { error: "体验账号不可调用此接口", code: "FORBIDDEN" },
+      { status: 403 }
+    );
+  }
+  return null;
+}
+
+/** 拦截非体验账号访问体验版接口（/api/trial/* 入口处统一调用） */
+export function requireTrialUser(payload: TokenPayload | null): NextResponse | null {
+  if (!payload || payload.type !== "user") {
+    return NextResponse.json({ error: "未登录", code: "UNAUTHORIZED" }, { status: 401 });
+  }
+  if (payload.userType !== "trial") {
+    return NextResponse.json(
+      { error: "非体验账号不可调用此接口", code: "FORBIDDEN" },
+      { status: 403 }
+    );
+  }
+  return null;
+}

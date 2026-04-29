@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
-import { getCurrentUser, buildClearCookieHeader } from "@/lib/auth";
+import { getCurrentUser, buildClearCookieHeader, requireFullUser } from "@/lib/auth";
 import { withRequestLog } from "@/lib/request-logger";
 
 export const POST = withRequestLog(async (req: NextRequest) => {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireFullUser(user);
+  if (guard) return guard;
 
   const { oldPassword, newPassword } = await req.json();
   if (!oldPassword || !newPassword) {
