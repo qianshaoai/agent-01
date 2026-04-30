@@ -32,7 +32,7 @@ function friendlyError(msg: string): string {
 }
 
 type ChatMsgProps = {
-  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean; attachedFiles?: string[] };
+  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean; attachedFiles?: string[]; attachedImages?: { filename: string; url: string }[] };
   streaming: boolean;
   onCopy: () => void;
   copied: boolean;
@@ -72,7 +72,27 @@ const ChatMessage = memo(function ChatMessage({
       </div>
       <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
         <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
-          {/* 用户消息：先渲染附件 chip（如果有），再渲染正文 */}
+          {/* 用户消息：先渲染图片缩略 + 文件 chip（如果有），再渲染正文 */}
+          {!isAssistant && msg.attachedImages && msg.attachedImages.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {msg.attachedImages.map((img, ii) => (
+                <a
+                  key={ii}
+                  href={img.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block rounded-[10px] overflow-hidden border border-white/30"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={img.url}
+                    alt={img.filename}
+                    className="max-w-[220px] max-h-[200px] object-cover"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
           {!isAssistant && msg.attachedFiles && msg.attachedFiles.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2">
               {msg.attachedFiles.map((fname, fi) => (
@@ -253,6 +273,12 @@ type Message = {
   aborted?: boolean;
   /** 用户消息附带的文件名列表（只渲染文件名 chip，不再把文件内容平铺到 content 里） */
   attachedFiles?: string[];
+  /** 用户消息附带的图片（缩略图渲染） */
+  attachedImages?: { filename: string; url: string }[];
+  /** user 消息原始入库 content（含 [附件内容] 段）。
+   *  渲染层只用 content（已 strip）；regenerate / editAndResend 必须用 rawContent
+   *  以保证带原文件块重发，否则 bot 第二次回答看不到附件内容。 */
+  rawContent?: string;
 };
 
 /**
@@ -261,14 +287,23 @@ type Message = {
  *   返回：{ text: 用户输入正文, attachedFiles: 解析出来的文件名列表 }
  * 阶段一不改后端，前端做兜底解析；后续若改成结构化保存（attachments 列）再退役本函数。
  */
-function parseUserContent(raw: string): { text: string; attachedFiles: string[] } {
+function parseUserContent(raw: string): {
+  text: string;
+  attachedFiles: string[];
+  attachedImages: { filename: string; url: string }[];
+} {
   const match = raw.match(/^([\s\S]*?)\n\n\[附件内容\]\n([\s\S]*)$/);
-  if (!match) return { text: raw, attachedFiles: [] };
+  if (!match) return { text: raw, attachedFiles: [], attachedImages: [] };
   const [, userText, fileSection] = match;
   const filenames = Array.from(fileSection.matchAll(/文件《([^》]+)》内容[：:]/g)).map(
     (m) => m[1]
   );
-  return { text: userText.trim(), attachedFiles: filenames };
+  // 兼容两种格式：
+  //   "[图片: name, URL: url]"  或  "[图片: name，URL: url]"  （中文逗号）
+  const images = Array.from(
+    fileSection.matchAll(/\[图片[:：]\s*([^,，\]]+)[,，]\s*URL[:：]\s*(https?:\/\/[^\]\s]+)\]/g)
+  ).map((m) => ({ filename: m[1].trim(), url: m[2].trim() }));
+  return { text: userText.trim(), attachedFiles: filenames, attachedImages: images };
 }
 
 type Conversation = {
@@ -294,6 +329,10 @@ type UploadedFile = {
   /** "uploading" / "ok" / "failed"（基于 extractedText 是否非空判定） */
   status: "uploading" | "ok" | "failed";
   errorReason?: string;
+  /** image 类附件走多模态 attachments 链路（adapter 转 image_url），file 类走 fileTexts 文本拼接 */
+  kind?: "image" | "file";
+  /** Supabase 公开 URL，仅 image 类发给后端用 */
+  url?: string;
 };
 
 export default function AgentChatPage({ params }: { params: Promise<{ id: string }> }) {
@@ -349,20 +388,29 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       ]);
       if (cancelled) return;
 
+      let found: AgentInfo | null = null;
       if (agentsRes.status === "fulfilled" && agentsRes.value.ok) {
         const data = await agentsRes.value.json();
         if (cancelled) return;
-        const found = data.agents?.find((a: AgentInfo) => a.agent_code === agentCode);
-        if (found?.agent_type === "external" && found?.external_url) {
-          // 外链型智能体：自动跳转到外部链接
-          setRedirecting(true);
-          window.location.replace(found.external_url);
-          return;
-        }
-        setAgent(found ?? { agent_code: agentCode, name: agentCode, description: "" });
-      } else {
-        setAgent({ agent_code: agentCode, name: agentCode, description: "" });
+        found = data.agents?.find((a: AgentInfo) => a.agent_code === agentCode) ?? null;
       }
+      // /api/agents 列表里没有（未绑工作流 / 无权限规则等），回退到单查接口
+      if (!found) {
+        try {
+          const r = await fetch(`/api/agents/${encodeURIComponent(agentCode)}`);
+          if (!cancelled && r.ok) {
+            found = (await r.json()) as AgentInfo;
+          }
+        } catch {}
+      }
+      if (cancelled) return;
+      if (found?.agent_type === "external" && found?.external_url) {
+        // 外链型智能体：自动跳转到外部链接
+        setRedirecting(true);
+        window.location.replace(found.external_url);
+        return;
+      }
+      setAgent(found ?? { agent_code: agentCode, name: agentCode, description: "" });
 
       if (convsRes.status === "fulfilled" && convsRes.value.ok) {
         const raw = await convsRes.value.json();
@@ -397,12 +445,17 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           );
           return data.map((m: { id: string; role: "user" | "assistant"; content: string; created_at: string }) => {
             const parsed =
-              m.role === "user" ? parseUserContent(m.content) : { text: m.content, attachedFiles: [] as string[] };
+              m.role === "user"
+                ? parseUserContent(m.content)
+                : { text: m.content, attachedFiles: [] as string[], attachedImages: [] as { filename: string; url: string }[] };
+            const hasAttach = parsed.attachedFiles.length > 0 || parsed.attachedImages.length > 0;
             return {
               id: m.id,
               role: m.role,
               content: parsed.text,
               attachedFiles: parsed.attachedFiles.length > 0 ? parsed.attachedFiles : undefined,
+              attachedImages: parsed.attachedImages.length > 0 ? parsed.attachedImages : undefined,
+              rawContent: m.role === "user" && hasAttach ? m.content : undefined,
               createdAt: new Date(m.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
               aborted: abortedIds.has(m.id) ? true : undefined,
             };
@@ -433,22 +486,44 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
   }
 
-  async function handleSend(opts?: { text: string }) {
+  async function handleSend(opts?: {
+    text: string;
+    attachedFiles?: string[];
+    attachedImages?: { filename: string; url: string }[];
+  }) {
     if (streaming) return;
-    const sentInput = opts ? opts.text.trim() : input.trim();
+    // ⚠ opts.text 走 regenerate / editAndResend 时可能已经含 [附件内容] 段，
+    //   不能 trim()（trim 会把段尾空白吃掉，但中间的格式保留就行）；只 trim 普通输入路径
+    const sentInput = opts ? opts.text : input.trim();
     if (!sentInput) return;
     setError("");
 
     // 仅可用（已成功上传）的文件参与上下文；未完成 / 失败的过滤掉
     const okFiles = opts ? [] : uploadedFiles.filter((f) => f.status === "ok");
-    const fileTexts = okFiles.map((f) => `文件《${f.filename}》内容：\n${f.extractedText}`);
-    const attachedFilenames = okFiles.map((f) => f.filename);
+    // 拆开两条路：image 走结构化 attachments（adapter 转 image_url 多模态），
+    // 文档走 fileTexts 文本拼接到 message 后面
+    const okDocs = okFiles.filter((f) => f.kind !== "image");
+    const okImages = okFiles.filter((f) => f.kind === "image" && f.url);
+    // 走 opts 时 sentInput 自身已经含 [附件内容] 段，禁止再追加 fileTexts，否则会重复拼
+    const fileTexts = okDocs.map((f) => `文件《${f.filename}》内容：\n${f.extractedText}`);
+    // attachments 给 adapter 拼成多模态 image_url；opts 路径走 attachedImages 重建
+    const attachments = opts?.attachedImages
+      ? opts.attachedImages.map((img) => ({ kind: "image" as const, url: img.url, filename: img.filename }))
+      : okImages.map((f) => ({ kind: "image" as const, url: f.url!, filename: f.filename }));
+    const attachedFilenames = opts?.attachedFiles ?? okDocs.map((f) => f.filename);
+    const attachedImages = opts?.attachedImages ?? okImages.map((f) => ({ filename: f.filename, url: f.url! }));
+
+    // 乐观气泡 content：opts 路径下 sentInput 含 [附件内容]，
+    // 要剥离成干净文本展示（chip 单独渲染），rawContent 留住原始带 dump 版本以备再次重发
+    const optimisticContent = opts ? parseUserContent(sentInput).text : sentInput;
 
     const userMsg: Message = {
       id: `tmp-${Date.now()}`,
       role: "user",
-      content: sentInput,
+      content: optimisticContent,
       attachedFiles: attachedFilenames.length > 0 ? attachedFilenames : undefined,
+      attachedImages: attachedImages.length > 0 ? attachedImages : undefined,
+      rawContent: opts && (attachedFilenames.length > 0 || attachedImages.length > 0) ? sentInput : undefined,
       createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -479,6 +554,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           message: sentInput,
           conversationId: activeConvId,
           fileTexts,
+          attachments,
         }),
       });
 
@@ -623,9 +699,10 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       setError("重新生成失败：清理旧消息失败");
       return;
     }
-    const text = prev.content;
+    // 重新生成时必须带回原文件块（否则 bot 第二次答案看不到附件）
+    const text = prev.rawContent ?? prev.content;
     setMessages((m) => m.slice(0, -2));
-    await handleSend({ text });
+    await handleSend({ text, attachedFiles: prev.attachedFiles, attachedImages: prev.attachedImages });
   }
 
   // P1 · 编辑 user 消息后重发
@@ -650,8 +727,18 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       setError("编辑失败：清理旧消息失败");
       return;
     }
+    // 编辑时把新文本 + 原文件块拼回去重发，让 bot 看到附件内容
+    let textToSend = trimmed;
+    if (target.rawContent) {
+      const m = target.rawContent.match(/^[\s\S]*?(\n\n\[附件内容\]\n[\s\S]*)$/);
+      if (m) textToSend = trimmed + m[1];
+    }
     setMessages((prev) => prev.slice(0, idx));
-    await handleSend({ text: trimmed });
+    await handleSend({
+      text: textToSend,
+      attachedFiles: target.attachedFiles,
+      attachedImages: target.attachedImages,
+    });
   }
 
   // P1 · 滚动检测：离底超 80px 显示"回到最新"
@@ -721,6 +808,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       const data = await res.json();
       if (res.ok) {
         const text = data.extractedText ?? "";
+        const kind: "image" | "file" = data.kind === "image" ? "image" : "file";
+        // image 类走 attachments 多模态链路，无需 extractedText 也算 ok（有 url 就够）
+        const ok = kind === "image" ? Boolean(data.url) : Boolean(text);
         setUploadedFiles((prev) =>
           prev.map((f) =>
             f.uploadId === uploadId
@@ -728,8 +818,10 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   ...f,
                   filename: data.filename ?? f.filename,
                   extractedText: text,
-                  status: text ? "ok" : "failed",
-                  errorReason: text ? undefined : "解析失败：文件可能损坏或格式不支持",
+                  kind,
+                  url: data.url,
+                  status: ok ? "ok" : "failed",
+                  errorReason: ok ? undefined : "解析失败：文件可能损坏或格式不支持",
                 }
               : f
           )
@@ -760,24 +852,41 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   }
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
+    // ⚠ 必须先把 files 拷成数组，再清 value。
+    // e.target.files 是 live FileList，置 value="" 会同步清空它，
+    // 之前的写法（先存引用再清 value）会让 length 变 0 静默返回，
+    // 表现就是"点回形针选了文件没反应"。
+    if (!e.target.files || e.target.files.length === 0) return;
+    const arr = Array.from(e.target.files);
     e.target.value = "";
-    if (!files || files.length === 0) return;
-    handleFiles(files);
+    arr.forEach(uploadOne);
   }
 
   // P1: 拖拽上传
+  // 拖拽计数器：dragenter +1 / dragleave -1，归零才隐藏遮罩。
+  // 之前用 e.currentTarget === e.target 判 leave，子节点之间 leave 几乎永不命中，
+  // dragOver 会卡在 true 让 z-30 遮罩永远盖在输入区上方，导致 paperclip 点不动。
+  const dragDepthRef = useRef(0);
+
+  function onDragEnter(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setDragOver(true);
+  }
   function onDragOver(e: React.DragEvent) {
     if (Array.from(e.dataTransfer.types).includes("Files")) {
-      e.preventDefault();
-      setDragOver(true);
+      e.preventDefault(); // 必需，否则 onDrop 不触发
     }
   }
   function onDragLeave(e: React.DragEvent) {
-    if (e.currentTarget === e.target) setDragOver(false);
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragOver(false);
   }
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
+    dragDepthRef.current = 0;
     setDragOver(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleFiles(e.dataTransfer.files);
@@ -936,7 +1045,6 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               <Bot size={16} className="text-[#002FA7]" />
             </div>
             <span className="font-semibold text-gray-900 text-sm truncate">
-              <span className="text-gray-400 font-mono text-xs mr-1">{agentCode}</span>
               {agent?.name ?? agentCode}
             </span>
           </div>
@@ -1063,17 +1171,19 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         {/* Chat area */}
         <div
           className="flex-1 flex flex-col min-w-0 relative"
+          onDragEnter={onDragEnter}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={onDrop}
         >
-          {/* P1: 拖拽上传遮罩 */}
-          {dragOver && (
-            <div className="pointer-events-none absolute inset-0 z-30 m-3 rounded-[16px] border-2 border-dashed border-[#002FA7] bg-[#002FA7]/5 flex items-center justify-center">
-              <div className="text-[#002FA7] font-medium text-sm">松开鼠标上传文件</div>
-            </div>
-          )}
-          <div ref={messageScrollRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+          <div ref={messageScrollRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-6 relative">
+            {/* P1: 拖拽上传遮罩 — 仅覆盖消息滚动区，**不**遮挡下方输入区，
+                避免遮罩万一卡住时挡到 paperclip */}
+            {dragOver && (
+              <div className="pointer-events-none absolute inset-2 z-30 rounded-[16px] border-2 border-dashed border-[#002FA7] bg-[#002FA7]/5 flex items-center justify-center">
+                <div className="text-[#002FA7] font-medium text-sm">松开鼠标上传文件</div>
+              </div>
+            )}
             {messages.length === 0 && !loading && (
               <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
                 <div className="w-16 h-16 rounded-[20px] bg-[#002FA7]/8 flex items-center justify-center">
@@ -1204,7 +1314,17 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 />
                 <div className="flex items-center justify-between px-3 pb-2.5">
                   <div className="flex items-center gap-1">
-                    <button onClick={() => fileInputRef.current?.click()} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="上传文件" aria-label="上传文件">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        fileInputRef.current?.click();
+                      }}
+                      className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
+                      title="上传文件"
+                      aria-label="上传文件"
+                    >
                       <Paperclip size={16} />
                     </button>
                     <button onClick={handleVoice} disabled={transcribing} className={`p-1.5 rounded-[8px] transition-colors ${recording ? "bg-red-100 text-red-500 hover:bg-red-200" : transcribing ? "text-yellow-500 animate-pulse cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={recording ? "停止录音" : transcribing ? "识别中…" : "语音输入"}>

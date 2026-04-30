@@ -19,7 +19,7 @@ export const POST = withRequestLog(async (
 
   const { id: rawId } = await params;
   const agentCode = decodeURIComponent(rawId);
-  const { message, conversationId, fileTexts } = await req.json();
+  const { message, conversationId, fileTexts, attachments } = await req.json();
 
   if (!message?.trim()) {
     return NextResponse.json({ error: "消息不能为空" }, { status: 400 });
@@ -108,7 +108,24 @@ export const POST = withRequestLog(async (
       .order("created_at", { ascending: true })
       .limit(MAX_CONTEXT_TURNS * 2);
 
-    const history: ChatMessage[] = (historyRows ?? []) as ChatMessage[];
+    // 4.30 修：只保留成对 user → assistant 的历史，过滤掉悬空 user
+    // 原因：上一轮 bot 失败 / abort 时 assistant 没入库，dangling user 留在 DB
+    // 下次拼 messages 数组会出现连续两条 user，元器（及任何严格平台）400：
+    // "请求消息中user与assistant角色没有交替出现"
+    const rawHistory = (historyRows ?? []) as ChatMessage[];
+    const history: ChatMessage[] = [];
+    for (let i = 0; i < rawHistory.length; i++) {
+      const cur = rawHistory[i];
+      if (cur.role === "user") {
+        const next = rawHistory[i + 1];
+        if (next && next.role === "assistant") {
+          history.push(cur, next);
+          i++; // 跳过 next
+        }
+        // 否则丢弃 dangling user
+      }
+      // dangling assistant 不应出现，丢弃
+    }
 
     // 如果有文件提取文本，拼入用户消息
     let userContent = message;
@@ -116,19 +133,52 @@ export const POST = withRequestLog(async (
       userContent += "\n\n[附件内容]\n" + fileTexts.join("\n\n---\n\n");
     }
 
+    // 4.30 修：图片附件走结构化 attachments → adapter 拼成 image_url 多模态
+    // DB content 里只追加一行 [图片: name, URL: url] 标记，便于历史回显和编辑/重发
+    type IncomingAttachment = { kind: "image" | "file"; url?: string; filename?: string };
+    const incomingAtts: IncomingAttachment[] = Array.isArray(attachments) ? attachments : [];
+    const imageAtts = incomingAtts.filter((a) => a.kind === "image" && a.url);
+    let displayContent = userContent;
+    if (imageAtts.length > 0) {
+      // 幂等：URL 已经出现在 userContent 里（regenerate / edit 路径，message 自带旧图片标记）
+      // 就跳过追加，否则同一图片会有两份标记
+      const imgLines = imageAtts
+        .filter((a) => !userContent.includes(a.url!))
+        .map((a) => `[图片: ${a.filename ?? "图片"}，URL: ${a.url}]`);
+      if (imgLines.length > 0) {
+        const sep = userContent.includes("[附件内容]") ? "\n" : "\n\n[附件内容]\n";
+        displayContent = userContent + sep + imgLines.join("\n");
+      }
+    }
+
     // 构建消息列表（系统提示 + 历史 + 当前用户消息）
     const systemPrompt = (agent.model_params as Record<string, unknown>)["system_prompt"] as string | undefined;
     const messages: ChatMessage[] = [
       ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
       ...history,
-      { role: "user", content: userContent },
+      {
+        role: "user",
+        content: userContent,
+        // 把 image attachments 挂到 user message 上，adapter (yuanqi/coze) 会拼成
+        // OpenAI 兼容的 {type: "image_url", image_url: {url}} 多模态 part
+        ...(imageAtts.length > 0
+          ? {
+              attachments: imageAtts.map((a) => ({
+                kind: "image" as const,
+                url: a.url!,
+                fileName: a.filename,
+              })),
+            }
+          : {}),
+      },
     ];
 
     // ── 5. 保存用户消息 ────────────────────────────────────────
+    // displayContent 已包含图片 [图片: name, URL: url] 标记，便于历史回显
     await db.from("messages").insert({
       conversation_id: convId,
       role: "user",
-      content: userContent,
+      content: displayContent,
     });
 
     // ── 6. 流式调用 AI ────────────────────────────────────────

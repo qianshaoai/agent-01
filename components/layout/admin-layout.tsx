@@ -123,8 +123,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const navContent = (
     <>
       {/* Logo 区 */}
-      <div className="px-5 h-16 flex items-center gap-2.5 border-b border-gray-100">
-        <div className="w-9 h-9 rounded-[10px] overflow-hidden shrink-0 flex items-center justify-center bg-[#002FA7]">
+      <div className="px-5 h-16 flex items-center gap-2.5 border-b border-white/10">
+        <div className="w-9 h-9 rounded-[10px] overflow-hidden shrink-0 flex items-center justify-center bg-white/15 border border-white/20">
           {siteSettings.logo_url ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={siteSettings.logo_url} alt="Logo" className="w-full h-full object-contain" />
@@ -134,20 +134,20 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         </div>
         <div className="min-w-0">
           {siteSettings.platform_name ? (
-            <p className="text-[14px] font-semibold text-gray-900 truncate leading-tight">{siteSettings.platform_name}</p>
+            <p className="text-[14px] font-semibold text-white truncate leading-tight">{siteSettings.platform_name}</p>
           ) : (
-            <div className="h-3.5 w-24 bg-gray-100 rounded animate-pulse" />
+            <div className="h-3.5 w-24 bg-white/15 rounded animate-pulse" />
           )}
-          <p className="text-[11px] text-gray-400 leading-tight mt-0.5">管理后台</p>
+          <p className="text-[11px] text-white/55 leading-tight mt-0.5">管理后台</p>
         </div>
       </div>
 
       {/* 当前管理员身份 */}
       {adminUsername && (
-        <div className="mx-3 my-3 px-3 py-2 rounded-[10px] bg-[#002FA7]/5 border border-[#002FA7]/10">
-          <p className="text-[12px] text-gray-500">当前登录</p>
-          <p className="text-[13px] font-semibold text-gray-900 truncate">{adminUsername}</p>
-          <p className="text-[11px] text-[#002FA7] mt-0.5">{ROLE_LABEL[adminRole]}</p>
+        <div className="mx-3 my-3 px-3 py-2 rounded-[10px] bg-white/10 border border-white/15">
+          <p className="text-[12px] text-white/60">当前登录</p>
+          <p className="text-[13px] font-semibold text-white truncate">{adminUsername}</p>
+          <p className="text-[11px] text-white/85 mt-0.5">{ROLE_LABEL[adminRole]}</p>
         </div>
       )}
 
@@ -155,7 +155,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       <nav className="flex-1 px-3 py-2 overflow-y-auto space-y-5">
         {visibleNavGroups.map((group) => (
           <div key={group.label}>
-            <p className="px-3 mb-1.5 text-[11px] font-medium text-gray-400 tracking-wider uppercase">{group.label}</p>
+            <p className="px-3 mb-1.5 text-[11px] font-medium text-white/50 tracking-wider uppercase">{group.label}</p>
             <div className="space-y-0.5">
               {group.items.map((item) => {
                 const active = pathname === item.href || pathname.startsWith(item.href + "/");
@@ -167,8 +167,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                     className={cn(
                       "flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-[13px] font-medium transition-all duration-150 relative group",
                       active
-                        ? "bg-[#002FA7] text-white shadow-sm"
-                        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                        ? "bg-white/20 text-white border border-white/25 shadow-[0_2px_8px_rgba(0,0,0,0.15)]"
+                        : "text-white/85 hover:bg-white/10 hover:text-white"
                     )}
                   >
                     <item.icon size={16} />
@@ -182,10 +182,10 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       </nav>
 
       {/* 退出 */}
-      <div className="p-3 border-t border-gray-100">
+      <div className="p-3 border-t border-white/10">
         <Link
           href="/admin"
-          className="flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-[13px] text-gray-500 hover:bg-red-50 hover:text-red-500 transition-colors"
+          className="flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-[13px] text-white/85 hover:bg-white/10 hover:text-red-200 transition-colors"
         >
           <LogOut size={15} />
           退出登录
@@ -196,8 +196,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen flex" style={{ background: "var(--bg-app)" }}>
-      {/* Desktop sidebar */}
-      <aside className="hidden lg:flex flex-col w-60 bg-white border-r border-gray-100 fixed inset-y-0 left-0 z-40">
+      {/* Desktop sidebar — 与用户端 header 同源深蓝渐变 */}
+      <aside className="hidden lg:flex flex-col w-60 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-r border-white/10 fixed inset-y-0 left-0 z-40 shadow-[4px_0_20px_rgba(0,47,167,0.15)]">
         {navContent}
       </aside>
 
@@ -205,9 +205,9 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
-          <aside className="absolute left-0 top-0 bottom-0 w-60 bg-white flex flex-col">
+          <aside className="absolute left-0 top-0 bottom-0 w-60 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] flex flex-col">
             <button className="absolute top-4 right-4 z-10" onClick={() => setMobileOpen(false)}>
-              <X size={20} className="text-gray-500" />
+              <X size={20} className="text-white/80" />
             </button>
             {navContent}
           </aside>

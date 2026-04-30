@@ -10,6 +10,7 @@ const ALLOWED_TYPES: Record<string, string> = {
   "application/msword": "doc",
   "text/plain": "txt",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
   "text/csv": "csv",
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -29,7 +30,8 @@ function verifyMagicBytes(buffer: Buffer, declaredType: string): boolean {
     case "jpg":  return hex.startsWith("FFD8FF");
     case "webp": return hex.startsWith("52494646") && hex.slice(16, 24) === "57454250"; // RIFF....WEBP
     case "docx":
-    case "xlsx": return hex.startsWith("504B0304") || hex.startsWith("504B0506") || hex.startsWith("504B0708"); // ZIP (OOXML 是 zip 包)
+    case "xlsx":
+    case "pptx": return hex.startsWith("504B0304") || hex.startsWith("504B0506") || hex.startsWith("504B0708"); // ZIP (OOXML 是 zip 包)
     case "doc":  return hex.startsWith("D0CF11E0A1B11AE1"); // OLE2 Compound
     case "txt":
     case "csv":  return true; // 纯文本没固定头，跳过
@@ -55,7 +57,7 @@ export const POST = withRequestLog(async (req: NextRequest) => {
   const fileType = ALLOWED_TYPES[file.type];
   if (!fileType) {
     return NextResponse.json(
-      { error: "不支持的文件格式，请上传 PDF/Word/TXT/Excel/图片" },
+      { error: "不支持的文件格式，请上传 PDF/Word/PPT/TXT/Excel/图片" },
       { status: 400 }
     );
   }
@@ -154,10 +156,49 @@ export const POST = withRequestLog(async (req: NextRequest) => {
       } catch {
         extractedText = `[Excel 文件: ${file.name}，文本提取失败]`;
       }
+    } else if (fileType === "pptx") {
+      // pptx 解析：解 zip → 取每张 slide XML 里的 <a:t> 文字
+      try {
+        const JSZip = (await import("jszip")).default;
+        const zip = await JSZip.loadAsync(buffer);
+        const slidePaths = Object.keys(zip.files)
+          .filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p))
+          .sort((a, b) => {
+            const na = parseInt(a.match(/slide(\d+)\.xml$/)?.[1] ?? "0", 10);
+            const nb = parseInt(b.match(/slide(\d+)\.xml$/)?.[1] ?? "0", 10);
+            return na - nb;
+          });
+        const blocks: string[] = [];
+        for (let i = 0; i < slidePaths.length; i++) {
+          const xml = await zip.files[slidePaths[i]].async("string");
+          const paragraphs = xml.split(/<a:p[\s>]/i).slice(1);
+          const lines: string[] = [];
+          for (const p of paragraphs) {
+            const texts = [...p.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map((m) =>
+              m[1]
+                .replace(/&lt;/g, "<")
+                .replace(/&gt;/g, ">")
+                .replace(/&quot;/g, '"')
+                .replace(/&apos;/g, "'")
+                .replace(/&amp;/g, "&")
+            );
+            const line = texts.join("").trim();
+            if (line) lines.push(line);
+          }
+          if (lines.length > 0) blocks.push(`## 第 ${i + 1} 页\n${lines.join("\n")}`);
+        }
+        extractedText = blocks.join("\n\n").slice(0, 50000);
+        if (!extractedText) {
+          extractedText = `[PPT 文件: ${file.name}，未提取到文字（可能仅含图片或图形元素）]`;
+        }
+      } catch {
+        extractedText = `[PPT 文件: ${file.name}，文本提取失败]`;
+      }
     } else {
-      // 图片：返回公开 URL 供多模态模型处理
-      const { data: imgUrl } = db.storage.from(bucket).getPublicUrl(uploadData.path);
-      extractedText = `[图片: ${file.name}，URL: ${imgUrl.publicUrl}]`;
+      // 图片：不再把 URL 拼成文本塞进 extractedText（之前 bot 看到的是字符串，
+      // 多模态模型识别不了）。改成保留空 extractedText，让前端识别 kind=image
+      // 后用结构化 attachments 字段发给 chat 路由，adapter 会拼成多模态 image_url。
+      extractedText = "";
     }
 
     // 保存到数据库（如果有 conversationId）
@@ -180,10 +221,13 @@ export const POST = withRequestLog(async (req: NextRequest) => {
 
     const { data: publicUrl } = db.storage.from(bucket).getPublicUrl(uploadData.path);
 
+    // kind: image 走多模态 attachments 链路；file 走 fileTexts 文本拼接链路
+    const isImage = ["jpg", "png", "webp", "gif", "bmp"].includes(fileType);
     return NextResponse.json({
       ok: true,
       filename: file.name,
       fileType,
+      kind: isImage ? "image" : "file",
       url: publicUrl.publicUrl,
       extractedText,
     });
