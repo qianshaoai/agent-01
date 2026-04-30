@@ -17,6 +17,9 @@ pipeline {
         TRIAL_AGENT_001_API_TOKEN = credentials('agent01_TRIAL_AGENT_001_API_TOKEN')
         TRIAL_AGENT_002_BOT_ID    = credentials('agent01_TRIAL_AGENT_002_BOT_ID')
         TRIAL_AGENT_002_API_TOKEN = credentials('agent01_TRIAL_AGENT_002_API_TOKEN')
+        // 4.30up 元器智能体凭证（agent_003 → AGT-YUANQI-001 复用）
+        TRIAL_AGENT_003_ASSISTANT_ID = credentials('agent01_TRIAL_AGENT_003_ASSISTANT_ID')
+        TRIAL_AGENT_003_API_KEY      = credentials('agent01_TRIAL_AGENT_003_API_KEY')
     }
 
     // NodeJS 名称需与 Jenkins → Global Tool Configuration 中配置的名称一致
@@ -60,6 +63,21 @@ pipeline {
             }
         }
 
+        stage('Migrate trial agents into agents table') {
+            // 用线上 JWT_SECRET 把 trial 的 3 个 agent (AGT-COZE-001/002 + AGT-YUANQI-001)
+            // 重新加密 api_key_enc 写入 supabase.agents。
+            // 幂等：已存在按 agent_code UPDATE 6 列，agent_type/external_url/enabled/category_id
+            // 保留原值不动。
+            steps {
+                echo "==> 用线上密钥重新加密 trial 3 个 agent"
+                // 用 sh '...' 单引号 + $VAR 引用，让 Jenkins 自动 mask secret
+                sh '''
+                    NEXT_PUBLIC_SUPABASE_URL="$SUPABASE_URL" \
+                    node scripts/migrate-trial-agents.mjs
+                '''
+            }
+        }
+
         stage('Deploy') {
             steps {
                 echo "==> 部署到 ${DEPLOY_DIR}"
@@ -85,6 +103,8 @@ TRIAL_AGENT_001_BOT_ID=${env.TRIAL_AGENT_001_BOT_ID}
 TRIAL_AGENT_001_API_TOKEN=${env.TRIAL_AGENT_001_API_TOKEN}
 TRIAL_AGENT_002_BOT_ID=${env.TRIAL_AGENT_002_BOT_ID}
 TRIAL_AGENT_002_API_TOKEN=${env.TRIAL_AGENT_002_API_TOKEN}
+TRIAL_AGENT_003_ASSISTANT_ID=${env.TRIAL_AGENT_003_ASSISTANT_ID}
+TRIAL_AGENT_003_API_KEY=${env.TRIAL_AGENT_003_API_KEY}
 """
             }
         }
