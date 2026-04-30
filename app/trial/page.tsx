@@ -603,6 +603,50 @@ export default function TrialPage() {
           );
           return prev;
         }
+        // 4.30 批次5 修：merge 本地内存态（extractStatus / extractReason / aborted）
+        // 到 server 返回的消息上，避免被覆盖。Server 是真相源（id / 内容 / 顺序），
+        // 本地仅补充不入库的状态字段。
+        const localMsgs = curBody.messages;
+        const merged: Msg[] = serverMsgs.map((sm, i) => {
+          const lm = localMsgs[i];
+          if (!lm) return sm;
+          let attachments = sm.attachments;
+          if (sm.attachments && lm.attachments) {
+            attachments = sm.attachments.map((sa) => {
+              const la = lm.attachments?.find(
+                (x) =>
+                  (x.file_name ?? "") === (sa.file_name ?? "") &&
+                  (x.url ?? "") === (sa.url ?? "")
+              );
+              if (!la || !la.extractStatus) return sa;
+              return {
+                ...sa,
+                extractStatus: la.extractStatus,
+                extractReason: la.extractReason,
+              };
+            });
+          }
+          return {
+            ...sm,
+            attachments,
+            ...(lm.aborted ? { aborted: true } : {}),
+          };
+        });
+        // 保留本地超出 server 的 trailing 气泡：仅当 aborted=true 或显式错误内容
+        // （避免错误/中断信息被刷新洗掉）
+        if (localMsgs.length > serverMsgs.length) {
+          for (let i = serverMsgs.length; i < localMsgs.length; i++) {
+            const lm = localMsgs[i];
+            if (
+              lm.aborted ||
+              (lm.role === "assistant" &&
+                lm.content &&
+                lm.content.startsWith("（"))
+            ) {
+              merged.push(lm);
+            }
+          }
+        }
         return {
           ...prev,
           [agentId]: {
@@ -611,7 +655,7 @@ export default function TrialPage() {
               ...cs.bodies,
               [chatId]: {
                 ...curBody,
-                messages: serverMsgs,
+                messages: merged,
                 conversationId: d.conversation_id ?? curBody.conversationId,
               },
             },
