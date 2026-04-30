@@ -177,6 +177,9 @@ export async function POST(req: NextRequest) {
       };
 
       let assistantContent = "";
+      // 4.30up：移到 try 外层，让 finally 入库时可以把状态写进 attachments JSONB
+      type AttachmentStatus = { file_name: string; ok: boolean; reason?: string };
+      let attachmentStatuses: AttachmentStatus[] | null = null;
       try {
         // 4.30up：通用文档支持
         // 平台 capabilities.nativeDocuments === false 时，把 file 类型附件
@@ -184,8 +187,6 @@ export async function POST(req: NextRequest) {
         // 这样元器（及任何不读文档的平台）也能"读"PDF/docx/txt
         let expandedMessage = message;
         let attachmentsForAdapter = attachments;
-        type AttachmentStatus = { file_name: string; ok: boolean; reason?: string };
-        let attachmentStatuses: AttachmentStatus[] | null = null;
         if (!agent.capabilities.nativeDocuments) {
           const fileAtts = attachments.filter((a) => a.kind === "file" && a.url);
           const otherAtts = attachments.filter((a) => !(a.kind === "file" && a.url));
@@ -206,9 +207,10 @@ export async function POST(req: NextRequest) {
                 );
                 attachmentStatuses.push({ file_name: fileName, ok: true });
               } else {
-                // 提取失败，至少保留 URL 提示
+                // 提取失败：给 bot 明确指令，不要把 URL / 任何"假装看到了"的内容塞进去
+                // 让 bot 直接告诉用户文件读不了，禁止编造内容
                 blocks.push(
-                  `[附件: ${fileName}（解析失败，URL: ${a.url}）]`
+                  `[系统提示] 用户上传的附件「${fileName}」无法解析（文件可能已损坏或格式不支持）。请直接告知用户该附件读取失败，建议重新上传或检查文件格式，不要尝试推测或编造文件内容。`
                 );
                 attachmentStatuses.push({
                   file_name: fileName,
@@ -287,19 +289,32 @@ export async function POST(req: NextRequest) {
         // —— assistant 消息仅在有内容时入库（避免空回复打乱顺序）
         {
           // 入库 user 消息（保留所有附件字段：url 通用，cozeFileId/file_id 平台特定）
+          // 4.30up 修：把附件解析状态（ok/failed）一起写进 JSONB，刷新后 chip 仍能显示 ✓/⚠
           const { error: userInsertErr } = await db.from("trial_messages").insert({
             chat_id: chatId,
             role: "user",
             content: message,
             attachments:
               attachments.length > 0
-                ? attachments.map((a) => ({
-                    kind: a.kind,
-                    file_name: a.file_name,
-                    url: a.url,
-                    cozeFileId: a.cozeFileId,
-                    file_id: a.file_id, // legacy
-                  }))
+                ? attachments.map((a) => {
+                    const fileName = a.file_name;
+                    const status = attachmentStatuses?.find(
+                      (s) => s.file_name === fileName
+                    );
+                    return {
+                      kind: a.kind,
+                      file_name: a.file_name,
+                      url: a.url,
+                      cozeFileId: a.cozeFileId,
+                      file_id: a.file_id, // legacy
+                      ...(status
+                        ? {
+                            extractStatus: status.ok ? "ok" : "failed",
+                            ...(status.reason ? { extractReason: status.reason } : {}),
+                          }
+                        : {}),
+                    };
+                  })
                 : null,
           });
           if (userInsertErr) {
