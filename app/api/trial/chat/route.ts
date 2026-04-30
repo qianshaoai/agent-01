@@ -263,13 +263,26 @@ export async function POST(req: NextRequest) {
             .eq("chat_id", chatId)
             .order("created_at", { ascending: true });
           if (priorMsgs && priorMsgs.length > 0) {
-            messagesForAdapter = [
-              ...priorMsgs.map((m): ChatMessage => ({
-                role: m.role === "assistant" ? "assistant" : "user",
-                content: m.content,
-              })),
-              userMessage,
-            ];
+            // 4.30up 修：只把"成对"的 user→assistant 对话送入历史。
+            // 之前 bot 失败（400 / abort 早停）时，user 入了库但没有 assistant 跟随，
+            // 这种"悬空 user"如果原本是 [附件: ...（解析失败...请直接回复...）] 这种
+            // 指令型内容，会被元器当成仍生效的指令，污染下一轮（明明附件解析成功也
+            // 跟着回"附件无法读取"）。配对过滤掉这类 dangling user。
+            const paired: ChatMessage[] = [];
+            for (let j = 0; j < priorMsgs.length; j++) {
+              const cur = priorMsgs[j];
+              if (cur.role === "user") {
+                const next = priorMsgs[j + 1];
+                if (next && next.role === "assistant") {
+                  paired.push({ role: "user", content: cur.content });
+                  paired.push({ role: "assistant", content: next.content });
+                  j++; // 跳过 next
+                }
+                // 否则丢弃 dangling user
+              }
+              // dangling assistant 不应该出现，丢弃
+            }
+            messagesForAdapter = [...paired, userMessage];
           }
         }
 
