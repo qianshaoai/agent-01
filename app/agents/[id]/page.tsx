@@ -213,6 +213,7 @@ const ChatMessage = memo(function ChatMessage({
 });
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Plus,
@@ -339,6 +340,11 @@ type UploadedFile = {
 export default function AgentChatPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: rawId } = use(params);
   const agentCode = decodeURIComponent(rawId);
+  // 4.30up 导航流：1→2→3→2→1。从工作流详情进 chat 时 URL 带 ?wf=<id>，
+  // 返回时跳回 /?wf=<id> 让主页直接进入对应工作流详情视图
+  const searchParams = useSearchParams();
+  const fromWorkflowId = searchParams.get("wf");
+  const backHref = fromWorkflowId ? `/?wf=${encodeURIComponent(fromWorkflowId)}` : "/";
 
   const [agent, setAgent] = useState<AgentInfo | null>(null);
   const [redirecting, setRedirecting] = useState(false);
@@ -1055,7 +1061,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       <div className="h-screen flex flex-col bg-[#f8f9fc]">
         <header className="bg-white border-b border-gray-100 shadow-[0_1px_4px_rgba(0,0,0,0.06)]">
           <div className="h-14 px-4 flex items-center gap-3">
-            <Link href="/" className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
+            <Link href={backHref} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
               <ArrowLeft size={18} />
             </Link>
             <div className="flex items-center gap-2 flex-1">
@@ -1094,7 +1100,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       {/* Top bar */}
       <header className="bg-white border-b border-gray-100 shadow-[0_1px_4px_rgba(0,0,0,0.06)] z-30">
         <div className="h-14 px-4 flex items-center gap-3">
-          <Link href="/" className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
+          <Link href={backHref} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
             <ArrowLeft size={18} />
           </Link>
           <button className="lg:hidden p-1.5 rounded-[8px] hover:bg-gray-100" onClick={() => setSidebarOpen(!sidebarOpen)}>

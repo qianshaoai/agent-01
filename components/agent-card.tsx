@@ -3,8 +3,13 @@ import { ExternalLink, MessageSquare, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { AgentItem } from "@/lib/types";
 
-export function AgentCard({ agent }: { agent: AgentItem }) {
+export function AgentCard({ agent, fromWorkflow }: { agent: AgentItem; fromWorkflow?: string }) {
   const isExternal = agent.agent_type === "external";
+  // 4.30up 导航流：1→2→3→2→1，进 chat 时带上 wf=<workflowId>，
+  // 聊天页"返回"读 wf 跳回主页对应工作流详情，而非直接回全部视图
+  const chatHref = fromWorkflow
+    ? `/agents/${agent.agent_code}?wf=${encodeURIComponent(fromWorkflow)}`
+    : `/agents/${agent.agent_code}`;
 
   const cardClass =
     "group bg-white rounded-[16px] p-5 shadow-[0_1px_4px_rgba(0,0,0,0.06)] border border-gray-100/60 hover:shadow-[0_10px_28px_rgba(0,47,167,0.12)] hover:-translate-y-0.5 hover:border-[#002FA7]/20 transition-all duration-200 flex flex-col gap-4 cursor-pointer";
@@ -62,7 +67,7 @@ export function AgentCard({ agent }: { agent: AgentItem }) {
   }
 
   return (
-    <Link href={`/agents/${agent.agent_code}`} className={cardClass}>
+    <Link href={chatHref} className={cardClass}>
       {cardContent}
     </Link>
   );

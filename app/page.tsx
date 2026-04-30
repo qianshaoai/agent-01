@@ -114,7 +114,16 @@ export default function HomePage() {
         setNotices(Array.isArray(noticesData) ? noticesData : []);
         const wfs: WorkflowItem[] = Array.isArray(workflowsData) ? workflowsData : [];
         setWorkflows(wfs);
-        setActiveWorkflowId(null); // 默认"全部"
+        // 4.30up 导航流：从聊天页"返回"过来 ?wf=<id> → 直接进入对应工作流详情，
+        // 实现 1→2→3→2→1 的来回路径
+        const wfParam = typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("wf")
+          : null;
+        if (wfParam && wfs.find((w) => w.id === wfParam)) {
+          setActiveWorkflowId(wfParam);
+        } else {
+          setActiveWorkflowId(null); // 默认"全部"
+        }
       } catch {
         // 网络错 → 仅保留 notices 兜底
         setNotices(
@@ -584,7 +593,7 @@ export default function HomePage() {
                                 style={{ minWidth: 148 }}
                               >
                                 {step.exec_type === "agent" ? (
-                                  <WorkflowStepButton step={step} />
+                                  <WorkflowStepButton step={step} fromWorkflow={activeWorkflow?.id} />
                                 ) : step.exec_type === "manual" ? (
                                   <span className="text-[12px] text-amber-600 bg-amber-50 px-3 py-1.5 rounded-[8px]">
                                     此步骤需人工处理
@@ -626,7 +635,7 @@ export default function HomePage() {
                 <div className="p-5">
                   <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                     {workflowAgents.map((agent) => (
-                      <AgentCard key={agent.agent_code} agent={agent} />
+                      <AgentCard key={agent.agent_code} agent={agent} fromWorkflow={activeWorkflow?.id} />
                     ))}
                   </div>
                 </div>
