@@ -184,32 +184,52 @@ export async function POST(req: NextRequest) {
         // 这样元器（及任何不读文档的平台）也能"读"PDF/docx/txt
         let expandedMessage = message;
         let attachmentsForAdapter = attachments;
+        type AttachmentStatus = { file_name: string; ok: boolean; reason?: string };
+        let attachmentStatuses: AttachmentStatus[] | null = null;
         if (!agent.capabilities.nativeDocuments) {
           const fileAtts = attachments.filter((a) => a.kind === "file" && a.url);
           const otherAtts = attachments.filter((a) => !(a.kind === "file" && a.url));
           if (fileAtts.length > 0) {
+            attachmentStatuses = [];
             const blocks: string[] = [];
             for (const a of fileAtts) {
+              const fileName = a.file_name ?? "file";
               const result = a.url
-                ? await extractTextFromUrl(a.url, a.file_name ?? "file")
+                ? await extractTextFromUrl(a.url, fileName)
                 : null;
               if (result) {
                 const truncatedNote = result.truncated
                   ? `\n[注：文档过长，已截取前 ${result.text.length} 字]`
                   : "";
                 blocks.push(
-                  `[附件: ${a.file_name ?? "文件"}]\n${result.text}${truncatedNote}\n[/附件]`
+                  `[附件: ${fileName}]\n${result.text}${truncatedNote}\n[/附件]`
                 );
+                attachmentStatuses.push({ file_name: fileName, ok: true });
               } else {
                 // 提取失败，至少保留 URL 提示
                 blocks.push(
-                  `[附件: ${a.file_name ?? "文件"}（解析失败，URL: ${a.url}）]`
+                  `[附件: ${fileName}（解析失败，URL: ${a.url}）]`
                 );
+                attachmentStatuses.push({
+                  file_name: fileName,
+                  ok: false,
+                  reason: "解析失败",
+                });
               }
             }
             expandedMessage = blocks.join("\n\n") + (message ? "\n\n" + message : "");
             attachmentsForAdapter = otherAtts; // file 类已变成文本，不再当附件传
           }
+        }
+
+        // 4.30 批次1：附件全部提取完后、第一段 bot delta 之前发一帧
+        // meta.attachment_status，让前端把 pending chip 翻成 ✓/⚠
+        if (attachmentStatuses) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ meta: { attachment_status: attachmentStatuses } })}\n\n`
+            )
+          );
         }
 
         const userMessage = {

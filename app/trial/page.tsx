@@ -44,6 +44,10 @@ type Attachment = {
   file_id?: string;
   /** 仅本地刚上传时有 — ObjectURL 用于过渡显示，session 内有效 */
   previewUrl?: string;
+  /** 4.30 批次1：file 类附件解析状态。pending=待后端提取；ok=已解析；failed=解析失败 */
+  extractStatus?: "pending" | "ok" | "failed";
+  /** 解析失败原因（与 extractStatus=failed 配套显示） */
+  extractReason?: string;
 };
 
 type Msg = {
@@ -54,7 +58,15 @@ type Msg = {
   createdAt?: string | number;
   /** 用户主动中断时标记，气泡末尾显示「已停止」徽章 */
   aborted?: boolean;
+  /** 4.30 批次1：assistant 占位泡 → 显示"附件解析中…"。收到第一段 delta 或 attachment_status 帧后清除 */
+  extractPlaceholder?: boolean;
 };
+
+// 4.30 批次1：附件大小/类型前置校验，与 app/api/trial/upload/route.ts 保持一致
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
+const DOC_EXTS = ["pdf", "docx", "doc", "xlsx", "xls", "csv", "txt", "md", "pptx"];
 
 type PendingAttachment = {
   // 本地临时 ID（uploadId）— 区分不同附件 chip
@@ -363,7 +375,18 @@ export default function TrialPage() {
   // ── 文件上传 ──────────────────────────────────────────────────────
   async function uploadOne(file: File) {
     if (!activeAgent) return;
-    const isImg = file.type.startsWith("image/");
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const isImg = file.type.startsWith("image/") || IMAGE_EXTS.includes(ext);
+    // A6 前置校验：类型 + 大小，超限直接拦截不发请求
+    if (!isImg && !DOC_EXTS.includes(ext)) {
+      alert(`不支持的文件类型：.${ext || "未知"}`);
+      return;
+    }
+    const limit = isImg ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+    if (file.size > limit) {
+      alert(`${isImg ? "图片" : "文件"}过大，单个不超过 ${limit / 1024 / 1024}MB`);
+      return;
+    }
     const previewUrl = isImg ? URL.createObjectURL(file) : undefined;
     const localKey = `${file.name}_${file.size}_${Date.now()}_${Math.random()}`;
 
@@ -467,6 +490,7 @@ export default function TrialPage() {
   }
 
   async function handleLogout() {
+    if (!confirm("确认退出登录？")) return;
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     router.push("/login");
   }
@@ -501,6 +525,8 @@ export default function TrialPage() {
     const chatIdAtSend = aState.activeChatId;
 
     // 优化预览：本地展示用户气泡（含附件 chip）
+    // A1: 任何 file 类附件都先标 pending，等 SSE meta.attachment_status 翻牌
+    const hasFileAtt = usableAtts.some((a) => a.kind === "file");
     const userBubble: Msg = {
       role: "user",
       content: text,
@@ -514,15 +540,21 @@ export default function TrialPage() {
               cozeFileId: a.cozeFileId,
               // 把本地 previewUrl 一并放进消息，用于上传 → 渲染期间过渡显示
               previewUrl: a.previewUrl,
+              extractStatus: a.kind === "file" ? ("pending" as const) : undefined,
             }))
           : undefined,
+    };
+    const assistantPlaceholder: Msg = {
+      role: "assistant",
+      content: "",
+      extractPlaceholder: hasFileAtt,
     };
 
     // 把用户气泡 + 占位 assistant 写到 body 里
     if (!chatIdAtSend) {
       updateBody(agentId, "__pending__", () => ({
         conversationId: null,
-        messages: [userBubble, { role: "assistant", content: "" }],
+        messages: [userBubble, assistantPlaceholder],
         loaded: true,
         loadingMessages: false,
       }));
@@ -530,7 +562,7 @@ export default function TrialPage() {
     } else {
       updateBody(agentId, chatIdAtSend, (b) => ({
         ...b,
-        messages: [...b.messages, userBubble, { role: "assistant", content: "" }],
+        messages: [...b.messages, userBubble, assistantPlaceholder],
       }));
     }
 
@@ -637,6 +669,47 @@ export default function TrialPage() {
               writeToBody((b) => ({ ...b, conversationId: cid }));
             }
 
+            // 4.30 批次1: meta.attachment_status — 翻 user 气泡 chip 牌 + 清 assistant 占位
+            if (obj.meta && Array.isArray(obj.meta.attachment_status)) {
+              const statusList = obj.meta.attachment_status as Array<{
+                file_name: string;
+                ok: boolean;
+                reason?: string;
+              }>;
+              writeToBody((b) => {
+                const copy = [...b.messages];
+                // 找最后一条 user 消息，更新它的 attachments 状态
+                for (let j = copy.length - 1; j >= 0; j--) {
+                  if (copy[j].role === "user") {
+                    const userMsg = copy[j];
+                    if (userMsg.attachments) {
+                      const updated = userMsg.attachments.map((att) => {
+                        const s = statusList.find(
+                          (x) => x.file_name === att.file_name
+                        );
+                        if (!s) return att;
+                        return {
+                          ...att,
+                          extractStatus: (s.ok ? "ok" : "failed") as
+                            | "ok"
+                            | "failed",
+                          extractReason: s.reason,
+                        };
+                      });
+                      copy[j] = { ...userMsg, attachments: updated };
+                    }
+                    break;
+                  }
+                }
+                // 清 assistant 占位
+                const last = copy[copy.length - 1];
+                if (last && last.role === "assistant" && last.extractPlaceholder) {
+                  copy[copy.length - 1] = { ...last, extractPlaceholder: false };
+                }
+                return { ...b, messages: copy };
+              });
+            }
+
             if (typeof obj.delta === "string") {
               writeToBody((b) => {
                 const copy = [...b.messages];
@@ -644,6 +717,8 @@ export default function TrialPage() {
                 copy[copy.length - 1] = {
                   ...last,
                   content: last.content + obj.delta,
+                  // 第一段 delta 到达即清占位（即使没收到 attachment_status 帧）
+                  extractPlaceholder: false,
                 };
                 return { ...b, messages: copy };
               });
@@ -688,6 +763,31 @@ export default function TrialPage() {
     } finally {
       abortControllerRef.current = null;
       setStreaming(false);
+      // 4.30 批次1：兜底清掉残留 pending 状态
+      // 没收到 meta.attachment_status（图片 / native 平台 / 异常路径）时，
+      // 不能让 chip 永远卡在"解析中"。统一在收尾时清成 undefined。
+      writeToBody((b) => {
+        let dirty = false;
+        const copy = b.messages.map((m) => {
+          let next = m;
+          if (m.role === "user" && m.attachments) {
+            const cleared = m.attachments.map((att) => {
+              if (att.extractStatus === "pending") {
+                dirty = true;
+                return { ...att, extractStatus: undefined, extractReason: undefined };
+              }
+              return att;
+            });
+            if (dirty) next = { ...next, attachments: cleared };
+          }
+          if (m.role === "assistant" && m.extractPlaceholder) {
+            dirty = true;
+            next = { ...next, extractPlaceholder: false };
+          }
+          return next;
+        });
+        return dirty ? { ...b, messages: copy } : b;
+      });
       // 把当前 chat 顶到列表第一位（last_active_at 更新）
       if (realChatId) {
         setAgentStates((prev) => {
@@ -721,7 +821,7 @@ export default function TrialPage() {
       {/* ── 顶部导航（深色保留） ─────────────────────────────── */}
       <header className="relative z-10 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-b border-white/10 shadow-[0_4px_20px_rgba(0,47,167,0.12)]">
         <div className="max-w-[1480px] mx-auto px-5 sm:px-8 lg:pl-8 lg:pr-20 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3 lg:-ml-16">
+          <div className={`flex items-center gap-3 ${activeAgent ? "" : "lg:-ml-[52px]"}`}>
             {activeAgent ? (
               <button
                 onClick={backToList}
@@ -1194,6 +1294,36 @@ export default function TrialPage() {
                                   ? "bg-white/20 text-white hover:bg-white/30"
                                   : "bg-white border border-gray-200 text-gray-600 hover:border-[#002FA7]/40"
                               }`;
+                              // A2: 解析状态角标（仅 file 类）
+                              const statusBadge =
+                                att.kind === "file" && att.extractStatus ? (
+                                  att.extractStatus === "pending" ? (
+                                    <Loader2
+                                      size={10}
+                                      className={`animate-spin ${
+                                        m.role === "user" ? "text-white/80" : "text-gray-400"
+                                      }`}
+                                    />
+                                  ) : att.extractStatus === "ok" ? (
+                                    <Check
+                                      size={10}
+                                      className={
+                                        m.role === "user" ? "text-white" : "text-emerald-600"
+                                      }
+                                    />
+                                  ) : (
+                                    <span
+                                      title={att.extractReason ?? "解析失败"}
+                                      className={
+                                        m.role === "user"
+                                          ? "text-amber-200"
+                                          : "text-amber-600"
+                                      }
+                                    >
+                                      ⚠
+                                    </span>
+                                  )
+                                ) : null;
                               const chipInner = (
                                 <>
                                   {att.kind === "image" ? (
@@ -1205,6 +1335,7 @@ export default function TrialPage() {
                                     {att.file_name ||
                                       (att.kind === "image" ? "图片" : "文件")}
                                   </span>
+                                  {statusBadge}
                                 </>
                               );
                               if (att.url) {
@@ -1238,6 +1369,10 @@ export default function TrialPage() {
                               >
                                 {m.content}
                               </ReactMarkdown>
+                              {/* B12: 流式中末尾闪烁光标 */}
+                              {streaming && i === messages.length - 1 && (
+                                <span className="inline-block w-[2px] h-[14px] bg-gray-500 align-middle ml-0.5 animate-pulse" />
+                              )}
                             </div>
                           ) : (
                             <div className="whitespace-pre-wrap break-words">{m.content}</div>
@@ -1245,7 +1380,15 @@ export default function TrialPage() {
                         ) : streaming &&
                           i === messages.length - 1 &&
                           m.role === "assistant" ? (
-                          <Loader2 size={14} className="animate-spin text-gray-400" />
+                          // A1: 占位状态 — 有附件需要解析时显示文字 + spinner，否则只显示 spinner
+                          m.extractPlaceholder ? (
+                            <span className="inline-flex items-center gap-1.5 text-gray-500 text-[13px] italic">
+                              <Loader2 size={13} className="animate-spin" />
+                              附件解析中…
+                            </span>
+                          ) : (
+                            <Loader2 size={14} className="animate-spin text-gray-400" />
+                          )
                         ) : (
                           ""
                         )}
