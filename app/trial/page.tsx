@@ -188,6 +188,8 @@ export default function TrialPage() {
   const [chatSearch, setChatSearch] = useState("");
   const [nearBottom, setNearBottom] = useState(true);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
+  // 4.30 批次5：图片 lightbox 当前 URL（null = 关闭）
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   async function copyMessage(idx: number, content: string) {
     try {
@@ -288,6 +290,16 @@ export default function TrialPage() {
     onScroll();
     return () => el.removeEventListener("scroll", onScroll);
   }, [activeAgent, aState.activeChatId]);
+
+  // 4.30 批次5：lightbox ESC 关闭
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightboxUrl(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxUrl]);
 
   // ── textarea auto-resize ────────────────────────────────────────────
   useEffect(() => {
@@ -1057,6 +1069,33 @@ export default function TrialPage() {
       <div className="absolute top-1/3 -right-48 w-[640px] h-[640px] rounded-full bg-[#8da4ff]/35 blur-[160px] pointer-events-none" />
       <div className="absolute bottom-0 left-1/4 w-[420px] h-[420px] rounded-full bg-[#a4b8ff]/40 blur-[140px] pointer-events-none" />
 
+      {/* 4.30 批次5：图片 lightbox */}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-6 cursor-zoom-out animate-in fade-in duration-150"
+        >
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightboxUrl(null);
+            }}
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white"
+            title="关闭 (Esc)"
+            aria-label="关闭"
+          >
+            <X size={20} />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightboxUrl}
+            alt="预览"
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-[92vw] max-h-[88vh] object-contain rounded-[8px] cursor-default"
+          />
+        </div>
+      )}
+
       {/* ── 顶部导航（深色保留） ─────────────────────────────── */}
       <header className="relative z-10 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-b border-white/10 shadow-[0_4px_20px_rgba(0,47,167,0.12)]">
         <div className="max-w-[1480px] mx-auto px-5 sm:px-8 lg:pl-8 lg:pr-20 h-16 flex items-center justify-between">
@@ -1637,13 +1676,14 @@ export default function TrialPage() {
                               const imgSrc =
                                 att.kind === "image" ? att.url || att.previewUrl : null;
                               if (imgSrc) {
+                                // 4.30 批次5：点击触发 lightbox（无 url 仍可放大 previewUrl）
                                 return (
-                                  <a
+                                  <button
                                     key={ai}
-                                    href={imgSrc}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block rounded-[10px] overflow-hidden border border-white/30"
+                                    type="button"
+                                    onClick={() => setLightboxUrl(imgSrc)}
+                                    className="block rounded-[10px] overflow-hidden border border-white/30 cursor-zoom-in"
+                                    title={att.file_name ?? "图片"}
                                   >
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
@@ -1651,7 +1691,7 @@ export default function TrialPage() {
                                       alt={att.file_name ?? "图片"}
                                       className="max-w-[220px] max-h-[200px] object-cover"
                                     />
-                                  </a>
+                                  </button>
                                 );
                               }
                               // 文件 / 无图片源 → chip；有 url 时整 chip 包成可下载链接
