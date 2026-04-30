@@ -23,6 +23,7 @@ import {
   Copy,
   Check,
   Menu,
+  Pencil,
 } from "lucide-react";
 
 type TrialAgent = {
@@ -174,6 +175,9 @@ export default function TrialPage() {
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   // 移动端聊天历史抽屉
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  // 4.30 批次2：重命名中的 chat id（同时只允许改一行）+ 草稿
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   async function copyMessage(idx: number, content: string) {
     try {
@@ -475,18 +479,40 @@ export default function TrialPage() {
       const remaining = s.chats.filter((c) => c.id !== chatId);
       const newBodies = { ...s.bodies };
       delete newBodies[chatId];
+      // 4.30 批次2：删 active chat 后回到无活跃聊天，不再自动选下一条
       return {
         ...s,
         chats: remaining,
         bodies: newBodies,
-        activeChatId:
-          s.activeChatId === chatId
-            ? remaining.length > 0
-              ? remaining[0].id
-              : null
-            : s.activeChatId,
+        activeChatId: s.activeChatId === chatId ? null : s.activeChatId,
       };
     });
+  }
+
+  // 4.30 批次2：聊天重命名
+  async function renameChat(chatId: string, title: string) {
+    if (!activeAgent) return;
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    const agentId = activeAgent.id;
+    const res = await fetch(
+      `/api/trial/conversations/${encodeURIComponent(chatId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      }
+    );
+    if (!res.ok) {
+      alert("重命名失败，请重试");
+      return;
+    }
+    updateAgentState(agentId, (s) => ({
+      ...s,
+      chats: s.chats.map((c) =>
+        c.id === chatId ? { ...c, title: trimmed } : c
+      ),
+    }));
   }
 
   async function handleLogout() {
@@ -1130,11 +1156,14 @@ export default function TrialPage() {
                         <div className="flex flex-col gap-0.5">
                           {group.items.map((c) => {
                             const isActive = aState.activeChatId === c.id;
+                            const isRenaming = renamingChatId === c.id;
                             return (
                               <div
                                 key={c.id}
-                                onClick={() => selectChat(c.id)}
-                                className={`group/chat relative flex items-start gap-2 px-3 py-2.5 rounded-[10px] cursor-pointer transition-all ${
+                                onClick={() => !isRenaming && selectChat(c.id)}
+                                className={`group/chat relative flex items-start gap-2 px-3 py-2.5 rounded-[10px] transition-all ${
+                                  isRenaming ? "" : "cursor-pointer"
+                                } ${
                                   isActive
                                     ? "bg-[#002FA7]/8 border border-[#002FA7]/20"
                                     : "border border-transparent hover:bg-gray-50"
@@ -1147,29 +1176,75 @@ export default function TrialPage() {
                                   }`}
                                 />
                                 <div className="flex-1 min-w-0">
-                                  <p
-                                    className={`text-[13px] truncate ${
-                                      isActive
-                                        ? "text-[#002FA7] font-medium"
-                                        : "text-gray-700"
-                                    }`}
-                                  >
-                                    {c.title || "未命名对话"}
-                                  </p>
+                                  {isRenaming ? (
+                                    <input
+                                      autoFocus
+                                      value={renameDraft}
+                                      maxLength={60}
+                                      onChange={(e) => setRenameDraft(e.target.value)}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.preventDefault();
+                                          const draft = renameDraft.trim();
+                                          if (draft && draft !== (c.title ?? "")) {
+                                            renameChat(c.id, draft);
+                                          }
+                                          setRenamingChatId(null);
+                                        } else if (e.key === "Escape") {
+                                          e.preventDefault();
+                                          setRenamingChatId(null);
+                                        }
+                                      }}
+                                      onBlur={() => {
+                                        const draft = renameDraft.trim();
+                                        if (draft && draft !== (c.title ?? "")) {
+                                          renameChat(c.id, draft);
+                                        }
+                                        setRenamingChatId(null);
+                                      }}
+                                      className="w-full text-[13px] bg-white border border-[#002FA7] rounded-[6px] px-1.5 py-0.5 outline-none text-gray-800"
+                                    />
+                                  ) : (
+                                    <p
+                                      className={`text-[13px] truncate ${
+                                        isActive
+                                          ? "text-[#002FA7] font-medium"
+                                          : "text-gray-700"
+                                      }`}
+                                    >
+                                      {c.title || "未命名对话"}
+                                    </p>
+                                  )}
                                   <p className="text-[10px] text-gray-400 mt-0.5">
                                     {relativeTime(c.last_active_at)}
                                   </p>
                                 </div>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    deleteChat(c.id);
-                                  }}
-                                  className="opacity-0 group-hover/chat:opacity-100 transition-opacity p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-500"
-                                  title="删除"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
+                                {!isRenaming && (
+                                  <div className="flex items-center gap-0.5 opacity-0 group-hover/chat:opacity-100 transition-opacity">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setRenameDraft(c.title ?? "");
+                                        setRenamingChatId(c.id);
+                                      }}
+                                      className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-[#002FA7]"
+                                      title="重命名"
+                                    >
+                                      <Pencil size={12} />
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteChat(c.id);
+                                      }}
+                                      className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-500"
+                                      title="删除"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
