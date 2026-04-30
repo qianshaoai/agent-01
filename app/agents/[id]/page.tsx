@@ -1,5 +1,15 @@
 "use client";
 import { useState, useRef, useEffect, use, memo } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github.css";
+
+// 附件前置校验：与 /api/upload 路由白名单 + 大小限制对齐
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
+const DOC_EXTS = ["pdf", "docx", "doc", "xlsx", "xls", "csv", "txt", "md", "pptx"];
 
 function friendlyError(msg: string): string {
   if (!msg) return "调用失败，请稍后重试";
@@ -21,35 +31,68 @@ function friendlyError(msg: string): string {
   return msg;
 }
 
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 type ChatMsgProps = {
-  msg: { id: string; role: string; content: string; createdAt?: string };
+  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean };
   streaming: boolean;
+  onCopy: () => void;
+  copied: boolean;
 };
 
-const ChatMessage = memo(function ChatMessage({ msg, streaming }: ChatMsgProps) {
+const ChatMessage = memo(function ChatMessage({ msg, streaming, onCopy, copied }: ChatMsgProps) {
+  const isAssistant = msg.role === "assistant";
   return (
-    <div className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+    <div className={`group/bubble flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-[#002FA7] text-white" : "bg-gray-100 text-gray-600"}`}>
         {msg.role === "user" ? <User size={15} /> : <Bot size={15} />}
       </div>
       <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
         <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
-          {msg.role === "assistant" ? (
-            <div className="chat-content" dangerouslySetInnerHTML={{ __html: escapeHtml(msg.content).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br/>") || (streaming ? '<span class="animate-pulse">▌</span>' : "") }} />
+          {isAssistant ? (
+            msg.content ? (
+              <div className="trial-md break-words">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                  {msg.content}
+                </ReactMarkdown>
+                {/* 流式末尾闪烁光标（保留原有体验） */}
+                {streaming && (
+                  <span className="inline-block w-[2px] h-[14px] bg-gray-500 align-middle ml-0.5 animate-pulse" />
+                )}
+              </div>
+            ) : streaming ? (
+              <span className="inline-block w-[2px] h-[14px] bg-gray-500 align-middle animate-pulse" />
+            ) : null
           ) : (
             <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
           )}
+          {/* 已停止徽章（仅最后一条 abort 的 assistant 显示） */}
+          {msg.aborted && (
+            <div className="mt-2 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">
+              <Square size={9} className="fill-gray-500 text-gray-500" />
+              已停止
+            </div>
+          )}
         </div>
-        {msg.createdAt && <span className="text-[10px] text-gray-400 px-1">{msg.createdAt}</span>}
+        {/* hover 工具栏：assistant 显示复制按钮 + 时间；user 只显示时间 */}
+        <div className={`flex items-center gap-2 px-1 ${isAssistant ? "opacity-0 group-hover/bubble:opacity-100 transition-opacity" : ""}`}>
+          {isAssistant && msg.content && (
+            <button
+              onClick={onCopy}
+              className="text-[11px] text-gray-400 hover:text-[#002FA7] flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] hover:bg-[#002FA7]/8 transition-colors"
+              title="复制"
+            >
+              {copied ? (
+                <>
+                  <Check size={11} className="text-[#002FA7]" /> 已复制
+                </>
+              ) : (
+                <>
+                  <Copy size={11} /> 复制
+                </>
+              )}
+            </button>
+          )}
+          {msg.createdAt && <span className="text-[10px] text-gray-400">{msg.createdAt}</span>}
+        </div>
       </div>
     </div>
   );
@@ -70,6 +113,9 @@ import {
   User,
   FileText,
   Menu,
+  Square,
+  Copy,
+  Check,
 } from "lucide-react";
 
 type Message = {
@@ -77,6 +123,8 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  /** 用户主动中断 → 气泡末尾显示「已停止」徽章 */
+  aborted?: boolean;
 };
 
 type Conversation = {
@@ -116,11 +164,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [quota, setQuota] = useState<{ left: number; expiresAt: string } | null>(null);
   const [error, setError] = useState("");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -237,9 +287,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       { id: aiId, role: "assistant", content: "", createdAt: "" },
     ]);
 
+    const abortCtrl = new AbortController();
+    abortControllerRef.current = abortCtrl;
+
     try {
       const res = await fetch(`/api/agents/${agentCode}/chat`, {
         method: "POST",
+        signal: abortCtrl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: sentInput,
@@ -295,11 +349,35 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           } catch {}
         }
       }
-    } catch {
-      setError("网络错误，请重试");
-      setMessages((prev) => prev.filter((m) => m.id !== aiId));
+    } catch (e) {
+      // 用户主动中断：保留已生成内容 + 打 aborted 标记，不视作错误
+      const isAbort = e instanceof DOMException && e.name === "AbortError";
+      if (isAbort) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === aiId ? { ...m, aborted: true } : m))
+        );
+      } else {
+        setError("网络错误，请重试");
+        setMessages((prev) => prev.filter((m) => m.id !== aiId));
+      }
     } finally {
+      abortControllerRef.current = null;
       setStreaming(false);
+    }
+  }
+
+  function stopStreaming() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+  }
+
+  async function copyMessage(id: string, content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1500);
+    } catch {
+      setError("复制失败，请手动选择文本复制");
     }
   }
 
@@ -312,7 +390,22 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
+
+    // 前置校验：类型 + 大小，超限直接提示，不发请求
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const isImg = file.type.startsWith("image/") || IMAGE_EXTS.includes(ext);
+    if (!isImg && !DOC_EXTS.includes(ext)) {
+      setError(`不支持的文件类型：.${ext || "未知"}`);
+      return;
+    }
+    const limit = isImg ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+    if (file.size > limit) {
+      setError(`${isImg ? "图片" : "文件"}过大，单个不超过 ${limit / 1024 / 1024}MB`);
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
     if (activeConvId) formData.append("conversationId", activeConvId);
@@ -328,7 +421,6 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     } catch {
       setError("上传失败");
     }
-    e.target.value = "";
   }
 
   async function handleVoice() {
@@ -535,7 +627,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             )}
 
             {messages.map((msg, i) => (
-              <ChatMessage key={msg.id} msg={msg} streaming={streaming && i === messages.length - 1} />
+              <ChatMessage
+                key={msg.id}
+                msg={msg}
+                streaming={streaming && i === messages.length - 1}
+                onCopy={() => copyMessage(msg.id, msg.content)}
+                copied={copiedId === msg.id}
+              />
             ))}
 
             {error && (
@@ -586,13 +684,23 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                     </button>
                     {recording && <span className="text-xs text-red-500 animate-pulse">录音中…</span>}
                   </div>
-                  <button
-                    onClick={handleSend}
-                    disabled={!input.trim() || streaming}
-                    className={`p-2 rounded-[10px] transition-all ${input.trim() && !streaming ? "bg-[#002FA7] text-white hover:bg-[#1a47c0]" : "bg-gray-100 text-gray-400 cursor-not-allowed"}`}
-                  >
-                    <Send size={16} />
-                  </button>
+                  {streaming ? (
+                    <button
+                      onClick={stopStreaming}
+                      className="p-2 rounded-[10px] bg-gray-700 text-white hover:bg-gray-800 transition-all flex items-center gap-1.5"
+                      title="停止生成"
+                    >
+                      <Square size={14} className="fill-white" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleSend}
+                      disabled={!input.trim()}
+                      className={`p-2 rounded-[10px] transition-all ${input.trim() ? "bg-[#002FA7] text-white hover:bg-[#1a47c0]" : "bg-gray-100 text-gray-400 cursor-not-allowed"}`}
+                    >
+                      <Send size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
               <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.txt,.xlsx,.csv,.jpg,.jpeg,.png,.webp" onChange={handleFileUpload} />
