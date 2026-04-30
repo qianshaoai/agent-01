@@ -3,10 +3,11 @@
 // 当智能体平台 capabilities.nativeDocuments === false 时，
 // 由 portal 后端拉文件 + 提取文本 + 塞进消息正文，让 AI 至少能"读到"内容。
 //
-// 支持类型：pdf / docx / doc / txt / md / csv
-// xlsx 暂不支持（业务方需要时再加）
+// 支持类型：pdf / docx / doc / txt / md / csv / xlsx / xls / pptx
 
 import mammoth from "mammoth";
+import * as XLSX from "xlsx";
+import JSZip from "jszip";
 
 /** 提取后的文本截断上限（字符数） */
 const TEXT_MAX_CHARS = 30_000;
@@ -39,6 +40,10 @@ export async function extractTextFromBuffer(
       raw = decodeText(buffer);
     } else if (ext === "csv") {
       raw = decodeText(buffer);
+    } else if (ext === "xlsx" || ext === "xls") {
+      raw = extractXlsx(buffer);
+    } else if (ext === "pptx") {
+      raw = await extractPptx(buffer);
     } else {
       return null; // 不支持的类型
     }
@@ -92,11 +97,67 @@ function decodeText(buffer: Buffer): string {
   return utf8;
 }
 
+/** xlsx/xls → 把每个 sheet 转成 "## SheetName" + CSV 文本块 */
+function extractXlsx(buffer: Buffer): string {
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const blocks: string[] = [];
+  for (const name of wb.SheetNames) {
+    const sheet = wb.Sheets[name];
+    if (!sheet) continue;
+    const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+    if (csv.trim()) {
+      blocks.push(`## ${name}\n${csv}`);
+    }
+  }
+  return blocks.join("\n\n");
+}
+
+/** pptx → 解压取每张 slide 的 a:t 文字 */
+async function extractPptx(buffer: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer);
+  const slidePaths = Object.keys(zip.files)
+    .filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p))
+    .sort((a, b) => {
+      const na = parseInt(a.match(/slide(\d+)\.xml$/)?.[1] ?? "0", 10);
+      const nb = parseInt(b.match(/slide(\d+)\.xml$/)?.[1] ?? "0", 10);
+      return na - nb;
+    });
+
+  const blocks: string[] = [];
+  for (let i = 0; i < slidePaths.length; i++) {
+    const xml = await zip.files[slidePaths[i]].async("string");
+    // 抽 <a:t>...</a:t> 内容；再把 <a:p>（段落）当换行
+    const paragraphs = xml.split(/<a:p[\s>]/i).slice(1);
+    const lines: string[] = [];
+    for (const p of paragraphs) {
+      const texts = [...p.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map((m) =>
+        decodeXmlEntities(m[1])
+      );
+      const line = texts.join("").trim();
+      if (line) lines.push(line);
+    }
+    if (lines.length > 0) {
+      blocks.push(`## 第 ${i + 1} 页\n${lines.join("\n")}`);
+    }
+  }
+  return blocks.join("\n\n");
+}
+
+function decodeXmlEntities(s: string): string {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 /** 拉远端 URL → 提取文本。失败返回 null */
 export async function extractTextFromUrl(
   url: string,
   fileName: string
 ): Promise<ExtractResult | null> {
+  console.log(`[trial-text-extract] start: ${fileName} (${url.slice(0, 80)})`);
   try {
     const res = await fetch(url);
     if (!res.ok) {
@@ -105,7 +166,16 @@ export async function extractTextFromUrl(
     }
     const ab = await res.arrayBuffer();
     const buffer = Buffer.from(ab);
-    return await extractTextFromBuffer(buffer, fileName);
+    console.log(`[trial-text-extract] fetched ${buffer.length} bytes`);
+    const result = await extractTextFromBuffer(buffer, fileName);
+    if (!result) {
+      console.warn(`[trial-text-extract] extract returned null: ${fileName}`);
+    } else {
+      console.log(
+        `[trial-text-extract] extracted ${result.text.length} chars (truncated=${result.truncated}) from ${fileName}`
+      );
+    }
+    return result;
   } catch (e) {
     console.error("[trial-text-extract] fetchAndExtract error:", e);
     return null;

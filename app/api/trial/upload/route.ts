@@ -9,7 +9,7 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;        // 10MB
 const MAX_FILE_BYTES = 20 * 1024 * 1024;         // 20MB
 
 const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp"]);
-const DOC_EXTS = new Set(["pdf", "docx", "doc", "xlsx", "xls", "csv", "txt", "md"]);
+const DOC_EXTS = new Set(["pdf", "docx", "doc", "xlsx", "xls", "csv", "txt", "md", "pptx"]);
 
 type Kind = "image" | "file";
 
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
   const kind = detectKind(fileName, mimeType);
   if (!kind) {
     return NextResponse.json(
-      { error: "不支持的文件类型，仅支持图片（jpg/png/gif/webp/bmp）和文档（pdf/docx/xlsx/csv/txt/md）" },
+      { error: "不支持的文件类型，仅支持图片（jpg/png/gif/webp/bmp）和文档（pdf/docx/xlsx/pptx/csv/txt/md）" },
       { status: 400 }
     );
   }

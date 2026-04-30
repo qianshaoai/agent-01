@@ -16,6 +16,8 @@ const nextConfig: NextConfig = {
       "./node_modules/pdf-parse/**/*",
       "./node_modules/pdfjs-dist/**/*",
       "./node_modules/mammoth/**/*",
+      "./node_modules/xlsx/**/*",
+      "./node_modules/jszip/**/*",
     ],
   },
 };

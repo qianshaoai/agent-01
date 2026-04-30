@@ -1342,7 +1342,7 @@ export default function TrialPage() {
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept="image/*,.pdf,.doc,.docx,.xlsx,.xls,.csv,.txt,.md"
+                    accept="image/*,.pdf,.doc,.docx,.xlsx,.xls,.pptx,.csv,.txt,.md"
                     className="hidden"
                     onChange={onFilePicked}
                   />
