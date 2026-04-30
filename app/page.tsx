@@ -180,15 +180,20 @@ export default function HomePage() {
   })();
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#f8f9fc]">
-      <header className="bg-white border-b border-gray-100 sticky top-0 z-40 shadow-[0_2px_10px_rgba(17,24,39,0.04)]">
+    <div className="min-h-screen flex flex-col relative overflow-hidden bg-gradient-to-br from-[#cdd9ff] via-[#dfe6ff] to-[#aebcff]">
+      {/* 浅色环境光晕（与体验版一致） */}
+      <div className="absolute -top-40 -left-40 w-[600px] h-[600px] rounded-full bg-[#7a93ff]/30 blur-[140px] pointer-events-none" />
+      <div className="absolute top-1/3 -right-48 w-[640px] h-[640px] rounded-full bg-[#8da4ff]/35 blur-[160px] pointer-events-none" />
+      <div className="absolute bottom-0 left-1/4 w-[420px] h-[420px] rounded-full bg-[#a4b8ff]/40 blur-[140px] pointer-events-none" />
+
+      <header className="relative z-40 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-b border-white/10 sticky top-0 shadow-[0_4px_20px_rgba(0,47,167,0.12)]">
         <div className="max-w-[1600px] mx-auto px-5 sm:px-8 h-20 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
-              className="lg:hidden p-2 rounded-[10px] hover:bg-gray-100"
+              className="lg:hidden p-2 rounded-[10px] hover:bg-white/10"
               onClick={() => setSidebarOpen(!sidebarOpen)}
             >
-              <Menu size={22} className="text-gray-600" />
+              <Menu size={22} className="text-white/85" />
             </button>
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-[12px] overflow-hidden shrink-0 flex items-center justify-center bg-gradient-to-br from-[#002FA7] to-[#1a47c0] shadow-[0_4px_12px_rgba(0,47,167,0.25)]">
@@ -215,10 +220,10 @@ export default function HomePage() {
                 )}
               </div>
               <div className="hidden sm:block">
-                <p className="text-[18px] font-bold text-gray-900 leading-tight tracking-tight">
+                <p className="text-[18px] font-bold text-white leading-tight tracking-tight">
                   {siteSettings.platform_name || "AI 智能体平台"}
                 </p>
-                <p className="text-[12px] text-gray-400 mt-0.5 leading-none">
+                <p className="text-[12px] text-white/55 mt-0.5 leading-none">
                   AI-Powered Collaboration Platform
                 </p>
               </div>
@@ -229,41 +234,41 @@ export default function HomePage() {
             {user && (
               <div className="hidden sm:flex items-center gap-2">
                 {user.role === "super_admin" && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/20 text-red-200 font-medium">
                     超级管理员
                   </span>
                 )}
                 {user.role === "system_admin" && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600 font-medium">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-500/20 text-orange-200 font-medium">
                     系统管理员
                   </span>
                 )}
                 {user.role === "org_admin" && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-600 font-medium">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-300/20 text-indigo-100 font-medium">
                     组织管理员
                   </span>
                 )}
-                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#002FA7]/8 rounded-[10px]">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white/15 rounded-[10px]">
                   {user.isPersonal ? (
-                    <UserIcon size={14} className="text-[#002FA7]" />
+                    <UserIcon size={14} className="text-white" />
                   ) : (
-                    <Building2 size={14} className="text-[#002FA7]" />
+                    <Building2 size={14} className="text-white" />
                   )}
-                  <span className="text-xs font-medium text-[#002FA7]">
+                  <span className="text-xs font-medium text-white">
                     {user.isPersonal ? "个人空间" : user.tenantName}
                   </span>
                   {!user.isPersonal && (
-                    <span className="text-xs text-gray-400">{user.tenantCode}</span>
+                    <span className="text-xs text-white/55">{user.tenantCode}</span>
                   )}
                 </div>
               </div>
             )}
 
             {quota && (
-              <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 rounded-[10px]">
-                <Zap size={13} className="text-amber-500" />
-                <span className="text-xs text-gray-600">剩余 {quota.left} 次</span>
-                <span className="text-xs text-gray-400">· 至 {quota.expiresAt}</span>
+              <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-white/10 rounded-[10px]">
+                <Zap size={13} className="text-amber-300" />
+                <span className="text-xs text-white/85">剩余 {quota.left} 次</span>
+                <span className="text-xs text-white/55">· 至 {quota.expiresAt}</span>
               </div>
             )}
 
@@ -273,7 +278,7 @@ export default function HomePage() {
                   href={siteSettings.help_doc_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
+                  className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-white/10 text-white/85 hover:text-white transition-colors"
                   title="帮助文档"
                   aria-label="帮助文档"
                 >
@@ -282,7 +287,7 @@ export default function HomePage() {
               )}
               <button
                 onClick={() => setContactOpen(true)}
-                className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
+                className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-white/10 text-white/85 hover:text-white transition-colors"
                 title="联系我们"
                 aria-label="联系我们"
               >
@@ -290,7 +295,7 @@ export default function HomePage() {
               </button>
               <Link
                 href="/settings"
-                className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
+                className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-white/10 text-white/85 hover:text-white transition-colors"
                 title="账号设置"
                 aria-label="账号设置"
               >
@@ -298,7 +303,7 @@ export default function HomePage() {
               </Link>
               <button
                 onClick={handleLogout}
-                className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-red-50 text-gray-500 hover:text-red-500 transition-colors"
+                className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-white/10 text-white/85 hover:text-red-200 transition-colors"
                 title="退出登录"
                 aria-label="退出登录"
               >
@@ -309,7 +314,7 @@ export default function HomePage() {
         </div>
       </header>
 
-      <div className="flex-1 max-w-[1600px] mx-auto w-full px-5 sm:px-8 py-6 flex gap-7">
+      <div className="relative z-10 flex-1 max-w-[1600px] mx-auto w-full px-5 sm:px-8 py-6 flex gap-7">
         {/* 4.30up 阶段一：左侧改为"我的工作流" */}
         <aside
           className={`fixed inset-y-0 left-0 z-50 w-60 bg-white shadow-xl p-6 flex flex-col gap-4 transform transition-transform duration-200 lg:static lg:z-auto lg:w-56 lg:shadow-none lg:bg-transparent lg:p-0 lg:translate-x-0 ${
@@ -322,7 +327,7 @@ export default function HomePage() {
               <X size={20} className="text-gray-500" />
             </button>
           </div>
-          <div className="hidden lg:block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+          <div className="hidden lg:block text-xs font-semibold text-[#002FA7]/55 uppercase tracking-wider mb-2">
             我的工作流
           </div>
           <nav className="flex flex-col gap-1">
@@ -381,10 +386,10 @@ export default function HomePage() {
               {visibleNotices.map((notice) => (
                 <div
                   key={notice.id}
-                  className={`relative flex items-start gap-3 p-4 pr-10 rounded-[12px] text-sm ${
+                  className={`relative flex items-start gap-3 p-4 pr-10 rounded-[14px] text-sm shadow-[0_2px_10px_rgba(0,0,0,0.04)] ${
                     notice.tenant_code
-                      ? "bg-[#f0f4ff] border border-[#002FA7]/10"
-                      : "bg-amber-50 border border-amber-100"
+                      ? "bg-white/90 border border-[#002FA7]/15"
+                      : "bg-amber-50/95 border border-amber-200"
                   }`}
                 >
                   <Megaphone
@@ -413,7 +418,7 @@ export default function HomePage() {
                 {[...Array(6)].map((_, i) => (
                   <div
                     key={i}
-                    className="bg-white rounded-[16px] p-5 h-40 animate-pulse shadow-[0_1px_4px_rgba(0,0,0,0.06)]"
+                    className="bg-white/80 border border-gray-200 rounded-[20px] p-5 h-40 animate-pulse shadow-[0_2px_10px_rgba(0,0,0,0.04)]"
                   >
                     <div className="w-11 h-11 bg-gray-100 rounded-[12px] mb-3" />
                     <div className="h-4 bg-gray-100 rounded w-3/4 mb-2" />
@@ -422,7 +427,7 @@ export default function HomePage() {
                 ))}
               </div>
             ) : workflows.length === 0 ? (
-              <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] py-20 flex flex-col items-center justify-center text-center">
+              <div className="bg-white border border-gray-200 rounded-[20px] shadow-[0_2px_10px_rgba(0,0,0,0.04)] py-20 flex flex-col items-center justify-center text-center">
                 <div className="w-14 h-14 rounded-[16px] bg-gray-100 flex items-center justify-center mb-4">
                   <GitBranch size={24} className="text-gray-300" />
                 </div>
@@ -436,7 +441,7 @@ export default function HomePage() {
                     key={wf.id}
                     type="button"
                     onClick={() => selectWorkflow(wf.id)}
-                    className="group bg-white rounded-[16px] p-5 text-left shadow-[0_1px_4px_rgba(0,0,0,0.06)] hover:shadow-[0_4px_16px_rgba(0,47,167,0.10)] hover:-translate-y-0.5 transition-all border border-transparent hover:border-[#002FA7]/15"
+                    className="group bg-white border border-gray-200 rounded-[20px] p-5 text-left shadow-[0_2px_10px_rgba(0,0,0,0.04)] hover:shadow-[0_8px_24px_rgba(0,47,167,0.12)] hover:-translate-y-0.5 hover:border-[#002FA7]/30 transition-all"
                   >
                     <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] mb-3">
                       <GitBranch size={20} className="text-white" />
@@ -461,7 +466,7 @@ export default function HomePage() {
           ) : (
             /* ── 主区：选中某条工作流 → 详情 + 智能体展示 ───────────────── */
             <>
-            <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
+            <div className="bg-white border border-gray-200 rounded-[20px] shadow-[0_2px_10px_rgba(0,0,0,0.04)] overflow-hidden">
               <div className="flex items-center gap-3.5 px-7 py-5 border-b border-gray-50">
                 <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] shrink-0">
                   <GitBranch size={22} className="text-white" />
@@ -590,7 +595,7 @@ export default function HomePage() {
 
             {/* 4.30up：智能体展示卡 — 仅本工作流绑定的智能体 */}
             {activeWorkflow && workflowAgents.length > 0 && (
-              <div className="mt-6 bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
+              <div className="mt-6 bg-white border border-gray-200 rounded-[20px] shadow-[0_2px_10px_rgba(0,0,0,0.04)] overflow-hidden">
                 <div className="flex items-center gap-3.5 px-7 py-5 border-b border-gray-50">
                   <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] shrink-0">
                     <Bot size={22} className="text-white" />
@@ -616,7 +621,7 @@ export default function HomePage() {
         </main>
       </div>
 
-      <footer className="border-t border-gray-100 bg-white mt-auto">
+      <footer className="relative z-10 border-t border-white/40 bg-white/60 backdrop-blur-sm mt-auto">
         <div className="max-w-[1600px] mx-auto px-5 sm:px-8 py-4 flex items-center justify-between">
           <p className="text-xs text-gray-400">© 2026 前哨科技（QianShao.AI）保留所有权利</p>
           <div className="flex items-center gap-4">
