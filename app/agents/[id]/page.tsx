@@ -32,7 +32,7 @@ function friendlyError(msg: string): string {
 }
 
 type ChatMsgProps = {
-  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean };
+  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean; attachedFiles?: string[] };
   streaming: boolean;
   onCopy: () => void;
   copied: boolean;
@@ -72,6 +72,21 @@ const ChatMessage = memo(function ChatMessage({
       </div>
       <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
         <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
+          {/* 用户消息：先渲染附件 chip（如果有），再渲染正文 */}
+          {!isAssistant && msg.attachedFiles && msg.attachedFiles.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {msg.attachedFiles.map((fname, fi) => (
+                <span
+                  key={fi}
+                  className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-[8px] bg-white/20 text-white"
+                  title={fname}
+                >
+                  <FileText size={11} />
+                  <span className="max-w-[140px] truncate">{fname}</span>
+                </span>
+              ))}
+            </div>
+          )}
           {isAssistant ? (
             msg.content ? (
               <div className="trial-md break-words">
@@ -236,7 +251,25 @@ type Message = {
   createdAt: string;
   /** 用户主动中断 → 气泡末尾显示「已停止」徽章 */
   aborted?: boolean;
+  /** 用户消息附带的文件名列表（只渲染文件名 chip，不再把文件内容平铺到 content 里） */
+  attachedFiles?: string[];
 };
+
+/**
+ * 解析后端拼好的 user message 内容：
+ *   原始格式："识别一下这个文件\n\n[附件内容]\n文件《name1》内容：\n...\n文件《name2》内容：\n..."
+ *   返回：{ text: 用户输入正文, attachedFiles: 解析出来的文件名列表 }
+ * 阶段一不改后端，前端做兜底解析；后续若改成结构化保存（attachments 列）再退役本函数。
+ */
+function parseUserContent(raw: string): { text: string; attachedFiles: string[] } {
+  const match = raw.match(/^([\s\S]*?)\n\n\[附件内容\]\n([\s\S]*)$/);
+  if (!match) return { text: raw, attachedFiles: [] };
+  const [, userText, fileSection] = match;
+  const filenames = Array.from(fileSection.matchAll(/文件《([^》]+)》内容[：:]/g)).map(
+    (m) => m[1]
+  );
+  return { text: userText.trim(), attachedFiles: filenames };
+}
 
 type Conversation = {
   id: string;
@@ -356,14 +389,25 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       const res = await fetch(`/api/conversations/${convId}/messages`);
       if (res.ok) {
         const data = await res.json();
-        setMessages(
-          data.map((m: { id: string; role: "user" | "assistant"; content: string; created_at: string }) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content,
-            createdAt: new Date(m.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-          }))
-        );
+        setMessages((prev) => {
+          // 保留前端独有的 aborted 标记：以 DB 列表为准，但根据消息 id 把
+          // 已存在的 aborted 状态贴回去（防止"已停止"徽章被刷掉）。
+          const abortedIds = new Set(
+            prev.filter((m) => m.aborted && !m.id.startsWith("tmp-") && !m.id.startsWith("ai-")).map((m) => m.id)
+          );
+          return data.map((m: { id: string; role: "user" | "assistant"; content: string; created_at: string }) => {
+            const parsed =
+              m.role === "user" ? parseUserContent(m.content) : { text: m.content, attachedFiles: [] as string[] };
+            return {
+              id: m.id,
+              role: m.role,
+              content: parsed.text,
+              attachedFiles: parsed.attachedFiles.length > 0 ? parsed.attachedFiles : undefined,
+              createdAt: new Date(m.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+              aborted: abortedIds.has(m.id) ? true : undefined,
+            };
+          });
+        });
       }
     } finally {
       setLoading(false);
@@ -395,25 +439,24 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     if (!sentInput) return;
     setError("");
 
+    // 仅可用（已成功上传）的文件参与上下文；未完成 / 失败的过滤掉
+    const okFiles = opts ? [] : uploadedFiles.filter((f) => f.status === "ok");
+    const fileTexts = okFiles.map((f) => `文件《${f.filename}》内容：\n${f.extractedText}`);
+    const attachedFilenames = okFiles.map((f) => f.filename);
+
     const userMsg: Message = {
       id: `tmp-${Date.now()}`,
       role: "user",
       content: sentInput,
+      attachedFiles: attachedFilenames.length > 0 ? attachedFilenames : undefined,
       createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
     };
     setMessages((prev) => [...prev, userMsg]);
     if (!opts) {
       setInput("");
       if (textareaRef.current) textareaRef.current.style.height = "auto";
+      setUploadedFiles([]);
     }
-
-    // 仅可用（已成功上传）的文件参与上下文；未完成 / 失败的过滤掉
-    const fileTexts = opts
-      ? []
-      : uploadedFiles
-          .filter((f) => f.status === "ok")
-          .map((f) => `文件《${f.filename}》内容：\n${f.extractedText}`);
-    if (!opts) setUploadedFiles([]);
 
     setStreaming(true);
     let aiContent = "";
@@ -495,11 +538,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         setMessages((prev) =>
           prev.map((m) => (m.id === aiId ? { ...m, aborted: true } : m))
         );
-        // abort 路径：延迟 500ms 后刷消息（给后端 finally 留入库时间）
-        if (activeConvId) {
-          const cid = activeConvId;
-          setTimeout(() => loadConversationMessages(cid), 500);
-        }
+        // abort 路径**不**自动刷新：
+        //   服务端可能没及时收到 abort 信号，仍在生成完整内容并入库。
+        //   如果立即拉 messages，会把"已停止"徽章 + 部分内容覆盖成完整内容，
+        //   呈现"点了停止 bot 还在说话"的错觉。
+        //   下次新消息/切换聊天/手动 selectConversation 时再刷即可。
       } else {
         setError("网络错误，请重试");
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
@@ -1188,7 +1231,14 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   )}
                 </div>
               </div>
-              <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.txt,.xlsx,.csv,.jpg,.jpeg,.png,.webp" onChange={handleFileUpload} />
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                accept="image/*,.pdf,.doc,.docx,.xlsx,.xls,.pptx,.csv,.txt,.md"
+                onChange={handleFileUpload}
+              />
               <p className="text-center text-[10px] text-gray-400 mt-2">AI 生成内容仅供参考，请注意核实重要信息</p>
             </div>
           </div>
