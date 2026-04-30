@@ -372,6 +372,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // 记录最近一次 handleSend 起点时间，abort 后用于定位"本轮新入库的消息"标 aborted
+  const sendStartedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -443,7 +445,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           const abortedIds = new Set(
             prev.filter((m) => m.aborted && !m.id.startsWith("tmp-") && !m.id.startsWith("ai-")).map((m) => m.id)
           );
-          return data.map((m: { id: string; role: "user" | "assistant"; content: string; created_at: string }) => {
+          return data.map((m: { id: string; role: "user" | "assistant"; content: string; created_at: string; aborted?: boolean }) => {
             const parsed =
               m.role === "user"
                 ? parseUserContent(m.content)
@@ -457,7 +459,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               attachedImages: parsed.attachedImages.length > 0 ? parsed.attachedImages : undefined,
               rawContent: m.role === "user" && hasAttach ? m.content : undefined,
               createdAt: new Date(m.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-              aborted: abortedIds.has(m.id) ? true : undefined,
+              // 优先用 DB 字段；client 端临时 aborted 标记作为回退（异步 PATCH 还没回来时）
+              aborted: m.aborted || abortedIds.has(m.id) ? true : undefined,
             };
           });
         });
@@ -534,6 +537,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     }
 
     setStreaming(true);
+    sendStartedAtRef.current = Date.now();
     let aiContent = "";
     const aiId = `ai-${Date.now()}`;
 
@@ -614,11 +618,37 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         setMessages((prev) =>
           prev.map((m) => (m.id === aiId ? { ...m, aborted: true } : m))
         );
-        // abort 路径**不**自动刷新：
-        //   服务端可能没及时收到 abort 信号，仍在生成完整内容并入库。
-        //   如果立即拉 messages，会把"已停止"徽章 + 部分内容覆盖成完整内容，
-        //   呈现"点了停止 bot 还在说话"的错觉。
-        //   下次新消息/切换聊天/手动 selectConversation 时再刷即可。
+        // 4.30up A 方案：延迟 800ms 拉 DB 拿本轮入库的 message id，
+        // 调 PATCH /api/messages/[id] { aborted: true } 把它们标成中断态。
+        // chat 路由下次拉历史时 .eq("aborted", false) 自动过滤，bot 不会
+        // 把被中断的 turn 当上下文。前端仍然渲染这些消息 + 已停止徽章。
+        if (activeConvId && sendStartedAtRef.current) {
+          const cid = activeConvId;
+          const sentAt = sendStartedAtRef.current;
+          window.setTimeout(async () => {
+            try {
+              const r = await fetch(`/api/conversations/${cid}/messages`);
+              if (!r.ok) return;
+              type RawMsg = { id: string; role: string; aborted?: boolean; created_at: string };
+              const list = (await r.json()) as RawMsg[];
+              // 本轮新入库 = created_at >= sentAt（留 1s 兜底处理时钟漂移）
+              const targets = list.filter(
+                (m) => !m.aborted && new Date(m.created_at).getTime() >= sentAt - 1000
+              );
+              await Promise.all(
+                targets.map((m) =>
+                  fetch(`/api/messages/${encodeURIComponent(m.id)}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ aborted: true }),
+                  })
+                )
+              );
+              // 标完后再刷一次让前端用 DB aborted 状态显示
+              await loadConversationMessages(cid);
+            } catch {}
+          }, 800);
+        }
       } else {
         setError("网络错误，请重试");
         setMessages((prev) => prev.filter((m) => m.id !== aiId));

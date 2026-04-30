@@ -101,10 +101,13 @@ export const POST = withRequestLog(async (
     }
 
     // ── 4. 加载上下文消息 ──────────────────────────────────────
+    // 4.30up：aborted=true 的消息不进上下文。被中断的对话在前端仍渲染（已停止徽章），
+    // 但 bot 后续问答看不到这些被截断的内容，避免污染回答质量。
     const { data: historyRows } = await db
       .from("messages")
       .select("role, content")
       .eq("conversation_id", convId)
+      .eq("aborted", false)
       .order("created_at", { ascending: true })
       .limit(MAX_CONTEXT_TURNS * 2);
 

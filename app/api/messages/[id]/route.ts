@@ -73,3 +73,67 @@ export async function DELETE(
   }
   return NextResponse.json({ ok: true, deleted: count ?? 0 });
 }
+
+/**
+ * PATCH /api/messages/[id]
+ * body: { aborted: true }
+ *
+ * 4.30up · A 方案：标记此条消息（user 或 assistant）为"被用户主动中断"。
+ * 后续 chat 路由拉历史时会 .eq("aborted", false) 过滤掉，避免被中断的 turn
+ * 进入 bot 上下文造成幻觉。前端仍正常渲染该消息 + 已停止徽章。
+ *
+ * 鉴权：与 DELETE 同链路，messages.conversation_id → conversations.user_id 必须 = 当前用户。
+ */
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  const guard = requireFullUser(user);
+  if (guard) return guard;
+
+  const { id } = await params;
+  if (!id) return NextResponse.json({ error: "id 必填" }, { status: 400 });
+
+  const body = await req.json().catch(() => ({}));
+  if (body.aborted !== true) {
+    return NextResponse.json(
+      { error: "本接口仅支持 { aborted: true }（标记中断），其它字段不允许更改" },
+      { status: 400 }
+    );
+  }
+
+  // 鉴权链路（与 DELETE 同）
+  const { data: msgRow } = await db
+    .from("messages")
+    .select("id, conversation_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (!msgRow) return NextResponse.json({ error: "消息不存在" }, { status: 404 });
+
+  const { data: dbUser } = await db
+    .from("users")
+    .select("id")
+    .eq("phone", user.phone)
+    .eq("tenant_code", user.tenantCode)
+    .single();
+  if (!dbUser) return NextResponse.json({ error: "无权操作该消息" }, { status: 404 });
+
+  const { data: conv } = await db
+    .from("conversations")
+    .select("user_id")
+    .eq("id", msgRow.conversation_id)
+    .maybeSingle();
+  if (!conv || conv.user_id !== dbUser.id) {
+    return NextResponse.json({ error: "无权操作该消息" }, { status: 404 });
+  }
+
+  const { error: updErr } = await db
+    .from("messages")
+    .update({ aborted: true })
+    .eq("id", id);
+  if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+
+  return NextResponse.json({ ok: true });
+}

@@ -34,7 +34,7 @@ export async function GET(
 
   const { data: messages } = await db
     .from("messages")
-    .select("id, role, content, created_at")
+    .select("id, role, content, created_at, aborted")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
