@@ -47,6 +47,7 @@ export async function GET(
   // Phase 1：优先从本地 trial_messages 表读 —— 适用于所有平台（Coze/元器/...）
   // 也是统一入口，性能更好，不需要每次调外部 API
   type LocalMsg = {
+    id: string;
     role: "user" | "assistant";
     content: string;
     attachments: { file_id: string; kind: "image" | "file"; file_name?: string }[] | null;
@@ -54,18 +55,21 @@ export async function GET(
   };
   const { data: localMsgs } = await db
     .from("trial_messages")
-    .select("role, content, attachments, created_at")
+    .select("id, role, content, attachments, created_at")
     .eq("chat_id", id)
     .order("created_at", { ascending: true });
 
   if (localMsgs && localMsgs.length > 0) {
+    // 4.30 批次3：本地分支额外返回 id，前端用于"编辑/重新生成"
     const messages = (localMsgs as LocalMsg[]).map((m) => {
       const out: {
+        id: string;
         role: string;
         content: string;
         createdAt: number | null;
         attachments?: { file_id: string; kind: "image" | "file"; file_name?: string }[];
       } = {
+        id: m.id,
         role: m.role,
         content: m.content,
         createdAt: m.created_at ? new Date(m.created_at).getTime() : null,

@@ -52,6 +52,8 @@ type Attachment = {
 };
 
 type Msg = {
+  /** 4.30 批次3：DB 消息 id。本地刚发的乐观气泡无 id，流式结束后 GET messages 刷新拿到。仅本地 trial_messages 分支有；Coze 回退分支无 */
+  id?: string;
   role: "user" | "assistant";
   content: string;
   attachments?: Attachment[];
@@ -178,6 +180,9 @@ export default function TrialPage() {
   // 4.30 批次2：重命名中的 chat id（同时只允许改一行）+ 草稿
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  // 4.30 批次3：正在编辑的 user 消息 idx（按当前 body.messages 索引）+ 草稿
+  const [editingMsgIdx, setEditingMsgIdx] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
 
   async function copyMessage(idx: number, content: string) {
     try {
@@ -526,23 +531,114 @@ export default function TrialPage() {
     abortControllerRef.current = null;
   }
 
-  async function send() {
-    const text = input.trim();
+  /**
+   * 4.30 批次3：流式结束（done / error / abort）后调用，重新拉 messages 拿 DB id。
+   * 服务端 finally 入库后，前端用 GET 覆盖乐观气泡，让"编辑/重新生成"按钮 enable。
+   * abort 路径需要给后端 finally 留点入库时间，外部调用者负责加 setTimeout。
+   * 重试逻辑：如果服务端返回的消息数 < 当前乐观气泡数 - 1，说明 user 都还没入库，
+   * 延迟 500ms 重试一次，最多 retriesLeft 次。
+   */
+  async function refreshMessages(
+    agentId: string,
+    chatId: string,
+    retriesLeft = 2
+  ) {
+    try {
+      const res = await fetch(
+        `/api/trial/conversations/${encodeURIComponent(chatId)}/messages`
+      );
+      if (!res.ok) throw new Error("");
+      const d = (await res.json()) as {
+        conversation_id: string | null;
+        messages: Msg[];
+      };
+      const serverMsgs = d.messages ?? [];
+      setAgentStates((prev) => {
+        const cs = prev[agentId];
+        if (!cs) return prev;
+        const curBody = cs.bodies[chatId];
+        if (!curBody) return prev;
+        // 期望 server 消息数 >= 乐观气泡数 - 1（assistant 可能未入库）
+        const minExpected = Math.max(0, curBody.messages.length - 1);
+        if (serverMsgs.length < minExpected && retriesLeft > 0) {
+          window.setTimeout(
+            () => refreshMessages(agentId, chatId, retriesLeft - 1),
+            500
+          );
+          return prev;
+        }
+        return {
+          ...prev,
+          [agentId]: {
+            ...cs,
+            bodies: {
+              ...cs.bodies,
+              [chatId]: {
+                ...curBody,
+                messages: serverMsgs,
+                conversationId: d.conversation_id ?? curBody.conversationId,
+              },
+            },
+          },
+        };
+      });
+    } catch {
+      if (retriesLeft > 0) {
+        window.setTimeout(
+          () => refreshMessages(agentId, chatId, retriesLeft - 1),
+          500
+        );
+      }
+    }
+  }
+
+  /**
+   * 4.30 批次3：发送一条消息。
+   * 不传 opts 时走"用户输入框"链路（默认）。
+   * 传 opts 时走"重新生成 / 编辑"链路：
+   *   - 复用传入的 text + atts，不消费输入框 / pendingAttachments
+   *   - 不会清空 input / pending
+   */
+  async function send(opts?: {
+    text: string;
+    atts: Array<{
+      kind: "image" | "file";
+      fileName?: string;
+      url?: string;
+      cozeFileId?: string;
+      previewUrl?: string;
+    }>;
+  }) {
     if (!activeAgent || streaming) return;
 
-    // 仅取已上传成功且无错误的附件（必须有 url 或 cozeFileId）
-    const usableAtts = pendingAttachments.filter(
-      (p) => !p.uploading && !p.error && (p.url || p.cozeFileId)
-    );
-    // 还有正在上传 / 出错的，提示用户
-    if (pendingAttachments.some((p) => p.uploading)) {
-      alert("有附件正在上传中，请稍候");
-      return;
-    }
-    const erroredCount = pendingAttachments.filter((p) => p.error).length;
-    if (erroredCount > 0) {
-      const ok = confirm(`有 ${erroredCount} 个附件上传失败，将被忽略。是否继续发送？`);
-      if (!ok) return;
+    let text: string;
+    let usableAtts: Array<{
+      kind: "image" | "file";
+      fileName?: string;
+      url?: string;
+      cozeFileId?: string;
+      previewUrl?: string;
+    }>;
+
+    if (opts) {
+      text = opts.text;
+      usableAtts = opts.atts;
+    } else {
+      text = input.trim();
+      // 仅取已上传成功且无错误的附件（必须有 url 或 cozeFileId）
+      usableAtts = pendingAttachments.filter(
+        (p) => !p.uploading && !p.error && (p.url || p.cozeFileId)
+      );
+      // 还有正在上传 / 出错的，提示用户
+      if (pendingAttachments.some((p) => p.uploading)) {
+        alert("有附件正在上传中，请稍候");
+        return;
+      }
+      const erroredCount = pendingAttachments.filter((p) => p.error).length;
+      if (erroredCount > 0) {
+        const ok = confirm(`有 ${erroredCount} 个附件上传失败，将被忽略。是否继续发送？`);
+        if (!ok) return;
+      }
     }
 
     if (!text && usableAtts.length === 0) return;
@@ -592,9 +688,12 @@ export default function TrialPage() {
       }));
     }
 
-    setInput("");
-    clearPending();
+    if (!opts) {
+      setInput("");
+      clearPending();
+    }
     setStreaming(true);
+    let wasAbort = false;
 
     // 创建 AbortController 让用户可以中断流式
     const abortCtrl = new AbortController();
@@ -768,6 +867,7 @@ export default function TrialPage() {
     } catch (e) {
       // 用户主动中断：保留已收到的部分，标记 aborted 让气泡末尾出现「已停止」徽章
       const isAbort = e instanceof DOMException && e.name === "AbortError";
+      wasAbort = isAbort;
       if (isAbort) {
         writeToBody((b) => {
           const copy = [...b.messages];
@@ -834,7 +934,96 @@ export default function TrialPage() {
           };
         });
       }
+      // 4.30 批次3：拉一次 messages 让乐观气泡补上 DB id
+      // - done / error：立即拉
+      // - abort：延迟 500ms（给后端 finally 入库时间）
+      if (realChatId) {
+        const delay = wasAbort ? 500 : 0;
+        const targetChatId = realChatId;
+        window.setTimeout(() => refreshMessages(agentId, targetChatId), delay);
+      }
     }
+  }
+
+  // 4.30 批次3：重新生成最后一条 assistant 回复
+  async function regenerate() {
+    if (!activeAgent || streaming) return;
+    const chatId = aState.activeChatId;
+    if (!chatId || chatId === "__pending__") return;
+    const body = aState.bodies[chatId];
+    if (!body || body.messages.length < 2) return;
+    const last = body.messages[body.messages.length - 1];
+    const prev = body.messages[body.messages.length - 2];
+    if (last.role !== "assistant" || prev.role !== "user") return;
+    if (!last.id || !prev.id) return; // 必须都有 DB id 才允许
+
+    // 删除该 user 及之后所有（也就是 user + 那条 assistant）
+    const delRes = await fetch(
+      `/api/trial/messages/${encodeURIComponent(prev.id)}?from=true`,
+      { method: "DELETE" }
+    );
+    if (!delRes.ok) {
+      alert("重新生成失败：清理旧消息失败");
+      return;
+    }
+    // 本地砍掉这两条（send 会重新乐观插入）
+    updateBody(activeAgent.id, chatId, (b) => ({
+      ...b,
+      messages: b.messages.slice(0, -2),
+    }));
+    // 用 prev 的内容 + 附件重发
+    await send({
+      text: prev.content,
+      atts:
+        prev.attachments?.map((a) => ({
+          kind: a.kind,
+          fileName: a.file_name,
+          url: a.url,
+          cozeFileId: a.cozeFileId,
+          previewUrl: a.previewUrl,
+        })) ?? [],
+    });
+  }
+
+  // 4.30 批次3：编辑某条 user 消息后重发（attachments 沿用原消息）
+  async function editAndResend(msgIdx: number, newText: string) {
+    if (!activeAgent || streaming) return;
+    const chatId = aState.activeChatId;
+    if (!chatId || chatId === "__pending__") return;
+    const body = aState.bodies[chatId];
+    if (!body) return;
+    const target = body.messages[msgIdx];
+    if (!target || target.role !== "user" || !target.id) return;
+    const trimmed = newText.trim();
+    if (!trimmed) {
+      alert("内容不能为空");
+      return;
+    }
+
+    const delRes = await fetch(
+      `/api/trial/messages/${encodeURIComponent(target.id)}?from=true`,
+      { method: "DELETE" }
+    );
+    if (!delRes.ok) {
+      alert("编辑失败：清理旧消息失败");
+      return;
+    }
+    // 本地把 msgIdx 及之后全砍掉
+    updateBody(activeAgent.id, chatId, (b) => ({
+      ...b,
+      messages: b.messages.slice(0, msgIdx),
+    }));
+    await send({
+      text: trimmed,
+      atts:
+        target.attachments?.map((a) => ({
+          kind: a.kind,
+          fileName: a.file_name,
+          url: a.url,
+          cozeFileId: a.cozeFileId,
+          previewUrl: a.previewUrl,
+        })) ?? [],
+    });
   }
 
   return (
@@ -1449,6 +1638,41 @@ export default function TrialPage() {
                                 <span className="inline-block w-[2px] h-[14px] bg-gray-500 align-middle ml-0.5 animate-pulse" />
                               )}
                             </div>
+                          ) : editingMsgIdx === i ? (
+                            // 4.30 批次3：编辑用户消息内联输入
+                            <div className="flex flex-col gap-2 min-w-[260px]">
+                              <textarea
+                                autoFocus
+                                value={editDraft}
+                                onChange={(e) => setEditDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Escape") {
+                                    e.preventDefault();
+                                    setEditingMsgIdx(null);
+                                  }
+                                }}
+                                rows={Math.min(8, Math.max(2, editDraft.split("\n").length))}
+                                className="w-full bg-white text-gray-800 rounded-[10px] px-2 py-1.5 outline-none border border-white/40 focus:border-white text-[14px] resize-none"
+                              />
+                              <div className="flex justify-end gap-1.5">
+                                <button
+                                  onClick={() => setEditingMsgIdx(null)}
+                                  className="text-[11px] px-2 py-1 rounded-[6px] bg-white/15 hover:bg-white/25 text-white/90"
+                                >
+                                  取消
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const idx = editingMsgIdx;
+                                    setEditingMsgIdx(null);
+                                    if (idx !== null) editAndResend(idx, editDraft);
+                                  }}
+                                  className="text-[11px] px-2 py-1 rounded-[6px] bg-white text-[#002FA7] hover:bg-white/90 font-medium"
+                                >
+                                  保存并重发
+                                </button>
+                              </div>
+                            </div>
                           ) : (
                             <div className="whitespace-pre-wrap break-words">{m.content}</div>
                           )
@@ -1500,6 +1724,34 @@ export default function TrialPage() {
                               {relativeTime(m.createdAt)}
                             </span>
                           )}
+                          {/* 4.30 批次3: 编辑用户消息（仅 user + 有 id + 非流式中） */}
+                          {m.role === "user" && m.id && !streaming && (
+                            <button
+                              onClick={() => {
+                                setEditDraft(m.content);
+                                setEditingMsgIdx(i);
+                              }}
+                              className="text-[11px] text-gray-400 hover:text-[#002FA7] flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] hover:bg-[#002FA7]/8 transition-colors"
+                              title="编辑并重发"
+                            >
+                              <Pencil size={11} /> 编辑
+                            </button>
+                          )}
+                          {/* 4.30 批次3: 重新生成（仅最后一条 assistant + 自身和上一条 user 都有 id + 非流式中） */}
+                          {m.role === "assistant" &&
+                            i === messages.length - 1 &&
+                            m.id &&
+                            messages[i - 1]?.id &&
+                            messages[i - 1]?.role === "user" &&
+                            !streaming && (
+                              <button
+                                onClick={regenerate}
+                                className="text-[11px] text-gray-400 hover:text-[#002FA7] flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] hover:bg-[#002FA7]/8 transition-colors"
+                                title="基于上一条消息重新生成"
+                              >
+                                <Loader2 size={11} /> 重新生成
+                              </button>
+                            )}
                         </div>
                       )}
                     </div>
@@ -1610,7 +1862,7 @@ export default function TrialPage() {
                     </button>
                   ) : (
                     <button
-                      onClick={send}
+                      onClick={() => send()}
                       disabled={
                         !input.trim() &&
                         pendingAttachments.filter((p) => !p.error).length === 0
