@@ -36,9 +36,34 @@ type ChatMsgProps = {
   streaming: boolean;
   onCopy: () => void;
   copied: boolean;
+  // P1：编辑用户消息
+  isEditing: boolean;
+  editValue: string;
+  onChangeEdit: (v: string) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onStartEdit: () => void;
+  canEdit: boolean;
+  // P1：重新生成（仅最后一条 assistant 满足条件时为 true）
+  canRegenerate: boolean;
+  onRegenerate: () => void;
 };
 
-const ChatMessage = memo(function ChatMessage({ msg, streaming, onCopy, copied }: ChatMsgProps) {
+const ChatMessage = memo(function ChatMessage({
+  msg,
+  streaming,
+  onCopy,
+  copied,
+  isEditing,
+  editValue,
+  onChangeEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onStartEdit,
+  canEdit,
+  canRegenerate,
+  onRegenerate,
+}: ChatMsgProps) {
   const isAssistant = msg.role === "assistant";
   return (
     <div className={`group/bubble flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
@@ -61,6 +86,37 @@ const ChatMessage = memo(function ChatMessage({ msg, streaming, onCopy, copied }
             ) : streaming ? (
               <span className="inline-block w-[2px] h-[14px] bg-gray-500 align-middle animate-pulse" />
             ) : null
+          ) : isEditing ? (
+            // P1：编辑用户消息内联 textarea
+            <div className="flex flex-col gap-2 min-w-[260px]">
+              <textarea
+                autoFocus
+                value={editValue}
+                onChange={(e) => onChangeEdit(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    onCancelEdit();
+                  }
+                }}
+                rows={Math.min(8, Math.max(2, editValue.split("\n").length))}
+                className="w-full bg-white text-gray-800 rounded-[10px] px-2 py-1.5 outline-none border border-white/40 focus:border-white text-[14px] resize-none"
+              />
+              <div className="flex justify-end gap-1.5">
+                <button
+                  onClick={onCancelEdit}
+                  className="text-[11px] px-2 py-1 rounded-[6px] bg-white/15 hover:bg-white/25 text-white/90"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={onSaveEdit}
+                  className="text-[11px] px-2 py-1 rounded-[6px] bg-white text-[#002FA7] hover:bg-white/90 font-medium"
+                >
+                  保存并重发
+                </button>
+              </div>
+            </div>
           ) : (
             <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
           )}
@@ -72,27 +128,49 @@ const ChatMessage = memo(function ChatMessage({ msg, streaming, onCopy, copied }
             </div>
           )}
         </div>
-        {/* hover 工具栏：assistant 显示复制按钮 + 时间；user 只显示时间 */}
-        <div className={`flex items-center gap-2 px-1 ${isAssistant ? "opacity-0 group-hover/bubble:opacity-100 transition-opacity" : ""}`}>
-          {isAssistant && msg.content && (
-            <button
-              onClick={onCopy}
-              className="text-[11px] text-gray-400 hover:text-[#002FA7] flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] hover:bg-[#002FA7]/8 transition-colors"
-              title="复制"
-            >
-              {copied ? (
-                <>
-                  <Check size={11} className="text-[#002FA7]" /> 已复制
-                </>
-              ) : (
-                <>
-                  <Copy size={11} /> 复制
-                </>
-              )}
-            </button>
-          )}
-          {msg.createdAt && <span className="text-[10px] text-gray-400">{msg.createdAt}</span>}
-        </div>
+        {/* hover 工具栏：复制 / 时间 / 编辑 / 重新生成 */}
+        {!isEditing && (msg.content || msg.aborted) && (
+          <div className="opacity-0 group-hover/bubble:opacity-100 transition-opacity flex items-center gap-2 px-1">
+            {isAssistant && msg.content && (
+              <button
+                onClick={onCopy}
+                className="text-[11px] text-gray-400 hover:text-[#002FA7] flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] hover:bg-[#002FA7]/8 transition-colors"
+                title="复制"
+              >
+                {copied ? (
+                  <>
+                    <Check size={11} className="text-[#002FA7]" /> 已复制
+                  </>
+                ) : (
+                  <>
+                    <Copy size={11} /> 复制
+                  </>
+                )}
+              </button>
+            )}
+            {/* 用户消息：编辑按钮（仅有 DB id 才显示） */}
+            {!isAssistant && canEdit && (
+              <button
+                onClick={onStartEdit}
+                className="text-[11px] text-gray-400 hover:text-[#002FA7] flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] hover:bg-[#002FA7]/8 transition-colors"
+                title="编辑并重发"
+              >
+                <Pencil size={11} /> 编辑
+              </button>
+            )}
+            {/* assistant：重新生成按钮（仅最后一条 + 有 id） */}
+            {isAssistant && canRegenerate && (
+              <button
+                onClick={onRegenerate}
+                className="text-[11px] text-gray-400 hover:text-[#002FA7] flex items-center gap-1 px-1.5 py-0.5 rounded-[6px] hover:bg-[#002FA7]/8 transition-colors"
+                title="基于上一条消息重新生成"
+              >
+                <RotateCcw size={11} /> 重新生成
+              </button>
+            )}
+            {msg.createdAt && <span className="text-[10px] text-gray-400">{msg.createdAt}</span>}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -116,7 +194,40 @@ import {
   Square,
   Copy,
   Check,
+  Pencil,
+  Trash2,
+  Search,
+  ArrowDown,
+  Loader2,
+  RotateCcw,
 } from "lucide-react";
+
+/** 把会话列表按时间桶分组：今天 / 昨天 / 7 天内 / 更早 */
+function bucketConversationsByTime(convs: Conversation[]): { label: string; items: Conversation[] }[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 3600 * 1000;
+  const sevenDaysAgo = startOfToday - 7 * 24 * 3600 * 1000;
+  const buckets: Record<string, Conversation[]> = {
+    今天: [],
+    昨天: [],
+    "7 天内": [],
+    更早: [],
+  };
+  for (const c of convs) {
+    const t = new Date(c.updated_at).getTime();
+    if (t >= startOfToday) buckets["今天"].push(c);
+    else if (t >= startOfYesterday) buckets["昨天"].push(c);
+    else if (t >= sevenDaysAgo) buckets["7 天内"].push(c);
+    else buckets["更早"].push(c);
+  }
+  return [
+    { label: "今天", items: buckets["今天"] },
+    { label: "昨天", items: buckets["昨天"] },
+    { label: "7 天内", items: buckets["7 天内"] },
+    { label: "更早", items: buckets["更早"] },
+  ].filter((g) => g.items.length > 0);
+}
 
 type Message = {
   id: string;
@@ -142,8 +253,14 @@ type AgentInfo = {
 };
 
 type UploadedFile = {
+  /** 本地随机 id，用于跟踪上传中状态 */
+  uploadId: string;
   filename: string;
+  bytes: number;
   extractedText: string;
+  /** "uploading" / "ok" / "failed"（基于 extractedText 是否非空判定） */
+  status: "uploading" | "ok" | "failed";
+  errorReason?: string;
 };
 
 export default function AgentChatPage({ params }: { params: Promise<{ id: string }> }) {
@@ -165,8 +282,20 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const [quota, setQuota] = useState<{ left: number; expiresAt: string } | null>(null);
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // P1: 重命名 / 删除 / 搜索
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  // P1: 编辑用户消息（按 idx）
+  const [editingMsgIdx, setEditingMsgIdx] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  // P1: 滚动离底显示"回到最新"
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  // P1: 拖拽上传 hover 提示
+  const [dragOver, setDragOver] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -260,23 +389,31 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
   }
 
-  async function handleSend() {
-    if (!input.trim() || streaming) return;
+  async function handleSend(opts?: { text: string }) {
+    if (streaming) return;
+    const sentInput = opts ? opts.text.trim() : input.trim();
+    if (!sentInput) return;
     setError("");
 
     const userMsg: Message = {
       id: `tmp-${Date.now()}`,
       role: "user",
-      content: input.trim(),
+      content: sentInput,
       createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
     };
     setMessages((prev) => [...prev, userMsg]);
-    const sentInput = input.trim();
-    setInput("");
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
+    if (!opts) {
+      setInput("");
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+    }
 
-    const fileTexts = uploadedFiles.map((f) => `文件《${f.filename}》内容：\n${f.extractedText}`);
-    setUploadedFiles([]);
+    // 仅可用（已成功上传）的文件参与上下文；未完成 / 失败的过滤掉
+    const fileTexts = opts
+      ? []
+      : uploadedFiles
+          .filter((f) => f.status === "ok")
+          .map((f) => `文件《${f.filename}》内容：\n${f.extractedText}`);
+    if (!opts) setUploadedFiles([]);
 
     setStreaming(true);
     let aiContent = "";
@@ -342,6 +479,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               if (convsRes.ok) { const raw = await convsRes.json(); setConversations(raw.data ?? raw ?? []); }
               // Update quota
               if (quota) setQuota((q) => q ? { ...q, left: q.left - 1 } : q);
+              // P1: 刷消息拿 DB id（编辑/重新生成需要）
+              loadConversationMessages(obj.conversationId);
             }
             if (obj.error) {
               setError(obj.error);
@@ -356,6 +495,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         setMessages((prev) =>
           prev.map((m) => (m.id === aiId ? { ...m, aborted: true } : m))
         );
+        // abort 路径：延迟 500ms 后刷消息（给后端 finally 留入库时间）
+        if (activeConvId) {
+          const cid = activeConvId;
+          setTimeout(() => loadConversationMessages(cid), 500);
+        }
       } else {
         setError("网络错误，请重试");
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
@@ -381,6 +525,122 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  // P1 · 重命名 / 删除会话
+  async function renameConv(convId: string, newTitle: string) {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: trimmed }),
+    });
+    if (!res.ok) {
+      setError("重命名失败");
+      return;
+    }
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, title: trimmed } : c))
+    );
+    setRenamingId(null);
+  }
+
+  async function deleteConv(convId: string) {
+    if (!confirm("确认删除这条聊天记录？")) return;
+    const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      setError("删除失败");
+      return;
+    }
+    setConversations((prev) => prev.filter((c) => c.id !== convId));
+    if (activeConvId === convId) {
+      setActiveConvId(null);
+      setMessages([]);
+    }
+  }
+
+  // P1 · 重新生成最后一条 assistant
+  async function regenerate() {
+    if (streaming || messages.length < 2) return;
+    const last = messages[messages.length - 1];
+    const prev = messages[messages.length - 2];
+    if (last.role !== "assistant" || prev.role !== "user") return;
+    // 临时 id（tmp-/ai-）说明还没刷到 DB id；按钮的 disable 条件已经卡住，
+    // 这里再保一道
+    if (prev.id.startsWith("tmp-") || last.id.startsWith("ai-") || last.id.startsWith("tmp-")) {
+      setError("消息保存中，稍候再试");
+      return;
+    }
+    const res = await fetch(
+      `/api/messages/${encodeURIComponent(prev.id)}?from=true`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) {
+      setError("重新生成失败：清理旧消息失败");
+      return;
+    }
+    const text = prev.content;
+    setMessages((m) => m.slice(0, -2));
+    await handleSend({ text });
+  }
+
+  // P1 · 编辑 user 消息后重发
+  async function editAndResend(idx: number, newText: string) {
+    if (streaming) return;
+    const target = messages[idx];
+    if (!target || target.role !== "user") return;
+    const trimmed = newText.trim();
+    if (!trimmed) {
+      setError("内容不能为空");
+      return;
+    }
+    if (target.id.startsWith("tmp-")) {
+      setError("消息保存中，稍候再试");
+      return;
+    }
+    const res = await fetch(
+      `/api/messages/${encodeURIComponent(target.id)}?from=true`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) {
+      setError("编辑失败：清理旧消息失败");
+      return;
+    }
+    setMessages((prev) => prev.slice(0, idx));
+    await handleSend({ text: trimmed });
+  }
+
+  // P1 · 滚动检测：离底超 80px 显示"回到最新"
+  useEffect(() => {
+    const el = messageScrollRef.current;
+    if (!el) return;
+    function onScroll() {
+      const node = messageScrollRef.current;
+      if (!node) return;
+      const dist = node.scrollHeight - node.scrollTop - node.clientHeight;
+      setShowScrollBottom(dist > 80);
+    }
+    el.addEventListener("scroll", onScroll);
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [messages.length]);
+
+  function scrollToBottom() {
+    messageScrollRef.current?.scrollTo({
+      top: messageScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }
+
+  // P1 · 搜索过滤后的会话列表
+  const filteredConvs = searchInput.trim()
+    ? conversations.filter((c) =>
+        c.title.toLowerCase().includes(searchInput.trim().toLowerCase())
+      )
+    : conversations;
+  const conversationGroups = bucketConversationsByTime(filteredConvs);
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -388,12 +648,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     }
   }
 
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-
-    // 前置校验：类型 + 大小，超限直接提示，不发请求
+  async function uploadOne(file: File) {
+    // 前置校验：类型 + 大小
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
     const isImg = file.type.startsWith("image/") || IMAGE_EXTS.includes(ext);
     if (!isImg && !DOC_EXTS.includes(ext)) {
@@ -406,6 +662,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       return;
     }
 
+    // 立刻插入一个 uploading 占位 chip
+    const uploadId = `up-${Date.now()}-${Math.random()}`;
+    setUploadedFiles((prev) => [
+      ...prev,
+      { uploadId, filename: file.name, bytes: file.size, extractedText: "", status: "uploading" },
+    ]);
+
     const formData = new FormData();
     formData.append("file", file);
     if (activeConvId) formData.append("conversationId", activeConvId);
@@ -414,12 +677,84 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       const res = await fetch("/api/upload", { method: "POST", body: formData });
       const data = await res.json();
       if (res.ok) {
-        setUploadedFiles((prev) => [...prev, { filename: data.filename, extractedText: data.extractedText }]);
+        const text = data.extractedText ?? "";
+        setUploadedFiles((prev) =>
+          prev.map((f) =>
+            f.uploadId === uploadId
+              ? {
+                  ...f,
+                  filename: data.filename ?? f.filename,
+                  extractedText: text,
+                  status: text ? "ok" : "failed",
+                  errorReason: text ? undefined : "解析失败：文件可能损坏或格式不支持",
+                }
+              : f
+          )
+        );
       } else {
+        setUploadedFiles((prev) =>
+          prev.map((f) =>
+            f.uploadId === uploadId
+              ? { ...f, status: "failed", errorReason: data.error ?? "上传失败" }
+              : f
+          )
+        );
         setError(data.error ?? "上传失败");
       }
     } catch {
+      setUploadedFiles((prev) =>
+        prev.map((f) =>
+          f.uploadId === uploadId ? { ...f, status: "failed", errorReason: "上传失败" } : f
+        )
+      );
       setError("上传失败");
+    }
+  }
+
+  function handleFiles(files: FileList | File[]) {
+    const arr = Array.from(files);
+    arr.forEach(uploadOne);
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    e.target.value = "";
+    if (!files || files.length === 0) return;
+    handleFiles(files);
+  }
+
+  // P1: 拖拽上传
+  function onDragOver(e: React.DragEvent) {
+    if (Array.from(e.dataTransfer.types).includes("Files")) {
+      e.preventDefault();
+      setDragOver(true);
+    }
+  }
+  function onDragLeave(e: React.DragEvent) {
+    if (e.currentTarget === e.target) setDragOver(false);
+  }
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFiles(e.dataTransfer.files);
+    }
+  }
+
+  // P1: 粘贴图片
+  function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imgs: File[] = [];
+    for (const item of items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const f = item.getAsFile();
+        if (f) imgs.push(f);
+      }
+    }
+    if (imgs.length > 0) {
+      e.preventDefault();
+      handleFiles(imgs);
     }
   }
 
@@ -586,24 +921,96 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               </button>
             </div>
           </div>
+          {/* P1：搜索框 */}
+          {conversations.length > 0 && (
+            <div className="px-3 pt-3 pb-2 border-b border-gray-100">
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[10px] bg-gray-50 border border-gray-200 focus-within:border-[#002FA7]">
+                <Search size={13} className="text-gray-400 shrink-0" />
+                <input
+                  type="text"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="搜索聊天"
+                  className="flex-1 bg-transparent outline-none text-[13px] placeholder:text-gray-400"
+                />
+                {searchInput && (
+                  <button onClick={() => setSearchInput("")} className="text-gray-400 hover:text-gray-600">
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-2">
             <button onClick={newChat} className="w-full flex items-center gap-2 px-3 py-2.5 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors mb-1">
               <Plus size={15} /><span>新建对话</span>
             </button>
             {conversations.length === 0 ? (
               <p className="text-xs text-gray-400 text-center py-6 px-2 leading-relaxed">暂无会话记录<br/>发送消息开始对话</p>
-            ) : conversations.map((conv) => (
-              <button
-                key={conv.id}
-                onClick={() => selectConversation(conv.id)}
-                className={`w-full flex items-start gap-2 px-3 py-2.5 rounded-[10px] text-sm transition-colors mb-0.5 text-left ${activeConvId === conv.id ? "bg-[#002FA7]/8 text-[#002FA7]" : "text-gray-600 hover:bg-gray-100"}`}
-              >
-                <MessageSquare size={14} className="mt-0.5 shrink-0" />
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{conv.title}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{new Date(conv.updated_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</p>
-                </div>
-              </button>
+            ) : filteredConvs.length === 0 ? (
+              <p className="text-xs text-gray-400 text-center py-6 px-2">没有匹配的聊天</p>
+            ) : conversationGroups.map((group) => (
+              <div key={group.label} className="mb-3">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-3 mb-1">{group.label}</p>
+                {group.items.map((conv) => (
+                  <div
+                    key={conv.id}
+                    className={`group/conv relative w-full flex items-start gap-2 px-3 py-2.5 rounded-[10px] text-sm transition-colors mb-0.5 text-left ${activeConvId === conv.id ? "bg-[#002FA7]/8 text-[#002FA7]" : "text-gray-600 hover:bg-gray-100"}`}
+                  >
+                    <MessageSquare size={14} className="mt-0.5 shrink-0" />
+                    <div className="min-w-0 flex-1" onClick={() => renamingId !== conv.id && selectConversation(conv.id)}>
+                      {renamingId === conv.id ? (
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          onChange={(e) => setRenameDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              renameConv(conv.id, renameDraft);
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              setRenamingId(null);
+                            }
+                          }}
+                          onBlur={() => renameDraft.trim() && renameConv(conv.id, renameDraft)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full bg-white border border-[#002FA7]/40 rounded-[6px] px-1.5 py-0.5 text-sm outline-none focus:border-[#002FA7]"
+                        />
+                      ) : (
+                        <p className="truncate font-medium cursor-pointer">{conv.title}</p>
+                      )}
+                      <p className="text-xs text-gray-400 mt-0.5">{new Date(conv.updated_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</p>
+                    </div>
+                    {/* hover 显示重命名 / 删除 */}
+                    {renamingId !== conv.id && (
+                      <div className="opacity-0 group-hover/conv:opacity-100 transition-opacity flex items-center gap-0.5 shrink-0">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenamingId(conv.id);
+                            setRenameDraft(conv.title);
+                          }}
+                          className="p-1 rounded-[6px] hover:bg-white/80 text-gray-400 hover:text-[#002FA7]"
+                          title="重命名"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteConv(conv.id);
+                          }}
+                          className="p-1 rounded-[6px] hover:bg-white/80 text-gray-400 hover:text-red-500"
+                          title="删除"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             ))}
           </div>
         </aside>
@@ -611,8 +1018,19 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         {sidebarOpen && <div className="fixed inset-0 z-40 bg-black/20 lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
         {/* Chat area */}
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+        <div
+          className="flex-1 flex flex-col min-w-0 relative"
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+        >
+          {/* P1: 拖拽上传遮罩 */}
+          {dragOver && (
+            <div className="pointer-events-none absolute inset-0 z-30 m-3 rounded-[16px] border-2 border-dashed border-[#002FA7] bg-[#002FA7]/5 flex items-center justify-center">
+              <div className="text-[#002FA7] font-medium text-sm">松开鼠标上传文件</div>
+            </div>
+          )}
+          <div ref={messageScrollRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
             {messages.length === 0 && !loading && (
               <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
                 <div className="w-16 h-16 rounded-[20px] bg-[#002FA7]/8 flex items-center justify-center">
@@ -626,15 +1044,46 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               </div>
             )}
 
-            {messages.map((msg, i) => (
-              <ChatMessage
-                key={msg.id}
-                msg={msg}
-                streaming={streaming && i === messages.length - 1}
-                onCopy={() => copyMessage(msg.id, msg.content)}
-                copied={copiedId === msg.id}
-              />
-            ))}
+            {messages.map((msg, i) => {
+              const hasDbId = !msg.id.startsWith("tmp-") && !msg.id.startsWith("ai-");
+              const isLastAssistant =
+                msg.role === "assistant" && i === messages.length - 1;
+              const prev = i > 0 ? messages[i - 1] : null;
+              const prevHasDbId =
+                prev && !prev.id.startsWith("tmp-") && !prev.id.startsWith("ai-");
+              return (
+                <ChatMessage
+                  key={msg.id}
+                  msg={msg}
+                  streaming={streaming && i === messages.length - 1}
+                  onCopy={() => copyMessage(msg.id, msg.content)}
+                  copied={copiedId === msg.id}
+                  isEditing={editingMsgIdx === i}
+                  editValue={editDraft}
+                  onChangeEdit={setEditDraft}
+                  onSaveEdit={() => {
+                    const idx = editingMsgIdx;
+                    setEditingMsgIdx(null);
+                    if (idx !== null) editAndResend(idx, editDraft);
+                  }}
+                  onCancelEdit={() => setEditingMsgIdx(null)}
+                  onStartEdit={() => {
+                    setEditDraft(msg.content);
+                    setEditingMsgIdx(i);
+                  }}
+                  canEdit={msg.role === "user" && hasDbId && !streaming}
+                  canRegenerate={
+                    isLastAssistant &&
+                    hasDbId &&
+                    !!prev &&
+                    prev.role === "user" &&
+                    !!prevHasDbId &&
+                    !streaming
+                  }
+                  onRegenerate={regenerate}
+                />
+              );
+            })}
 
             {error && (
               <div className="flex justify-center">
@@ -645,21 +1094,56 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             <div ref={messagesEndRef} />
           </div>
 
+          {/* P1: 回到最新按钮 */}
+          {showScrollBottom && messages.length > 0 && (
+            <button
+              onClick={scrollToBottom}
+              className="absolute right-6 bottom-32 z-20 w-10 h-10 rounded-full bg-white shadow-[0_4px_16px_rgba(0,0,0,0.15)] border border-gray-200 flex items-center justify-center text-[#002FA7] hover:bg-[#002FA7] hover:text-white transition-all"
+              title="回到最新"
+              aria-label="回到最新"
+            >
+              <ArrowDown size={16} />
+            </button>
+          )}
+
           {/* Input area */}
           <div className="bg-white border-t border-gray-100 px-4 py-3">
             <div className="max-w-4xl mx-auto">
-              {/* Uploaded files preview */}
+              {/* Uploaded files preview — 带上传/解析状态角标 */}
               {uploadedFiles.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-2">
-                  {uploadedFiles.map((f, i) => (
-                    <div key={i} className="flex items-center gap-1.5 bg-[#f0f4ff] px-3 py-1.5 rounded-[8px] text-xs text-[#002FA7]">
-                      <FileText size={12} />
-                      <span className="max-w-[120px] truncate">{f.filename}</span>
-                      <button onClick={() => setUploadedFiles((prev) => prev.filter((_, j) => j !== i))} className="hover:text-red-500 ml-1">
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))}
+                  {uploadedFiles.map((f) => {
+                    const failed = f.status === "failed";
+                    return (
+                      <div
+                        key={f.uploadId}
+                        title={f.errorReason ?? f.filename}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs ${
+                          failed
+                            ? "bg-red-50 text-red-600 border border-red-200"
+                            : "bg-[#f0f4ff] text-[#002FA7]"
+                        }`}
+                      >
+                        <FileText size={12} />
+                        <span className="max-w-[120px] truncate">{f.filename}</span>
+                        {f.status === "uploading" ? (
+                          <Loader2 size={11} className="animate-spin" />
+                        ) : f.status === "ok" ? (
+                          <Check size={11} className="text-emerald-600" />
+                        ) : (
+                          <span className="text-amber-600">⚠</span>
+                        )}
+                        <button
+                          onClick={() =>
+                            setUploadedFiles((prev) => prev.filter((p) => p.uploadId !== f.uploadId))
+                          }
+                          className="hover:text-red-500 ml-1"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -667,11 +1151,12 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 <textarea
                   ref={textareaRef}
                   rows={1}
-                  placeholder={`向 ${agent?.name ?? agentCode} 发送消息…（Shift+Enter 换行，Enter 发送）`}
+                  placeholder={`向 ${agent?.name ?? agentCode} 发送消息…（Shift+Enter 换行，Enter 发送，可粘贴/拖拽图片）`}
                   className="w-full bg-transparent px-4 pt-3 pb-2 text-sm text-gray-900 placeholder:text-gray-400 resize-none focus:outline-none"
                   value={input}
                   onChange={(e) => { setInput(e.target.value); autoResize(); }}
                   onKeyDown={handleKeyDown}
+                  onPaste={onPaste}
                   disabled={streaming}
                 />
                 <div className="flex items-center justify-between px-3 pb-2.5">
@@ -694,7 +1179,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                     </button>
                   ) : (
                     <button
-                      onClick={handleSend}
+                      onClick={() => handleSend()}
                       disabled={!input.trim()}
                       className={`p-2 rounded-[10px] transition-all ${input.trim() ? "bg-[#002FA7] text-white hover:bg-[#1a47c0]" : "bg-gray-100 text-gray-400 cursor-not-allowed"}`}
                     >
