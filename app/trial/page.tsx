@@ -183,6 +183,11 @@ export default function TrialPage() {
   // 4.30 批次3：正在编辑的 user 消息 idx（按当前 body.messages 索引）+ 草稿
   const [editingMsgIdx, setEditingMsgIdx] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  // 4.30 批次4：拖拽态 / 聊天搜索 / 离底距离
+  const [dragOver, setDragOver] = useState(false);
+  const [chatSearch, setChatSearch] = useState("");
+  const [nearBottom, setNearBottom] = useState(true);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
 
   async function copyMessage(idx: number, content: string) {
     try {
@@ -270,6 +275,19 @@ export default function TrialPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages.length, activeBody.loadingMessages]);
+
+  // 4.30 批次4：监听消息容器滚动，决定是否显示"回到最新"按钮
+  useEffect(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setNearBottom(dist < 80);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [activeAgent, aState.activeChatId]);
 
   // ── textarea auto-resize ────────────────────────────────────────────
   useEffect(() => {
@@ -447,15 +465,21 @@ export default function TrialPage() {
     fileInputRef.current?.click();
   }
 
-  function onFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = "";
+  // 4.30 批次4：点击 + 拖拽共用上传入口
+  function handleFiles(files: File[]) {
+    if (!activeAgent || streaming) return;
     const room = 5 - pendingAttachments.length;
     if (room <= 0) {
       alert("最多 5 个附件");
       return;
     }
     files.slice(0, room).forEach(uploadOne);
+  }
+
+  function onFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    handleFiles(files);
   }
 
   function removePending(uploadId: string) {
@@ -1324,6 +1348,28 @@ export default function TrialPage() {
                   <X size={16} />
                 </button>
               </div>
+              {/* 4.30 批次4：聊天搜索框（仅有聊天时显示） */}
+              {aState.chats.length > 0 && (
+                <div className="px-3 pt-2 pb-1">
+                  <div className="relative">
+                    <input
+                      value={chatSearch}
+                      onChange={(e) => setChatSearch(e.target.value)}
+                      placeholder="搜索聊天标题…"
+                      className="w-full text-[12px] bg-gray-50 border border-gray-200 rounded-[8px] px-2.5 py-1.5 outline-none focus:border-[#002FA7] focus:bg-white transition-colors text-gray-700 placeholder:text-gray-400"
+                    />
+                    {chatSearch && (
+                      <button
+                        onClick={() => setChatSearch("")}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-gray-200 text-gray-400"
+                        title="清除"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="flex-1 overflow-y-auto px-2 py-2">
                 {aState.loadingChats ? (
                   <div className="py-8 flex justify-center">
@@ -1335,9 +1381,23 @@ export default function TrialPage() {
                     <br />
                     点击上方开始第一段对话
                   </div>
-                ) : (
+                ) : (() => {
+                  const q = chatSearch.trim().toLowerCase();
+                  const filtered = q
+                    ? aState.chats.filter((c) =>
+                        (c.title ?? "").toLowerCase().includes(q)
+                      )
+                    : aState.chats;
+                  if (filtered.length === 0) {
+                    return (
+                      <div className="py-8 text-center text-xs text-gray-400">
+                        没有匹配的聊天记录
+                      </div>
+                    );
+                  }
+                  return (
                   <div className="flex flex-col gap-3">
-                    {bucketChatsByTime(aState.chats).map((group) => (
+                    {bucketChatsByTime(filtered).map((group) => (
                       <div key={group.label}>
                         <p className="text-[10px] font-semibold text-gray-400 tracking-wider px-3 mb-1 uppercase">
                           {group.label}
@@ -1441,12 +1501,51 @@ export default function TrialPage() {
                       </div>
                     ))}
                   </div>
-                )}
+                  );
+                })()}
               </div>
             </aside>
 
             {/* 右侧对话面板 */}
-            <div className="flex-1 flex flex-col bg-white border border-gray-200 rounded-[20px] overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
+            <div
+              className={`relative flex-1 flex flex-col bg-white border rounded-[20px] overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.04)] ${
+                dragOver ? "border-[#002FA7]" : "border-gray-200"
+              }`}
+              onDragEnter={(e) => {
+                if (!activeAgent || streaming) return;
+                if (e.dataTransfer?.types?.includes("Files")) {
+                  e.preventDefault();
+                  setDragOver(true);
+                }
+              }}
+              onDragOver={(e) => {
+                if (!activeAgent || streaming) return;
+                if (e.dataTransfer?.types?.includes("Files")) {
+                  e.preventDefault();
+                  setDragOver(true);
+                }
+              }}
+              onDragLeave={(e) => {
+                // 离开整个面板时再清；子元素之间切换不清
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setDragOver(false);
+              }}
+              onDrop={(e) => {
+                if (!activeAgent || streaming) return;
+                e.preventDefault();
+                setDragOver(false);
+                const files = Array.from(e.dataTransfer?.files ?? []);
+                if (files.length > 0) handleFiles(files);
+              }}
+            >
+              {/* 4.30 批次4：拖拽提示遮罩 */}
+              {dragOver && (
+                <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#002FA7]/8 backdrop-blur-[1px] pointer-events-none rounded-[20px]">
+                  <div className="px-5 py-3 rounded-[14px] bg-white border-2 border-dashed border-[#002FA7] text-[#002FA7] text-[13px] font-medium shadow-lg">
+                    松开鼠标上传文件
+                  </div>
+                </div>
+              )}
               <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 bg-gray-50/40">
                 {/* 移动端汉堡 → 唤出聊天历史抽屉 */}
                 <button
@@ -1479,7 +1578,10 @@ export default function TrialPage() {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-3 bg-white">
+              <div
+                ref={messagesScrollRef}
+                className="relative flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-3 bg-white"
+              >
                 {activeBody.loadingMessages ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-center">
                     <Loader2 size={22} className="text-gray-400 animate-spin mb-3" />
@@ -1759,6 +1861,23 @@ export default function TrialPage() {
                 )}
                 <div ref={messagesEndRef} />
               </div>
+
+              {/* 4.30 批次4：回到最新按钮（离底 >80px 才显示） */}
+              {!nearBottom && (
+                <button
+                  onClick={() =>
+                    messagesEndRef.current?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "end",
+                    })
+                  }
+                  className="absolute bottom-24 right-6 z-20 w-9 h-9 rounded-full bg-white border border-gray-200 shadow-[0_4px_12px_rgba(0,0,0,0.08)] flex items-center justify-center text-gray-500 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors"
+                  title="回到最新"
+                  aria-label="回到最新"
+                >
+                  <ChevronRight size={16} className="rotate-90" />
+                </button>
+              )}
 
               <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/40">
                 {/* 待发送附件 chips */}
