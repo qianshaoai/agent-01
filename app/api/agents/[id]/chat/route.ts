@@ -311,9 +311,13 @@ export const POST = withRequestLog(async (
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
         "X-Conversation-Id": convId ?? "",
+        // 关键：告诉 nginx / 宝塔反代不要 buffering 这个 SSE 响应
+        // 否则 stream chunk 会被反代缓存到超时切断 → 前端 "网络错误"
+        // trial 路由 (app/api/trial/chat/route.ts) 早就加过这个 header
+        "X-Accel-Buffering": "no",
       },
     });
   } catch (e) {
