@@ -155,8 +155,9 @@ const ChatMessage = memo(function ChatMessage({
           ) : (
             <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
           )}
-          {/* 已停止徽章（仅最后一条 abort 的 assistant 显示） */}
-          {msg.aborted && (
+          {/* 已停止徽章 — 仅在 assistant 气泡上显示（用户消息标 aborted 是为了让历史
+              过滤生效，不该出现 UI 徽章） */}
+          {msg.aborted && isAssistant && (
             <div className="mt-2 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">
               <Square size={9} className="fill-gray-500 text-gray-500" />
               已停止
@@ -620,8 +621,10 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         );
         // 4.30up A 方案：延迟 800ms 拉 DB 拿本轮入库的 message id，
         // 调 PATCH /api/messages/[id] { aborted: true } 把它们标成中断态。
-        // chat 路由下次拉历史时 .eq("aborted", false) 自动过滤，bot 不会
-        // 把被中断的 turn 当上下文。前端仍然渲染这些消息 + 已停止徽章。
+        // chat 路由下次拉历史时 .eq("aborted", false) 自动过滤。
+        // ⚠ 这里**不**调 loadConversationMessages（会用 DB 内容覆盖客户端已经流到
+        //   一半的 partial 内容）。改为按 role 倒着把 DB id 贴回乐观气泡，
+        //   保留已流到的内容 + aborted 标记。
         if (activeConvId && sendStartedAtRef.current) {
           const cid = activeConvId;
           const sentAt = sendStartedAtRef.current;
@@ -631,7 +634,6 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               if (!r.ok) return;
               type RawMsg = { id: string; role: string; aborted?: boolean; created_at: string };
               const list = (await r.json()) as RawMsg[];
-              // 本轮新入库 = created_at >= sentAt（留 1s 兜底处理时钟漂移）
               const targets = list.filter(
                 (m) => !m.aborted && new Date(m.created_at).getTime() >= sentAt - 1000
               );
@@ -644,8 +646,36 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   })
                 )
               );
-              // 标完后再刷一次让前端用 DB aborted 状态显示
-              await loadConversationMessages(cid);
+              // 把 DB id 贴回最近 user / assistant 乐观气泡，保留内容
+              const userTarget = targets.find((t) => t.role === "user");
+              const asstTarget = targets.find((t) => t.role === "assistant");
+              setMessages((prev) => {
+                const next = [...prev];
+                let userPatched = !userTarget;
+                let asstPatched = !asstTarget;
+                for (let i = next.length - 1; i >= 0 && (!userPatched || !asstPatched); i--) {
+                  const m = next[i];
+                  if (
+                    !asstPatched &&
+                    m.role === "assistant" &&
+                    (m.id.startsWith("ai-") || m.id.startsWith("tmp-"))
+                  ) {
+                    next[i] = { ...m, id: asstTarget!.id, aborted: true };
+                    asstPatched = true;
+                    continue;
+                  }
+                  if (
+                    !userPatched &&
+                    m.role === "user" &&
+                    m.id.startsWith("tmp-")
+                  ) {
+                    // user 标 aborted 用于历史过滤，但 UI 徽章仅 assistant 显示
+                    next[i] = { ...m, id: userTarget!.id, aborted: true };
+                    userPatched = true;
+                  }
+                }
+                return next;
+              });
             } catch {}
           }, 800);
         }
