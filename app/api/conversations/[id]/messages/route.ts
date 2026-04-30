@@ -32,11 +32,24 @@ export async function GET(
 
   if (!conv) return NextResponse.json({ error: "会话不存在" }, { status: 404 });
 
-  const { data: messages } = await db
+  // 兜底：aborted 列是 migration_v22 才加的；如果生产库还没跑迁移，
+  // 带 aborted 的 select 会报错（PGRST204 / 42703），回退到不带 aborted 的查询。
+  let messages: unknown[] | null = null;
+  const first = await db
     .from("messages")
     .select("id, role, content, created_at, aborted")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
+  if (first.error) {
+    const fallback = await db
+      .from("messages")
+      .select("id, role, content, created_at")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: true });
+    messages = fallback.data ?? [];
+  } else {
+    messages = first.data ?? [];
+  }
 
-  return NextResponse.json(messages ?? []);
+  return NextResponse.json(messages);
 }
