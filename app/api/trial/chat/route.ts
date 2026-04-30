@@ -207,10 +207,13 @@ export async function POST(req: NextRequest) {
                 );
                 attachmentStatuses.push({ file_name: fileName, ok: true });
               } else {
-                // 提取失败：给 bot 明确指令，不要把 URL / 任何"假装看到了"的内容塞进去
-                // 让 bot 直接告诉用户文件读不了，禁止编造内容
+                // 提取失败：保持 [附件: ...] 标签格式（与成功路径一致），但内容是
+                // 强指令——告诉 bot 该附件读不了，禁止编造。注意不要带 URL，否则
+                // 部分平台会把 URL 当伪造内容来源。
+                // 元器对"[系统提示]"开头的块敏感（疑似 prompt-injection 检测会
+                // 直接 400），所以用 [附件: ...] 包起来更稳。
                 blocks.push(
-                  `[系统提示] 用户上传的附件「${fileName}」无法解析（文件可能已损坏或格式不支持）。请直接告知用户该附件读取失败，建议重新上传或检查文件格式，不要尝试推测或编造文件内容。`
+                  `[附件: ${fileName}（解析失败：文件可能已损坏或格式不支持。请直接回复用户：附件无法读取，建议重新上传或检查格式。请勿推测或编造文件内容。）]`
                 );
                 attachmentStatuses.push({
                   file_name: fileName,
