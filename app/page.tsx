@@ -17,6 +17,7 @@ import {
   Eye,
   Wrench,
   BookOpen,
+  ChevronRight,
 } from "lucide-react";
 import { WorkflowStepButton } from "@/components/workflow-step-button";
 import { AgentCard } from "@/components/agent-card";
@@ -435,30 +436,45 @@ export default function HomePage() {
                 <p className="text-xs text-gray-400 mt-1">请联系管理员配置工作流</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {workflows.map((wf) => (
                   <button
                     key={wf.id}
                     type="button"
                     onClick={() => selectWorkflow(wf.id)}
-                    className="group bg-white border border-gray-200 rounded-[20px] p-5 text-left shadow-[0_2px_10px_rgba(0,0,0,0.04)] hover:shadow-[0_8px_24px_rgba(0,47,167,0.12)] hover:-translate-y-0.5 hover:border-[#002FA7]/30 transition-all"
+                    className="group relative overflow-hidden bg-gradient-to-br from-[#001f7a] via-[#002FA7] to-[#3b5fff] rounded-[20px] p-6 transition-all duration-500 flex flex-col gap-4 cursor-pointer text-left hover:-translate-y-1 shadow-[0_4px_16px_rgba(0,47,167,0.2)] hover:shadow-[0_24px_60px_rgba(59,95,255,0.45)]"
                   >
-                    <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] mb-3">
-                      <GitBranch size={20} className="text-white" />
-                    </div>
-                    <p className="text-[15px] font-semibold text-gray-900 leading-snug truncate group-hover:text-[#002FA7] transition-colors">
-                      {wf.name}
-                    </p>
-                    {wf.description && (
-                      <p className="text-[13px] text-gray-500 mt-1.5 leading-relaxed line-clamp-2">
-                        {wf.description}
-                      </p>
-                    )}
-                    {wf.category && (
-                      <div className="mt-3 inline-flex items-center text-[11px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">
-                        {wf.category}
+                    {/* 多层光晕 + 高光（与体验版智能体卡同款） */}
+                    <div className="absolute -top-24 -right-20 w-56 h-56 rounded-full bg-[#6b87ff]/40 blur-[60px] pointer-events-none transition-all duration-500 group-hover:bg-[#a4b8ff]/55 group-hover:scale-110" />
+                    <div className="absolute -bottom-20 -left-16 w-48 h-48 rounded-full bg-[#3b5fff]/35 blur-[70px] pointer-events-none transition-all duration-500 group-hover:bg-[#6b87ff]/45" />
+                    <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent pointer-events-none" />
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/[0.08] via-transparent to-transparent pointer-events-none" />
+
+                    <div className="relative">
+                      <div className="w-12 h-12 rounded-[14px] flex items-center justify-center bg-white/15 border border-white/20 backdrop-blur shadow-[0_4px_16px_rgba(0,0,0,0.08)]">
+                        <GitBranch size={22} className="text-white" />
                       </div>
-                    )}
+                    </div>
+
+                    <div className="relative flex-1 min-h-0">
+                      <h3 className="text-[16px] font-semibold text-white mb-2 leading-snug">
+                        {wf.name}
+                      </h3>
+                      {wf.description && (
+                        <p className="text-[13px] text-white/75 leading-relaxed line-clamp-2">
+                          {wf.description}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="relative flex items-center justify-between pt-2 border-t border-white/15">
+                      <span className="inline-flex items-center text-[11px] px-2.5 py-1 rounded-full bg-white/15 text-white border border-white/20">
+                        {wf.category || "工作流"}
+                      </span>
+                      <div className="flex items-center gap-1 text-[12px] font-medium text-white group-hover:translate-x-1 transition-transform">
+                        查看流程 <ChevronRight size={14} />
+                      </div>
+                    </div>
                   </button>
                 ))}
               </div>
