@@ -36,7 +36,7 @@
 | `migration_v18.sql` | logs 表加高频查询索引 | ☐ |
 | `migration_v19.sql` | users / agents / conversations 一批高频查询索引 | ☐ |
 | `migration_v21.sql` | 删除用户复用账号字段（status='deleted' 的 username/phone 改墓碑值） | ☐ |
-| `migration_v22.sql` | **4.30up · A 方案** — `messages` 表加 `aborted` 列 + 部分索引 `idx_messages_conv_active`（仅索引未中断行）<br>chat 路由拉历史时 `.eq("aborted", false)` 过滤被中断的 turn | ☐ |
+| `migration_v22.sql` | **4.30up · A 方案** — `messages` 表加 `aborted` 列 + 部分索引 `idx_messages_conv_active`（仅索引未中断行）<br>chat 路由拉历史时 `.eq("aborted", false)` 过滤被中断的 turn | ✅ 2026-04-30 |
 
 > v20 跳号未使用。
 
