@@ -246,7 +246,51 @@ export const POST = withRequestLog(async (
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, conversationId: convId })}\n\n`));
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : "AI 调用失败";
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errMsg })}\n\n`));
+          // 4.30up：判断是否为 client abort——req.signal.aborted 为 true 即用户点了停止
+          // abort 时入库已累积的 partial assistant + 把 user 也标 aborted=true，
+          // 让"退出重进"后还能看到这条被中断的消息（带已停止徽章），同时下次 chat 历史
+          // 因 .eq("aborted", false) 自动过滤这一对，不污染 bot 上下文
+          const wasAborted = req.signal.aborted;
+          if (wasAborted && fullResponse) {
+            // 入库 partial assistant（可能 aborted 列没跑 v22 migration → 兜底重试一次不带 aborted）
+            const ins = await db.from("messages").insert({
+              conversation_id: convId,
+              role: "assistant",
+              content: fullResponse,
+              aborted: true,
+            });
+            if (ins.error) {
+              await db.from("messages").insert({
+                conversation_id: convId,
+                role: "assistant",
+                content: fullResponse,
+              });
+            }
+          }
+          if (wasAborted) {
+            // 把刚入库的最近一条 user 也标 aborted（line 192 入库时是默认 false）
+            const { data: lastUser } = await db
+              .from("messages")
+              .select("id")
+              .eq("conversation_id", convId)
+              .eq("role", "user")
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (lastUser) {
+              const upd = await db
+                .from("messages")
+                .update({ aborted: true })
+                .eq("id", lastUser.id);
+              if (upd.error) {
+                // migration_v22 还没跑：忽略，前端的 PATCH 兜底也会再试一次
+              }
+            }
+          }
+          // controller 可能已被 client 关闭，enqueue 会抛 — 包 try
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errMsg })}\n\n`));
+          } catch {}
 
           await db.from("logs").insert({
             user_phone: user.phone,
@@ -254,12 +298,12 @@ export const POST = withRequestLog(async (
             agent_code: agent.agent_code,
             agent_name: agent.name,
             action: "chat",
-            status: "error",
+            status: wasAborted ? "aborted" : "error",
             duration_ms: Date.now() - startTime,
             error_msg: errMsg,
           });
         } finally {
-          controller.close();
+          try { controller.close(); } catch {}
         }
       },
     });
