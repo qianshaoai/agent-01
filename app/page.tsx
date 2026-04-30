@@ -19,7 +19,8 @@ import {
   BookOpen,
 } from "lucide-react";
 import { WorkflowStepButton } from "@/components/workflow-step-button";
-import type { UserInfo, NoticeItem, WorkflowItem } from "@/lib/types";
+import { AgentCard } from "@/components/agent-card";
+import type { UserInfo, NoticeItem, WorkflowItem, AgentItem } from "@/lib/types";
 
 const LS_DISMISSED_KEY = "dismissed_notices_v1";
 
@@ -152,6 +153,31 @@ export default function HomePage() {
   const quota = user?.quota;
   const visibleNotices = notices.filter((n) => n.enabled && !dismissedNotices.has(n.id));
   const activeWorkflow = workflows.find((w) => w.id === activeWorkflowId) ?? null;
+
+  // 当前工作流绑定的智能体（按步骤顺序去重，仅取真正绑定到 step.agents 的）
+  // 注意：`/api/workflows` 嵌入的 agent 字段较薄（id/agent_code/name/agent_type/external_url），
+  // 没有 description / platform / categories，AgentCard 渲染时这些位置会留空。
+  // 阶段一不动后端，可接受；后续要补字段再扩接口。
+  const workflowAgents: AgentItem[] = (() => {
+    if (!activeWorkflow) return [];
+    const seen = new Set<string>();
+    const out: AgentItem[] = [];
+    for (const step of activeWorkflow.workflow_steps) {
+      const a = step.agents;
+      if (!a || seen.has(a.id)) continue;
+      seen.add(a.id);
+      out.push({
+        id: a.id,
+        agent_code: a.agent_code,
+        name: a.name,
+        description: "",
+        platform: "",
+        agent_type: a.agent_type,
+        external_url: a.external_url,
+      });
+    }
+    return out;
+  })();
 
   return (
     <div className="min-h-screen flex flex-col bg-[#f8f9fc]">
@@ -433,7 +459,8 @@ export default function HomePage() {
               </div>
             )
           ) : (
-            /* ── 主区：选中某条工作流 → 详情视图（步骤时间轴 + 智能体入口） ── */
+            /* ── 主区：选中某条工作流 → 详情 + 智能体展示 ───────────────── */
+            <>
             <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
               <div className="flex items-center gap-3.5 px-7 py-5 border-b border-gray-50">
                 <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] shrink-0">
@@ -560,6 +587,31 @@ export default function HomePage() {
                 )}
               </div>
             </div>
+
+            {/* 4.30up：智能体展示卡 — 仅本工作流绑定的智能体 */}
+            {activeWorkflow && workflowAgents.length > 0 && (
+              <div className="mt-6 bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] overflow-hidden">
+                <div className="flex items-center gap-3.5 px-7 py-5 border-b border-gray-50">
+                  <div className="w-11 h-11 rounded-[12px] bg-gradient-to-br from-[#002FA7] to-[#1a47c0] flex items-center justify-center shadow-[0_4px_12px_rgba(0,47,167,0.25)] shrink-0">
+                    <Bot size={22} className="text-white" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[18px] font-semibold text-gray-900 leading-tight">智能体展示</p>
+                    <p className="text-[13px] text-gray-500 mt-1">
+                      该工作流绑定的智能体，共 {workflowAgents.length} 个
+                    </p>
+                  </div>
+                </div>
+                <div className="p-5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {workflowAgents.map((agent) => (
+                      <AgentCard key={agent.agent_code} agent={agent} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            </>
           )}
         </main>
       </div>
