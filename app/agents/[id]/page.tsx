@@ -1096,29 +1096,29 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   }
 
   return (
-    <div className="h-screen flex flex-col bg-[#f8f9fc]">
-      {/* Top bar */}
-      <header className="bg-white border-b border-gray-100 shadow-[0_1px_4px_rgba(0,0,0,0.06)] z-30">
+    <div className="h-screen flex flex-col bg-gradient-to-br from-[#cdd9ff] via-[#dfe6ff] to-[#aebcff]">
+      {/* Top bar — 与用户端 header / admin sidebar 同源深蓝渐变 */}
+      <header className="bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-b border-white/10 shadow-[0_4px_20px_rgba(0,47,167,0.12)] z-30">
         <div className="h-14 px-4 flex items-center gap-3">
-          <Link href={backHref} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
+          <Link href={backHref} className="p-1.5 rounded-[8px] hover:bg-white/10 text-white/85 hover:text-white transition-colors">
             <ArrowLeft size={18} />
           </Link>
-          <button className="lg:hidden p-1.5 rounded-[8px] hover:bg-gray-100" onClick={() => setSidebarOpen(!sidebarOpen)}>
-            <Menu size={18} className="text-gray-600" />
+          <button className="lg:hidden p-1.5 rounded-[8px] hover:bg-white/10" onClick={() => setSidebarOpen(!sidebarOpen)}>
+            <Menu size={18} className="text-white/85" />
           </button>
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            <div className="w-8 h-8 rounded-[10px] bg-[#002FA7]/10 flex items-center justify-center shrink-0">
-              <Bot size={16} className="text-[#002FA7]" />
+            <div className="w-8 h-8 rounded-[10px] bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+              <Bot size={16} className="text-white" />
             </div>
-            <span className="font-semibold text-gray-900 text-sm truncate">
+            <span className="font-semibold text-white text-sm truncate">
               {agent?.name ?? agentCode}
             </span>
           </div>
           {quota && (
-            <div className="flex items-center gap-1.5 shrink-0">
-              <Zap size={13} className="text-amber-500" />
-              <span className="text-xs text-gray-500">剩余 {quota.left} 次</span>
-              <span className="hidden sm:inline text-xs text-gray-400">· 至 {quota.expiresAt}</span>
+            <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-[10px] bg-white/10">
+              <Zap size={13} className="text-amber-300" />
+              <span className="text-xs text-white/85">剩余 {quota.left} 次</span>
+              <span className="hidden sm:inline text-xs text-white/55">· 至 {quota.expiresAt}</span>
             </div>
           )}
         </div>
@@ -1242,7 +1242,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           onDragLeave={onDragLeave}
           onDrop={onDrop}
         >
-          <div ref={messageScrollRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-6 relative">
+          <div ref={messageScrollRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-6 relative bg-[#f8f9fc]">
             {/* P1: 拖拽上传遮罩 — 仅覆盖消息滚动区，**不**遮挡下方输入区，
                 避免遮罩万一卡住时挡到 paperclip */}
             {dragOver && (
@@ -1366,7 +1366,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 </div>
               )}
 
-              <div className="bg-[#f8f9fc] rounded-[16px] border border-gray-200 focus-within:border-[#002FA7] focus-within:ring-2 focus-within:ring-[#002FA7]/10 transition-all">
+              <div className="bg-white rounded-[16px] border border-gray-200 focus-within:border-[#002FA7] focus-within:ring-2 focus-within:ring-[#002FA7]/10 transition-all">
                 <textarea
                   ref={textareaRef}
                   rows={1}
