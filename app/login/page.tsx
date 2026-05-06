@@ -1,6 +1,5 @@
 "use client";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { FirstLoginModal } from "@/components/ui/first-login-modal";
 import { Eye, EyeOff, Phone, Lock } from "lucide-react";
@@ -8,7 +7,6 @@ import { Eye, EyeOff, Phone, Lock } from "lucide-react";
 const LS_LOGIN_KEY = "login_remember_v1";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [show, setShow] = useState(false);
   const [form, setForm] = useState({ identifier: "", password: "" });
   const [error, setError] = useState("");
@@ -50,16 +48,17 @@ export default function LoginPage() {
         localStorage.setItem(LS_LOGIN_KEY, JSON.stringify({ identifier: form.identifier }));
       } catch {}
       // 体验账号优先跳 /trial，绕开首次改密弹窗（DB 也已预置 first_login=false 兜底）
+      // ⚠ 登录成功必须整页跳转（window.location.href）而非 router.push 软导航：
+      //    软导航会复用 React 状态 / 浏览器对 /api/me 的缓存，导致连续切换账号时
+      //    新登录的人看到的还是上一个账号的数据
       if (data.userType === "trial") {
-        router.push("/trial");
-        router.refresh();
+        window.location.href = "/trial";
         return;
       }
       if (data.firstLogin) {
         setShowFirstLogin(true);
       } else {
-        router.push("/");
-        router.refresh();
+        window.location.href = "/";
       }
     } catch {
       setError("网络错误，请重试");
@@ -71,7 +70,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-[#f0f4ff] via-white to-[#f8f9ff]">
       {showFirstLogin && (
-        <FirstLoginModal onClose={() => { setShowFirstLogin(false); router.push("/"); router.refresh(); }} />
+        <FirstLoginModal onClose={() => { setShowFirstLogin(false); window.location.href = "/"; }} />
       )}
 
       <div className="flex items-center justify-between px-6 py-4">
