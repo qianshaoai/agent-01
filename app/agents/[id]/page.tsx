@@ -237,7 +237,10 @@ import {
   ArrowDown,
   Loader2,
   RotateCcw,
+  Download,
+  FileType,
 } from "lucide-react";
+import { exportConversation, triggerDownload } from "@/lib/export-conversation";
 
 /** 把会话列表按时间桶分组：今天 / 昨天 / 7 天内 / 更早 */
 function bucketConversationsByTime(convs: Conversation[]): { label: string; items: Conversation[] }[] {
@@ -372,6 +375,20 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   // P1: 拖拽上传 hover 提示
   const [dragOver, setDragOver] = useState(false);
+  // 5.6up · 多格式导出 popover + 进度
+  const [exportPopoverOpen, setExportPopoverOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<"markdown" | "docx" | null>(null);
+  const [exportProgressText, setExportProgressText] = useState<string | null>(null);
+
+  // popover · Esc 关闭
+  useEffect(() => {
+    if (!exportPopoverOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExportPopoverOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [exportPopoverOpen]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
@@ -482,6 +499,114 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     setMessages([]);
     setUploadedFiles([]);
   }
+
+  // 5.6up · 对话导出（多格式 markdown / docx）
+  // 调 lib/export-conversation.ts service；docx 走 dynamic import 独立 chunk
+  async function doExport(format: "markdown" | "docx") {
+    if (streaming || activeConvId === null) return;
+    const realMsgs = messages.filter((m) => !m.id.startsWith("greeting-"));
+    if (realMsgs.length === 0) return;
+    if (exportingFormat) return; // 防重复
+
+    setExportingFormat(format);
+    setExportProgressText(format === "docx" ? "正在准备…" : null);
+    setExportPopoverOpen(false);
+
+    try {
+      const conv = conversations.find((c) => c.id === activeConvId);
+      const result = await exportConversation(
+        format,
+        {
+          agentName: agent?.name ?? agentCode,
+          agentCode,
+          conversationTitle: conv?.title ?? "对话",
+          messages: realMsgs.map((m) => ({
+            id: m.id,
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: m.content,
+            createdAt: m.createdAt,
+            aborted: m.aborted,
+            attachedFiles: m.attachedFiles,
+            attachedImages: m.attachedImages,
+          })),
+        },
+        (stage) => setExportProgressText(stage)
+      );
+      triggerDownload(result.blob, result.filename);
+      if (result.partialFailures.length > 0) {
+        setError(
+          `导出完成，但 ${result.partialFailures.length} 张图片嵌入失败已降级为链接`
+        );
+      }
+    } catch (e) {
+      setError(e instanceof Error ? `导出失败：${e.message}` : "导出失败");
+    } finally {
+      setExportingFormat(null);
+      setExportProgressText(null);
+    }
+  }
+
+  // 进入新对话空白态时拉 bot 在平台后台配置的开场白（prologue），渲染为
+  // 第一条 assistant 消息（仅前端展示，不入库、不扣配额）。
+  // 用 sessionStorage 缓存 30min，避免来回切对话频繁打 Coze。
+  useEffect(() => {
+    if (activeConvId !== null) return;
+    if (messages.length > 0) return;
+
+    const cacheKey = `agent_greeting:${agentCode}`;
+    let cancelled = false;
+
+    (async () => {
+      let prologue: string | null = null;
+
+      try {
+        const cached = sessionStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached) as { ts: number; value: string };
+          if (Date.now() - parsed.ts < 30 * 60 * 1000) prologue = parsed.value;
+        }
+      } catch {}
+
+      if (!prologue) {
+        try {
+          const res = await fetch(
+            `/api/agents/${encodeURIComponent(agentCode)}/greeting`
+          );
+          if (res.ok) {
+            const d = (await res.json()) as { prologue: string | null };
+            prologue = d.prologue;
+            if (prologue) {
+              try {
+                sessionStorage.setItem(
+                  cacheKey,
+                  JSON.stringify({ ts: Date.now(), value: prologue })
+                );
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+
+      if (cancelled || !prologue) return;
+      // 二次校验：拉的过程中用户可能已经发了消息或切换了对话
+      setMessages((cur) =>
+        cur.length === 0
+          ? [
+              {
+                id: `greeting-${agentCode}`,
+                role: "assistant",
+                content: prologue!,
+                createdAt: "",
+              },
+            ]
+          : cur
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agentCode, activeConvId, messages.length]);
 
   async function selectConversation(convId: string) {
     setActiveConvId(convId);
@@ -1114,6 +1239,85 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               {agent?.name ?? agentCode}
             </span>
           </div>
+          {/* 5.6up · 导出当前对话（多格式 popover）
+              disable 条件：流式中 / 无真实会话 ID / 真实消息为空 / 正在导出 */}
+          {(() => {
+            const realMsgCount = messages.filter(
+              (m) => !m.id.startsWith("greeting-")
+            ).length;
+            const exportable =
+              !streaming &&
+              activeConvId !== null &&
+              realMsgCount > 0 &&
+              !exportingFormat;
+            return (
+              <div className="relative shrink-0">
+                <button
+                  onClick={() => exportable && setExportPopoverOpen((v) => !v)}
+                  disabled={!exportable}
+                  title={
+                    streaming
+                      ? "流式中无法导出，请等结束"
+                      : !activeConvId
+                      ? "新对话尚未保存，发送消息后可导出"
+                      : exportingFormat
+                      ? exportProgressText ?? "正在导出…"
+                      : exportable
+                      ? "导出当前对话"
+                      : "无对话可导出"
+                  }
+                  aria-label="导出对话"
+                  aria-haspopup="menu"
+                  aria-expanded={exportPopoverOpen}
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-[10px] text-xs font-medium text-white bg-white/15 border border-white/25 hover:bg-white/25 hover:border-white/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {exportingFormat ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Download size={13} />
+                  )}
+                  <span className="hidden sm:inline">
+                    {exportingFormat
+                      ? exportProgressText ?? "导出中…"
+                      : "对话导出"}
+                  </span>
+                </button>
+
+                {exportPopoverOpen && (
+                  <>
+                    {/* 点外面关闭 */}
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setExportPopoverOpen(false)}
+                    />
+                    <div
+                      role="menu"
+                      className="absolute right-0 top-full mt-1.5 z-50 w-[180px] max-w-[240px] bg-white rounded-[12px] border border-gray-200 shadow-[0_8px_24px_rgba(0,0,0,0.12)] py-1.5 overflow-hidden"
+                    >
+                      <button
+                        role="menuitem"
+                        onClick={() => doExport("markdown")}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        <Download size={14} className="text-gray-400" />
+                        <span className="flex-1 text-left">Markdown</span>
+                        <span className="text-[11px] text-gray-400">.md</span>
+                      </button>
+                      <button
+                        role="menuitem"
+                        onClick={() => doExport("docx")}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        <FileType size={14} className="text-gray-400" />
+                        <span className="flex-1 text-left">Word</span>
+                        <span className="text-[11px] text-gray-400">.docx</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           {quota && (
             <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-[10px] bg-white/10">
               <Zap size={13} className="text-amber-300" />
