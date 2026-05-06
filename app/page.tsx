@@ -233,9 +233,6 @@ export default function HomePage() {
                 <p className="text-[18px] font-bold text-white leading-tight tracking-tight">
                   {siteSettings.platform_name || "AI 智能体平台"}
                 </p>
-                <p className="text-[12px] text-white/55 mt-0.5 leading-none">
-                  AI-Powered Collaboration Platform
-                </p>
               </div>
             </div>
           </div>
