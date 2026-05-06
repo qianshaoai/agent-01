@@ -9,12 +9,30 @@ const ALLOWED_TYPES: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
   "application/msword": "doc",
   "text/plain": "txt",
+  "text/markdown": "md",
+  "text/x-markdown": "md",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
   "text/csv": "csv",
   "image/jpeg": "jpg",
   "image/png": "png",
   "image/webp": "webp",
+};
+
+// MIME 查不到时按扩展名兜底（浏览器对 .md / 部分 .txt 经常给空 MIME）
+const EXT_TO_TYPE: Record<string, string> = {
+  pdf: "pdf",
+  docx: "docx",
+  doc: "doc",
+  xlsx: "xlsx",
+  pptx: "pptx",
+  txt: "txt",
+  md: "md",
+  csv: "csv",
+  jpg: "jpg",
+  jpeg: "jpg",
+  png: "png",
+  webp: "webp",
 };
 
 const MAX_SIZE = 20 * 1024 * 1024; // 20MB
@@ -34,6 +52,7 @@ function verifyMagicBytes(buffer: Buffer, declaredType: string): boolean {
     case "pptx": return hex.startsWith("504B0304") || hex.startsWith("504B0506") || hex.startsWith("504B0708"); // ZIP (OOXML 是 zip 包)
     case "doc":  return hex.startsWith("D0CF11E0A1B11AE1"); // OLE2 Compound
     case "txt":
+    case "md":
     case "csv":  return true; // 纯文本没固定头，跳过
     default:     return false;
   }
@@ -54,10 +73,15 @@ export const POST = withRequestLog(async (req: NextRequest) => {
     return NextResponse.json({ error: "文件不能超过 20MB" }, { status: 400 });
   }
 
-  const fileType = ALLOWED_TYPES[file.type];
+  // 先按 MIME 查；查不到（浏览器给空 / 非标准 MIME）按扩展名兜底
+  let fileType = ALLOWED_TYPES[file.type] ?? "";
+  if (!fileType) {
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    fileType = EXT_TO_TYPE[ext] ?? "";
+  }
   if (!fileType) {
     return NextResponse.json(
-      { error: "不支持的文件格式，请上传 PDF/Word/PPT/TXT/Excel/图片" },
+      { error: "不支持的文件格式，请上传 PDF/Word/PPT/TXT/MD/Excel/图片" },
       { status: 400 }
     );
   }
@@ -101,7 +125,7 @@ export const POST = withRequestLog(async (req: NextRequest) => {
 
     // 提取文本
     let extractedText = "";
-    if (fileType === "txt" || fileType === "csv") {
+    if (fileType === "txt" || fileType === "csv" || fileType === "md") {
       // 编码检测：BOM → UTF-8 试解 → 回退 GBK
       let textContent: string;
       if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {

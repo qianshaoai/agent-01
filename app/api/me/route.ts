@@ -13,6 +13,7 @@ export async function GET() {
   }
 
   let quota = null;
+  let tenantNameFromDb: string | null = null;
   if (!user.isPersonal) {
     const { data } = await db
       .from("tenants")
@@ -20,6 +21,7 @@ export async function GET() {
       .eq("code", user.tenantCode)
       .single();
     quota = data;
+    tenantNameFromDb = data?.name ?? null;
   }
 
   return NextResponse.json({
@@ -27,7 +29,8 @@ export async function GET() {
     phone: user.phone,
     nickname: user.nickname,
     tenantCode: user.tenantCode,
-    tenantName: user.tenantName,
+    // 优先用 tenants 表里的最新 name，旧 JWT 里的 tenantName 可能是 code 兜底（历史 bug）
+    tenantName: tenantNameFromDb || user.tenantName,
     isPersonal: user.isPersonal,
     role: user.role,
     userType: user.userType,

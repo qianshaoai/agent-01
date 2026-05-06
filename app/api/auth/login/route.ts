@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
     clearLoginFail(rateKey);
 
     // 若是组织用户，校验组织是否仍有效
+    let tenantNameFromDb: string | null = null;
     if (user.tenant_code !== "PERSONAL") {
       const { data: tenant } = await db
         .from("tenants")
@@ -83,11 +84,15 @@ export async function POST(req: NextRequest) {
       if (new Date(tenant.expires_at) < new Date()) {
         return NextResponse.json({ error: "所属组织已到期，请联系管理员" }, { status: 401 });
       }
+      tenantNameFromDb = tenant.name ?? null;
     }
 
     await db.from("users").update({ last_login_at: new Date().toISOString() }).eq("id", user.id);
 
-    const tenantName = user.tenant_code === "PERSONAL" ? "个人空间" : user.tenant_code;
+    const tenantName =
+      user.tenant_code === "PERSONAL"
+        ? "个人空间"
+        : tenantNameFromDb || user.tenant_code; // tenants.name 兜底用 code
     const token = await signToken({
       type: "user",
       userId: user.id,
