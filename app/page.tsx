@@ -1,7 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { mockNotices } from "@/lib/mock-data";
+import { getFontSize, setFontSize, type FontSize } from "@/lib/font-size";
 import {
   LogOut,
   Settings,
@@ -18,6 +20,8 @@ import {
   Wrench,
   BookOpen,
   ChevronRight,
+  Type,
+  Check,
 } from "lucide-react";
 import { WorkflowStepButton } from "@/components/workflow-step-button";
 import { AgentCard } from "@/components/agent-card";
@@ -43,6 +47,26 @@ function saveDismissed(set: Set<string>) {
 export default function HomePage() {
   const [contactOpen, setContactOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // 字体大小快捷入口（与 settings 页同步，读写同一 localStorage）
+  const pathname = usePathname();
+  const [fontPopoverOpen, setFontPopoverOpen] = useState(false);
+  const [fontSize, setFontSizeState] = useState<FontSize>("small");
+  useEffect(() => {
+    setFontSizeState(getFontSize());
+  }, []);
+  useEffect(() => {
+    if (!fontPopoverOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFontPopoverOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fontPopoverOpen]);
+  function changeFontSize(size: FontSize) {
+    setFontSizeState(size);
+    setFontSize(size, pathname);
+    setFontPopoverOpen(false);
+  }
   const [user, setUser] = useState<UserInfo | null>(null);
   const [notices, setNotices] = useState<NoticeItem[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
@@ -280,6 +304,58 @@ export default function HomePage() {
             )}
 
             <div className="flex items-center gap-1 ml-1">
+              {/* 字体大小快捷入口 */}
+              <div className="relative">
+                <button
+                  onClick={() => setFontPopoverOpen((v) => !v)}
+                  className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-white/10 text-white/85 hover:text-white transition-colors"
+                  title="字体大小"
+                  aria-label="字体大小"
+                  aria-haspopup="menu"
+                  aria-expanded={fontPopoverOpen}
+                >
+                  <Type size={20} />
+                </button>
+                {fontPopoverOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setFontPopoverOpen(false)}
+                    />
+                    <div
+                      role="menu"
+                      className="absolute right-0 top-full mt-1.5 z-50 w-[160px] bg-white rounded-[12px] border border-gray-200 shadow-[0_8px_24px_rgba(0,0,0,0.12)] py-1.5 overflow-hidden"
+                    >
+                      <p className="px-3 pt-1.5 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                        字体大小
+                      </p>
+                      {(
+                        [
+                          { value: "small" as const, label: "小" },
+                          { value: "medium" as const, label: "中" },
+                          { value: "large" as const, label: "大" },
+                        ]
+                      ).map((opt) => (
+                        <button
+                          key={opt.value}
+                          role="menuitem"
+                          onClick={() => changeFontSize(opt.value)}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-gray-50 ${
+                            fontSize === opt.value
+                              ? "text-[#002FA7] font-medium"
+                              : "text-gray-700"
+                          }`}
+                        >
+                          <span className="flex-1 text-left">{opt.label}</span>
+                          {fontSize === opt.value && (
+                            <Check size={14} className="text-[#002FA7]" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
               {siteSettings.help_doc_url && (
                 <a
                   href={siteSettings.help_doc_url}
