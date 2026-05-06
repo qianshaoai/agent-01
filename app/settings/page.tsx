@@ -1,7 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, User, Lock, Building2, Zap, Calendar, CheckCircle2, Edit3, AlertTriangle } from "lucide-react";
+import { ArrowLeft, User, Lock, Building2, Zap, Calendar, CheckCircle2, Edit3, AlertTriangle, Type } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { getFontSize, setFontSize, type FontSize } from "@/lib/font-size";
 
 type UserInfo = {
   userId: string;
@@ -42,6 +44,17 @@ export default function SettingsPage() {
   const [cancelPwd, setCancelPwd] = useState("");
   const [cancelError, setCancelError] = useState("");
   const [cancelLoading, setCancelLoading] = useState(false);
+
+  // 5.6up · 字体大小偏好
+  const pathname = usePathname();
+  const [fontSize, setFontSizeState] = useState<FontSize>("medium");
+  useEffect(() => {
+    setFontSizeState(getFontSize());
+  }, []);
+  function changeFontSize(size: FontSize) {
+    setFontSizeState(size);
+    setFontSize(size, pathname);
+  }
 
   useEffect(() => {
     fetch("/api/me").then(async (r) => {
@@ -247,6 +260,38 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+
+        {/* ── 显示偏好（5.6up） ─────────────────────────── */}
+        <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
+          <h2 className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2">
+            <Type size={15} className="text-[#002FA7]" /> 显示偏好
+          </h2>
+          <p className="text-xs text-gray-400 mb-4">即时生效，仅本设备记住；会与浏览器自带缩放叠加</p>
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500">字体大小</p>
+            <div className="inline-flex p-1 bg-gray-100 rounded-[12px]">
+              {(
+                [
+                  { value: "small" as const, label: "小" },
+                  { value: "medium" as const, label: "中" },
+                  { value: "large" as const, label: "大" },
+                ]
+              ).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => changeFontSize(opt.value)}
+                  className={`px-5 py-1.5 rounded-[10px] text-sm font-medium transition-all ${
+                    fontSize === opt.value
+                      ? "bg-white text-[#002FA7] shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
 
         {/* ── 修改密码 ─────────────────────────────────── */}
         <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
