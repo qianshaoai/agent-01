@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH } from "@/lib/config";
+import { db } from "@/lib/db";
 
 // JWT_SECRET 必须在环境变量中配置，缺失时立即报错防止使用不安全的默认值
 const JWT_SECRET_RAW = process.env.JWT_SECRET;
@@ -33,6 +34,8 @@ export type UserPayload = {
   isPersonal: boolean;
   role: "super_admin" | "system_admin" | "org_admin" | "user";
   userType: "personal" | "organization" | "trial";
+  /** JWT iat（jose 解出来自带，类型显式声明便于 validateTokenFreshness 使用） */
+  iat?: number;
 };
 
 export type AdminRole = "super_admin" | "system_admin" | "org_admin";
@@ -43,6 +46,8 @@ export type AdminPayload = {
   username: string;
   role: AdminRole;
   tenantCode?: string | null;  // 组织管理员关联的组织码
+  /** JWT iat（同上） */
+  iat?: number;
 };
 
 export type TokenPayload = UserPayload | AdminPayload;
@@ -99,6 +104,55 @@ export async function verifyToken(token: string): Promise<TokenPayload | null> {
   }
 }
 
+// ─── Token 新鲜度校验 (5.6up · 强制重登机制) ────────────────────────────────
+//
+// 用于"修改用户所属组织"等需要立即让某个登录态失效的场景。
+// 流程：admin 触发后端写 users.force_relogin_at = NOW()，所有该用户已签发的 token
+// 由于 iat < force_relogin_at 会被本函数判为失效，下一次任何请求中间件 / 业务接口
+// 都会清 cookie + 重定向登录。
+//
+// 返回 true = token 仍新鲜可用；false = 已被强制失效（应清 cookie + 重定向）。
+
+/** 用户 token 新鲜度校验 */
+export async function validateUserTokenFreshness(
+  payload: UserPayload
+): Promise<boolean> {
+  if (!payload.iat) return true; // 无 iat 字段（极少见）→ 不阻塞
+  try {
+    const { data } = await db
+      .from("users")
+      .select("force_relogin_at")
+      .eq("id", payload.userId)
+      .single();
+    if (!data || !data.force_relogin_at) return true;
+    const tokenIatMs = payload.iat * 1000;
+    const forceAtMs = new Date(data.force_relogin_at).getTime();
+    return tokenIatMs >= forceAtMs;
+  } catch {
+    return true; // DB 查询失败时不阻塞业务，宁可放行
+  }
+}
+
+/** Admin token 新鲜度校验（同样机制，对应 admins.force_relogin_at） */
+export async function validateAdminTokenFreshness(
+  payload: AdminPayload
+): Promise<boolean> {
+  if (!payload.iat) return true;
+  try {
+    const { data } = await db
+      .from("admins")
+      .select("force_relogin_at")
+      .eq("id", payload.adminId)
+      .single();
+    if (!data || !data.force_relogin_at) return true;
+    const tokenIatMs = payload.iat * 1000;
+    const forceAtMs = new Date(data.force_relogin_at).getTime();
+    return tokenIatMs >= forceAtMs;
+  } catch {
+    return true;
+  }
+}
+
 // ─── Get current user from cookies (Server Component / API Route) ───────────
 
 export async function getCurrentUser(): Promise<UserPayload | null> {
@@ -107,6 +161,9 @@ export async function getCurrentUser(): Promise<UserPayload | null> {
   if (!token) return null;
   const payload = await verifyToken(token);
   if (!payload || payload.type !== "user") return null;
+  // 强制重登检查
+  const fresh = await validateUserTokenFreshness(payload);
+  if (!fresh) return null;
   return payload;
 }
 
@@ -116,6 +173,8 @@ export async function getCurrentAdmin(): Promise<AdminPayload | null> {
   if (!token) return null;
   const payload = await verifyToken(token);
   if (!payload || payload.type !== "admin") return null;
+  const fresh = await validateAdminTokenFreshness(payload);
+  if (!fresh) return null;
   return payload;
 }
 

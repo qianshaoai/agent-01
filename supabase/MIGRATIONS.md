@@ -37,6 +37,7 @@
 | `migration_v19.sql` | users / agents / conversations 一批高频查询索引 | ☐ |
 | `migration_v21.sql` | 删除用户复用账号字段（status='deleted' 的 username/phone 改墓碑值） | ☐ |
 | `migration_v22.sql` | **4.30up · A 方案** — `messages` 表加 `aborted` 列 + 部分索引 `idx_messages_conv_active`（仅索引未中断行）<br>chat 路由拉历史时 `.eq("aborted", false)` 过滤被中断的 turn | ✅ 2026-04-30 |
+| `migration_v24.sql` | **5.6up** — 后台修改用户所属组织。`users` 加 `force_relogin_at TIMESTAMPTZ`；新增 RPC `change_user_tenant(user_id, new_tenant_code)` 单事务做完：改 users（含 user_type/role/dept_id/team_id 同步）+ 清理跨组织分组成员 + 追溯改 logs.tenant_code + 写一条 audit 事件<br>v23 编号已被"组织码可改"草案占名（已搁置），故跳号到 v24 | ✅ 2026-05-06 |
 
 > v20 跳号未使用。
 

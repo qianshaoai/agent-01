@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { useDebounce } from "@/lib/use-debounce";
-import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus, Eye, Bell } from "lucide-react";
+import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus, Eye, Bell, Building2 } from "lucide-react";
 
 type UserRow = {
   id: string;
@@ -121,6 +121,12 @@ export default function AdminUsersPage() {
   const [selectedTeam, setSelectedTeam] = useState("");
   const [deptSaving, setDeptSaving] = useState(false);
 
+  // 5.6up · 修改所属组织弹窗
+  const [tenantTarget, setTenantTarget] = useState<UserRow | null>(null);
+  const [newTenantCode, setNewTenantCode] = useState("");
+  const [tenantSaving, setTenantSaving] = useState(false);
+  const [tenantError, setTenantError] = useState("");
+
   // 用户详情抽屉
   const [detailUser, setDetailUser] = useState<UserRow | null>(null);
   const [detailVisibility, setDetailVisibility] = useState<{
@@ -197,6 +203,22 @@ export default function AdminUsersPage() {
     const actorRank = ROLE_RANK[adminMeta.role] ?? 99;
     const targetRank = ROLE_RANK[u.role] ?? 99;
     return targetRank > actorRank;
+  }
+
+  // 5.6up · 是否可修改该用户的所属组织
+  // - org_admin / user：一律不可
+  // - system_admin：只能改 org_admin / user，不可改 super_admin / system_admin
+  // - super_admin：任意
+  function canChangeTenant(u: UserRow): boolean {
+    if (!adminMeta) return false;
+    if (u.status === "deleted") return false;
+    if (adminMeta.role === "org_admin") return false;
+    if (adminMeta.role === "super_admin") return true;
+    if (adminMeta.role === "system_admin") {
+      // 严格低于 system_admin（不能改 super / 同级 system）
+      return u.role === "org_admin" || u.role === "user";
+    }
+    return false;
   }
 
   // 根据当前管理员等级筛选可分配的角色选项
@@ -293,6 +315,67 @@ export default function AdminUsersPage() {
 
   function openRoleModal(u: UserRow) {
     setRoleTarget(u); setNewRole(u.role);
+  }
+
+  // 5.6up · 修改所属组织
+  function openTenantModal(u: UserRow) {
+    setTenantTarget(u);
+    setNewTenantCode(u.tenant_code);
+    setTenantError("");
+  }
+  function closeTenantModal() {
+    setTenantTarget(null);
+    setNewTenantCode("");
+    setTenantError("");
+  }
+  async function doSetTenant() {
+    if (!tenantTarget || !newTenantCode) return;
+    if (newTenantCode === tenantTarget.tenant_code) {
+      setTenantError("新组织与当前一致，无需修改");
+      return;
+    }
+    const oldLabel =
+      tenantTarget.tenant_code === "PERSONAL"
+        ? "个人"
+        : `${tenants.find(t => t.code === tenantTarget.tenant_code)?.name ?? ""}（${tenantTarget.tenant_code}）`;
+    const newLabel =
+      newTenantCode === "PERSONAL"
+        ? "个人"
+        : `${tenants.find(t => t.code === newTenantCode)?.name ?? ""}（${newTenantCode}）`;
+    if (
+      !confirm(
+        `确认把用户 ${tenantTarget.nickname || tenantTarget.phone} 从 ${oldLabel} 转入 ${newLabel}？\n` +
+          `此操作会：\n` +
+          `1) 切换该用户的所属组织和配额来源\n` +
+          `2) 历史日志的归属一并迁移到新组织\n` +
+          `3) 该用户当前登录态会失效，必须重新登录\n` +
+          (tenantTarget.role === "org_admin"
+            ? `4) 该用户角色将从「组织管理员」自动降级为「普通用户」\n`
+            : "")
+      )
+    ) {
+      return;
+    }
+    setTenantSaving(true);
+    setTenantError("");
+    try {
+      const res = await fetch(`/api/admin/users/${tenantTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-tenant", tenantCode: newTenantCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTenantError(data.error ?? "操作失败");
+        return;
+      }
+      closeTenantModal();
+      setDetailUser(null);
+      fetchUsers(page);
+      toast(`用户已转入 ${newLabel}，下次访问将被强制重登`);
+    } finally {
+      setTenantSaving(false);
+    }
   }
 
   async function openDeptModal(u: UserRow) {
@@ -997,6 +1080,71 @@ export default function AdminUsersPage() {
         </div>
       )}
 
+      {/* ── 5.6up · 修改所属组织弹窗 ──────────────────────────── */}
+      {tenantTarget && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={closeTenantModal}>
+          <div className="bg-white rounded-[16px] shadow-2xl w-full max-w-[480px]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Building2 size={16} className="text-[#002FA7]" /> 修改所属组织
+              </h2>
+              <button onClick={closeTenantModal} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-500">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-gray-50 rounded-[10px] p-3 text-sm">
+                <p className="text-gray-500 mb-1">用户</p>
+                <p className="font-medium text-gray-900">{tenantTarget.nickname || tenantTarget.phone}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{tenantTarget.phone}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">所属组织</label>
+                <select
+                  value={newTenantCode}
+                  onChange={(e) => { setNewTenantCode(e.target.value); setTenantError(""); }}
+                  className="w-full h-10 px-3 rounded-[10px] border border-gray-200 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
+                >
+                  <option value="PERSONAL">个人空间（PERSONAL）</option>
+                  {tenants.map(t => (
+                    <option key={t.code} value={t.code}>{t.name}（{t.code}）</option>
+                  ))}
+                </select>
+                <p className="mt-2 text-[11px] text-gray-400">
+                  当前：{tenantTarget.tenant_code === "PERSONAL"
+                    ? "个人空间"
+                    : `${tenants.find(t => t.code === tenantTarget.tenant_code)?.name ?? ""}（${tenantTarget.tenant_code}）`}
+                </p>
+              </div>
+              <div className="bg-amber-50 border border-amber-100 rounded-[10px] px-3 py-2.5 text-[12px] text-amber-700 leading-relaxed">
+                <p className="font-medium mb-1">⚠ 注意事项</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>切换组织和配额来源</li>
+                  <li>历史日志归属一并迁移到新组织</li>
+                  <li>该用户当前登录态会失效，必须重新登录</li>
+                  {tenantTarget.role === "org_admin" && (
+                    <li className="font-medium text-red-600">该用户当前角色为「组织管理员」，转组织后将自动降级为「普通用户」</li>
+                  )}
+                </ul>
+              </div>
+              {tenantError && (
+                <p className="text-sm text-red-500 bg-red-50 px-3 py-2 rounded-[8px]">{tenantError}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50/50 rounded-b-[16px]">
+              <button onClick={closeTenantModal} className="ml-auto px-4 h-9 rounded-[10px] text-sm text-gray-600 hover:bg-gray-200 transition-colors">取消</button>
+              <button
+                onClick={doSetTenant}
+                disabled={tenantSaving || newTenantCode === tenantTarget.tenant_code}
+                className="px-4 h-9 rounded-[10px] text-sm text-white bg-[#002FA7] hover:bg-[#001f7a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {tenantSaving ? "保存中…" : "确认转移"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── 用户详情抽屉 ──────────────────────────────────────── */}
       {detailUser && (
         <div className="fixed inset-0 z-50 flex justify-end">
@@ -1135,6 +1283,14 @@ export default function AdminUsersPage() {
                   className="flex items-center gap-1.5 px-3 h-9 rounded-[10px] text-sm text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors"
                 >
                   <GitBranch size={14} /> 分配部门
+                </button>
+              )}
+              {canChangeTenant(detailUser) && (
+                <button
+                  onClick={() => { openTenantModal(detailUser); setDetailUser(null); }}
+                  className="flex items-center gap-1.5 px-3 h-9 rounded-[10px] text-sm text-[#002FA7] bg-[#002FA7]/8 hover:bg-[#002FA7]/15 transition-colors"
+                >
+                  <Building2 size={14} /> 修改所属组织
                 </button>
               )}
               <button onClick={() => setDetailUser(null)} className="ml-auto px-4 h-9 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors">关闭</button>

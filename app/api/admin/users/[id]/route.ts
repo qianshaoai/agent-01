@@ -31,7 +31,7 @@ export async function PATCH(
   }
 
   // 对"管理"类动作：需要 actor 层级高于 target 当前角色
-  const MANAGE_ACTIONS = ["set-status", "set-dept", "reset-password", "soft-delete", "delete"];
+  const MANAGE_ACTIONS = ["set-status", "set-dept", "set-tenant", "reset-password", "soft-delete", "delete"];
   if (MANAGE_ACTIONS.includes(body.action)) {
     if (!canManageTarget(admin.role, target.role)) {
       return apiError("无权管理该用户（对方等级不低于你）", "FORBIDDEN");
@@ -78,6 +78,35 @@ export async function PATCH(
     }
     const { error } = await db.from("users").update({ role }).eq("id", id);
     if (error) return dbError(error);
+    return NextResponse.json({ ok: true });
+  }
+
+  // ── 5.6up · 修改用户所属组织（个人↔组织 / 组织↔组织 双向）──────────
+  if (body.action === "set-tenant") {
+    const { tenantCode } = body;
+    if (typeof tenantCode !== "string" || !tenantCode.trim()) {
+      return apiError("组织码必填", "VALIDATION_ERROR");
+    }
+    // 权限层级：org_admin / user 不允许此操作；
+    // system_admin 不能操作 super_admin / system_admin（canManageTarget 已覆盖）
+    if (admin.role === "org_admin") {
+      return apiError("权限不足，无法修改用户所属组织", "FORBIDDEN");
+    }
+    if (target.status === "deleted") {
+      return apiError("该用户已删除，不能修改所属组织", "VALIDATION_ERROR");
+    }
+    // 调 RPC 单事务做完所有变更
+    const { error: rpcErr } = await db.rpc("change_user_tenant", {
+      p_user_id: id,
+      p_new_tenant_code: tenantCode.trim(),
+    });
+    if (rpcErr) {
+      // RPC 抛的 RAISE EXCEPTION 走到这，把信息透传给前端
+      return NextResponse.json(
+        { error: rpcErr.message ?? "修改失败" },
+        { status: 400 }
+      );
+    }
     return NextResponse.json({ ok: true });
   }
 

@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPayloadFromRequest, ADMIN_COOKIE_NAME, verifyToken } from "@/lib/auth";
+import {
+  getPayloadFromRequest,
+  ADMIN_COOKIE_NAME,
+  verifyToken,
+  validateUserTokenFreshness,
+  validateAdminTokenFreshness,
+  COOKIE_NAME,
+} from "@/lib/auth";
 
 // 需要登录才能访问的用户路由
 const USER_PROTECTED = ["/", "/agents", "/settings", "/user-agents", "/trial"];
@@ -48,6 +55,13 @@ export async function middleware(req: NextRequest) {
     if (!payload || payload.type !== "admin") {
       return NextResponse.redirect(new URL("/admin", req.url));
     }
+    // 5.6up · 强制重登检查
+    const fresh = await validateAdminTokenFreshness(payload);
+    if (!fresh) {
+      const res = NextResponse.redirect(new URL("/admin", req.url));
+      res.cookies.set(ADMIN_COOKIE_NAME, "", { path: "/", maxAge: 0 });
+      return res;
+    }
     return NextResponse.next();
   }
 
@@ -60,6 +74,13 @@ export async function middleware(req: NextRequest) {
     const payload = await getPayloadFromRequest(req);
     if (!payload || payload.type !== "user") {
       return NextResponse.redirect(new URL("/login", req.url));
+    }
+    // 5.6up · 强制重登检查
+    const fresh = await validateUserTokenFreshness(payload);
+    if (!fresh) {
+      const res = NextResponse.redirect(new URL("/login", req.url));
+      res.cookies.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
+      return res;
     }
     // 体验账号只允许停留在 /trial（4.28up）
     if (payload.userType === "trial" && !pathname.startsWith("/trial")) {
