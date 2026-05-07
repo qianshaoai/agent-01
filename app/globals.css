@@ -58,8 +58,12 @@
 * { box-sizing: border-box; }
 
 html {
-  font-size: 17px;  /* 根字号从 16→17，让所有 rem 单位（包括 Tailwind 的 text-sm/text-base 等）整体放大约 6% */
+  font-size: 17px;  /* 默认 = "小"档；根字号从 16→17，让所有 rem 单位（含 Tailwind text-* 类）整体放大约 6% */
 }
+
+/* 5.7up · 字体大小切换（仅改 root font-size，不再用 zoom 缩放整页） */
+:root[data-font-size="medium"] { font-size: 19px; }   /* +12% */
+:root[data-font-size="large"]  { font-size: 21px; }   /* +24% */
 body {
   font-size: var(--fs-base);
 }
