@@ -5,6 +5,45 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github.css";
 
+// Markdown fenced code 块右上角"复制"图标按钮，仅复制块内文本
+function CopyableCodeBlock({ children, ...props }: React.HTMLAttributes<HTMLPreElement>) {
+  const ref = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    const text = ref.current?.textContent ?? "";
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => {}
+    );
+  }
+
+  return (
+    <div className="relative group/code my-3">
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={copied ? "已复制" : "复制代码块内容"}
+        title={copied ? "已复制" : "复制"}
+        className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-[6px] opacity-0 group-hover/code:opacity-100 focus:opacity-100 transition-opacity bg-transparent hover:bg-gray-200/80 text-gray-500 hover:text-gray-700"
+      >
+        {copied ? (
+          <Check size={14} className="text-emerald-600" />
+        ) : (
+          <Copy size={14} />
+        )}
+      </button>
+      <pre ref={ref} {...props}>
+        {children}
+      </pre>
+    </div>
+  );
+}
+
 // 附件前置校验：与 /api/upload 路由白名单 + 大小限制对齐
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -110,7 +149,11 @@ const ChatMessage = memo(function ChatMessage({
           {isAssistant ? (
             msg.content ? (
               <div className="trial-md break-words">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeHighlight]}
+                  components={{ pre: CopyableCodeBlock }}
+                >
                   {msg.content}
                 </ReactMarkdown>
                 {/* 流式末尾闪烁光标（保留原有体验） */}
@@ -399,9 +442,12 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   // 记录最近一次 handleSend 起点时间，abort 后用于定位"本轮新入库的消息"标 aborted
   const sendStartedAtRef = useRef<number | null>(null);
 
+  // 仅在消息条数变化时滚到底（用户发送 / 切换会话 / 重新生成）。
+  // 流式中只是末尾 assistant 消息 content 变长，length 不变 → 不滚动，
+  // 用户可以自由翻历史；想跟最新内容直接点右下"回到最新"。
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages.length]);
 
   useEffect(() => {
     let cancelled = false;
