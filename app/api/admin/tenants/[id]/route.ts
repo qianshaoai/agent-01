@@ -8,7 +8,12 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  // 5.7up · org_admin 不可改组织本身（名 / 配额 / 到期 / 启停 / 改密码）
+  if (admin.role === "org_admin") {
+    return apiError("无权修改组织信息", "FORBIDDEN");
+  }
 
   const { id } = await params;
   const body = await req.json();
@@ -49,7 +54,12 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  // 5.7up · org_admin 不可删除组织
+  if (admin.role === "org_admin") {
+    return apiError("无权删除组织", "FORBIDDEN");
+  }
 
   const { id } = await params;
 

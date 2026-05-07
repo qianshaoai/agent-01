@@ -103,6 +103,7 @@ export default function AdminUsersPage() {
   const [groups, setGroups] = useState<UserGroup[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
+  const [groupNameHint, setGroupNameHint] = useState(""); // 5.7up · 空值 inline 提示
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
@@ -203,6 +204,15 @@ export default function AdminUsersPage() {
     const actorRank = ROLE_RANK[adminMeta.role] ?? 99;
     const targetRank = ROLE_RANK[u.role] ?? 99;
     return targetRank > actorRank;
+  }
+
+  // 5.7up · 是否可修改该用户的"角色"
+  // org_admin 没有"设置管理员"的权限，一律不可改别人的角色（即使是本组织内的普通用户）
+  // 其它角色沿用 canManage（严格高于目标）
+  function canChangeRole(u: UserRow): boolean {
+    if (!canManage(u)) return false;
+    if (adminMeta?.role === "org_admin") return false;
+    return true;
   }
 
   // 5.6up · 是否可修改该用户的所属组织
@@ -441,7 +451,10 @@ export default function AdminUsersPage() {
   }
 
   async function addGroup() {
-    if (!newGroupName.trim()) return;
+    if (!newGroupName.trim()) {
+      setGroupNameHint("请输入分组名称");
+      return;
+    }
     await fetch("/api/admin/user-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newGroupName.trim() }) });
     setNewGroupName(""); loadGroups();
   }
@@ -682,7 +695,7 @@ export default function AdminUsersPage() {
                             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${ut.cls}`}>
                               {ut.label}
                             </span>
-                            {canOperate ? (
+                            {canChangeRole(u) ? (
                               <button
                                 onClick={() => openRoleModal(u)}
                                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border cursor-pointer hover:opacity-80 transition-opacity ${rl.cls}`}
@@ -812,10 +825,20 @@ export default function AdminUsersPage() {
           <div className="bg-white rounded-[16px] shadow-[0_1px_4px_rgba(0,0,0,0.06)] p-6">
             <div className="flex items-center gap-2 mb-4">
               <input
-                className="flex-1 h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
-                placeholder="新分组名称…"
+                className={`flex-1 h-10 border rounded-[10px] px-4 text-sm focus:outline-none transition-colors ${
+                  groupNameHint
+                    ? "border-red-400 placeholder:text-red-500 focus:border-red-500"
+                    : "border-gray-200 focus:border-[#002FA7]"
+                }`}
+                placeholder={groupNameHint || "新分组名称…"}
                 value={newGroupName}
-                onChange={(e) => setNewGroupName(e.target.value)}
+                onChange={(e) => {
+                  setNewGroupName(e.target.value);
+                  if (groupNameHint) setGroupNameHint("");
+                }}
+                onFocus={() => {
+                  if (groupNameHint) setGroupNameHint("");
+                }}
                 onKeyDown={(e) => e.key === "Enter" && addGroup()}
               />
               <button onClick={addGroup} className="flex items-center gap-1.5 px-4 h-10 rounded-[10px] text-sm font-medium bg-[#002FA7] text-white hover:bg-[#001f7a] transition-colors">

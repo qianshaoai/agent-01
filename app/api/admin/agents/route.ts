@@ -102,6 +102,10 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+  // 5.7up · org_admin 只读，禁止创建智能体
+  if (admin.role === "org_admin") {
+    return apiError("无权创建智能体", "FORBIDDEN");
+  }
 
   const body = await parseBody(req, createAgentSchema);
   if (body instanceof Response) return body;

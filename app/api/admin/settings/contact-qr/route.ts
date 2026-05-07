@@ -4,7 +4,12 @@ import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  // 5.7up · 品牌设置仅 super_admin 可改
+  if (admin.role !== "super_admin") {
+    return apiError("无权修改联系二维码", "FORBIDDEN");
+  }
 
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
@@ -41,7 +46,12 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE() {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  // 5.7up · 品牌设置仅 super_admin 可改
+  if (admin.role !== "super_admin") {
+    return apiError("无权删除联系二维码", "FORBIDDEN");
+  }
 
   await db.from("system_settings").upsert(
     { key: "contact_qr_url", value: "", updated_at: new Date().toISOString() },

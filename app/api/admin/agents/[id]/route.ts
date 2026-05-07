@@ -12,6 +12,10 @@ export async function PATCH(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+  // 5.7up · org_admin 只读，禁止修改智能体（含禁用/启用）
+  if (admin.role === "org_admin") {
+    return apiError("无权修改智能体", "FORBIDDEN");
+  }
 
   const { id } = await params;
   const body = await req.json();
@@ -77,6 +81,10 @@ export async function DELETE(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+  // 5.7up · org_admin 只读，禁止删除智能体
+  if (admin.role === "org_admin") {
+    return apiError("无权删除智能体", "FORBIDDEN");
+  }
 
   const { id } = await params;
   if (!id) return apiError("id 必填", "VALIDATION_ERROR");

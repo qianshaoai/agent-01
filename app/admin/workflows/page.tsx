@@ -84,6 +84,17 @@ const EMPTY_STEP = { title: "", description: "", execType: "agent" as "agent" | 
 
 export default function WorkflowsAdminPage() {
   const { toast } = useToast();
+  // 5.7up · 当前管理员角色，决定 org_admin 是否隐藏 visible_to 选择器
+  const [adminRole, setAdminRole] = useState<"super_admin" | "system_admin" | "org_admin" | null>(null);
+  useEffect(() => {
+    fetch("/api/admin/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.role) setAdminRole(d.role);
+      })
+      .catch(() => {});
+  }, []);
+  const isOrgAdmin = adminRole === "org_admin";
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -124,6 +135,7 @@ export default function WorkflowsAdminPage() {
 
   // Category management state
   const [newCatName, setNewCatName] = useState("");
+  const [catNameHint, setCatNameHint] = useState(""); // 5.7up · 空值 inline 提示
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [editingCatName, setEditingCatName] = useState("");
 
@@ -559,7 +571,10 @@ export default function WorkflowsAdminPage() {
 
   // ── WF Category CRUD ──────────────────────────────────────────
   async function addWfCategory() {
-    if (!newCatName.trim()) return;
+    if (!newCatName.trim()) {
+      setCatNameHint("请输入分类名称");
+      return;
+    }
     await fetch("/api/admin/wf-categories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newCatName.trim() }) });
     setNewCatName(""); load();
   }
@@ -879,10 +894,20 @@ export default function WorkflowsAdminPage() {
           <Card padding="lg">
             <div className="flex items-center gap-2 mb-4">
               <input
-                className="flex-1 h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
-                placeholder="新分类名称…"
+                className={`flex-1 h-10 border rounded-[10px] px-4 text-sm focus:outline-none transition-colors ${
+                  catNameHint
+                    ? "border-red-400 placeholder:text-red-500 focus:border-red-500"
+                    : "border-gray-200 focus:border-[#002FA7]"
+                }`}
+                placeholder={catNameHint || "新分类名称…"}
                 value={newCatName}
-                onChange={(e) => setNewCatName(e.target.value)}
+                onChange={(e) => {
+                  setNewCatName(e.target.value);
+                  if (catNameHint) setCatNameHint("");
+                }}
+                onFocus={() => {
+                  if (catNameHint) setCatNameHint("");
+                }}
                 onKeyDown={(e) => e.key === "Enter" && addWfCategory()}
               />
               <Button size="sm" onClick={addWfCategory} className="gap-1"><Plus size={14} /> 添加</Button>
@@ -990,6 +1015,12 @@ export default function WorkflowsAdminPage() {
               <Input label="排序（数字越小越靠前）" type="number" value={String(wfForm.sortOrder)} onChange={(e) => setWfForm({ ...wfForm, sortOrder: Number(e.target.value) })} />
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
+                {/* 5.7up · org_admin 不可改可见性，强制本组织可见 */}
+                {isOrgAdmin ? (
+                  <div className="px-4 py-2.5 rounded-[12px] bg-blue-50 border border-blue-100 text-sm text-blue-700">
+                    本工作流将自动对您所在组织的所有成员可见（不可修改）
+                  </div>
+                ) : (
                 <select
                   className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
                   value={wfForm.visibleTo === "custom" ? `custom:${wfForm.permScope}` : wfForm.visibleTo}
@@ -1012,6 +1043,7 @@ export default function WorkflowsAdminPage() {
                   <option value="custom:dept">指定部门可见</option>
                   <option value="custom:team">指定小组可见</option>
                 </select>
+                )}
 
                 {/* custom 模式下根据 permScope 展示对应 picker */}
                 {wfForm.visibleTo === "custom" && wfForm.permScope === "org" && (

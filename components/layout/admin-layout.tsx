@@ -42,15 +42,15 @@ const navGroups: NavGroup[] = [
   {
     label: "组织与用户",
     items: [
-      { href: "/admin/tenants", label: "组织码管理", icon: Building2, allowedRoles: SUPER_SYSTEM },
+      { href: "/admin/tenants", label: "组织管理", icon: Building2, allowedRoles: ALL_ROLES },
       { href: "/admin/users",   label: "用户管理",   icon: Users,     allowedRoles: ALL_ROLES },
     ],
   },
   {
     label: "内容",
     items: [
-      { href: "/admin/agents",    label: "智能体管理", icon: Bot,       allowedRoles: SUPER_SYSTEM },
-      { href: "/admin/workflows", label: "工作流管理", icon: GitBranch, allowedRoles: SUPER_SYSTEM },
+      { href: "/admin/agents",    label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES },
+      { href: "/admin/workflows", label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES },
       { href: "/admin/notices",   label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES },
     ],
   },

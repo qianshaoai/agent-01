@@ -4,7 +4,12 @@ import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  // 5.7up · 品牌设置仅 super_admin 可改
+  if (admin.role !== "super_admin") {
+    return apiError("无权修改 Logo", "FORBIDDEN");
+  }
 
   const formData = await req.formData();
   const file = formData.get("file") as File | null;

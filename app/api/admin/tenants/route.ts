@@ -5,20 +5,33 @@ import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export async function GET(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { page, pageSize, start } = parsePagination(req, 100);
-  const { data, count } = await db
+  let query = db
     .from("tenants")
     .select("id, code, name, quota, quota_used, expires_at, enabled, created_at", { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(start, start + pageSize - 1);
+    .order("created_at", { ascending: false });
+
+  // 5.7up · org_admin 只能看到自己组织那一行
+  if (admin.role === "org_admin") {
+    if (!admin.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
+    query = query.eq("code", admin.tenantCode);
+  }
+
+  const { data, count } = await query.range(start, start + pageSize - 1);
 
   return paginatedResponse(data ?? [], count ?? 0, page, pageSize);
 }
 
 export async function POST(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  // 5.7up · org_admin 不可创建组织
+  if (admin.role === "org_admin") {
+    return apiError("无权创建组织", "FORBIDDEN");
+  }
 
   const { code, name, initialPwd, quota, expiresAt } = await req.json();
   if (!code || !name || !initialPwd || !quota || !expiresAt) {

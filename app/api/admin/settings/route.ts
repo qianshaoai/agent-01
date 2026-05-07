@@ -22,7 +22,12 @@ export async function GET() {
 }
 
 export async function PATCH(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  // 5.7up · 品牌设置仅 super_admin 可改
+  if (admin.role !== "super_admin") {
+    return NextResponse.json({ error: "无权修改品牌设置" }, { status: 403 });
+  }
 
   const body = await req.json();
   const now = new Date().toISOString();

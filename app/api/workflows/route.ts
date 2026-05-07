@@ -47,6 +47,17 @@ export async function GET(req: NextRequest) {
   const isPersonal = user.isPersonal ?? !tenantCode;
   const workflows = data ?? [];
 
+  // 5.7up · system_admin 用户端跳过可见性过滤，直接返回所有 enabled 工作流
+  if (user.role === "system_admin") {
+    const result = workflows.map((wf) => ({
+      ...wf,
+      workflow_steps: (wf.workflow_steps ?? [])
+        .filter((s: { enabled: boolean }) => s.enabled)
+        .sort((a: { step_order: number }, b: { step_order: number }) => a.step_order - b.step_order),
+    }));
+    return NextResponse.json(result);
+  }
+
   // 需要查权限表的工作流 ID（visible_to === 'custom' 或旧的逗号分隔格式）
   const customIds = workflows
     .filter((wf) => {
@@ -68,6 +79,36 @@ export async function GET(req: NextRequest) {
     userTeamId = userRow?.team_id ?? null;
   }
 
+  // 5.7up · org_admin 在用户端享受"本组织所有工作流"豁免：
+  //   除了正常匹配规则外，凡是 resource_permissions 里 scope=本组织/部门/小组 的工作流都可见
+  let orgAdminScopedWorkflowIds = new Set<string>();
+  if (user.role === "org_admin" && tenantCode) {
+    // 取本组织下所有部门 / 小组 id
+    const [{ data: depts }, { data: teams }] = await Promise.all([
+      db.from("departments").select("id").eq("tenant_code", tenantCode),
+      db.from("teams").select("id").eq("tenant_code", tenantCode),
+    ]);
+    const deptIds = (depts ?? []).map((d: { id: string }) => d.id);
+    const teamIds = (teams ?? []).map((t: { id: string }) => t.id);
+
+    const orFilters: string[] = [`and(scope_type.eq.org,scope_id.eq.${tenantCode})`];
+    if (deptIds.length > 0) {
+      orFilters.push(`and(scope_type.eq.dept,scope_id.in.(${deptIds.join(",")}))`);
+    }
+    if (teamIds.length > 0) {
+      orFilters.push(`and(scope_type.eq.team,scope_id.in.(${teamIds.join(",")}))`);
+    }
+
+    const { data: scoped } = await db
+      .from("resource_permissions")
+      .select("resource_id")
+      .eq("resource_type", "workflow")
+      .or(orFilters.join(","));
+    orgAdminScopedWorkflowIds = new Set(
+      (scoped ?? []).map((r: { resource_id: string }) => r.resource_id)
+    );
+  }
+
   // 批量查询这些 custom 工作流的权限规则
   const permMap = new Map<string, { scope_type: string; scope_id: string | null }[]>();
   if (customIds.length > 0) {
@@ -85,6 +126,11 @@ export async function GET(req: NextRequest) {
 
   // 权限过滤
   const visible = workflows.filter((wf) => {
+    // 5.7up · org_admin 豁免：只要工作流的权限规则覆盖了本组织/本组织部门/本组织小组就可见
+    if (user.role === "org_admin" && orgAdminScopedWorkflowIds.has(wf.id)) {
+      return true;
+    }
+
     if (wf.visible_to === "all") return true;
     if (wf.visible_to === "org_only") return !isPersonal;
     if (wf.visible_to === "personal_only") return isPersonal;

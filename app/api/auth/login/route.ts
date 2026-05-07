@@ -69,6 +69,14 @@ export async function POST(req: NextRequest) {
     // 登录成功，清空该 key 的失败记录
     clearLoginFail(rateKey);
 
+    // 5.7up · 超级管理员不得登录用户端，必须从 /admin 进
+    if (user.role === "super_admin") {
+      return NextResponse.json(
+        { error: "请登录后台" },
+        { status: 403 }
+      );
+    }
+
     // 若是组织用户，校验组织是否仍有效
     let tenantNameFromDb: string | null = null;
     if (user.tenant_code !== "PERSONAL") {

@@ -90,6 +90,17 @@ export default function AgentsAdminPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
+  // 5.7up · 当前管理员角色：org_admin 只读，所有写操作按钮不显示
+  const [adminRole, setAdminRole] = useState<"super_admin" | "system_admin" | "org_admin" | null>(null);
+  useEffect(() => {
+    fetch("/api/admin/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.role) setAdminRole(d.role);
+      })
+      .catch(() => {});
+  }, []);
+  const isOrgAdmin = adminRole === "org_admin";
   const [activeTab, setActiveTab] = useState<"agents" | "categories">("agents");
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [showApiModal, setShowApiModal] = useState<Agent | null>(null);
@@ -116,6 +127,7 @@ export default function AgentsAdminPage() {
   const [userGroups, setUserGroups] = useState<{ id: string; name: string }[]>([]);
   const [formError, setFormError] = useState("");
   const [newCatName, setNewCatName] = useState("");
+  const [catNameHint, setCatNameHint] = useState(""); // 5.7up · 空值 inline 提示
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [editingCatName, setEditingCatName] = useState("");
   const [showCatAssignModal, setShowCatAssignModal] = useState<Category | null>(null);
@@ -325,7 +337,10 @@ export default function AgentsAdminPage() {
   }
 
   async function addCategory() {
-    if (!newCatName.trim()) return;
+    if (!newCatName.trim()) {
+      setCatNameHint("请输入分类名称");
+      return;
+    }
     await fetch("/api/admin/categories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newCatName.trim() }) });
     setNewCatName(""); load();
   }
@@ -387,13 +402,16 @@ export default function AgentsAdminPage() {
           actions={
             <>
               <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">
-                {(["agents", "categories"] as const).map((tab) => (
+                {/* 5.7up · org_admin 不显示"分类管理"Tab（分类是写操作，归 super/system） */}
+                {(isOrgAdmin ? (["agents"] as const) : (["agents", "categories"] as const)).map((tab) => (
                   <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-1.5 rounded-[8px] text-[13px] font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
                     {tab === "agents" ? "智能体列表" : "分类管理"}
                   </button>
                 ))}
               </div>
-              <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
+              {!isOrgAdmin && (
+                <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
+              )}
             </>
           }
         />
@@ -543,6 +561,10 @@ export default function AgentsAdminPage() {
                           )}
                         </td>
                         <td className="px-5 py-4">
+                          {/* 5.7up · org_admin 只读，整个操作列不显示 */}
+                          {isOrgAdmin ? (
+                            <span className="text-xs text-gray-300">仅可查看</span>
+                          ) : (
                           <div className="flex items-center gap-1">
                             <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
                             {a.agent_type !== "external" && (
@@ -552,6 +574,7 @@ export default function AgentsAdminPage() {
                             <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="分类展示配置" aria-label="分类展示配置"><LayoutGrid size={14} /></button>
                             <button onClick={() => setDeletingAgent(a)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
                           </div>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -566,7 +589,23 @@ export default function AgentsAdminPage() {
         {activeTab === "categories" && (
           <Card padding="lg">
             <div className="flex items-center gap-2 mb-4">
-              <input className="flex-1 h-10 border border-gray-200 rounded-[10px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" placeholder="新分类名称…" value={newCatName} onChange={(e) => setNewCatName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addCategory()} />
+              <input
+                className={`flex-1 h-10 border rounded-[10px] px-4 text-sm focus:outline-none transition-colors ${
+                  catNameHint
+                    ? "border-red-400 placeholder:text-red-500 focus:border-red-500"
+                    : "border-gray-200 focus:border-[#002FA7]"
+                }`}
+                placeholder={catNameHint || "新分类名称…"}
+                value={newCatName}
+                onChange={(e) => {
+                  setNewCatName(e.target.value);
+                  if (catNameHint) setCatNameHint("");
+                }}
+                onFocus={() => {
+                  if (catNameHint) setCatNameHint("");
+                }}
+                onKeyDown={(e) => e.key === "Enter" && addCategory()}
+              />
               <Button size="sm" onClick={addCategory} className="gap-1"><Plus size={14} /> 添加</Button>
             </div>
             <div className="space-y-2">
