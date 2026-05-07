@@ -50,6 +50,8 @@ export type AdapterConfig = {
   platformConvId?: string | null;
   /** 适配器回调：当获取到平台侧新会话 ID 时通知调用方保存 */
   onPlatformConvId?: (id: string) => void;
+  /** 5.7up · GPT 接入：流式结束时若服务端返回了 token 用量，通过此回调透传出去 */
+  onUsage?: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void;
 };
 
 export async function* streamChat(
@@ -305,13 +307,19 @@ async function* openaiCompatibleStream(
   config: AdapterConfig
 ): AsyncGenerator<string> {
   const model = (config.modelParams["model"] as string) ?? "gpt-4o-mini";
-  const body = {
+  // 5.7up · 仅当调用方需要 token 用量（onUsage 提供）才请求 stream_options
+  // 否则保持原行为，兼容历史调用方
+  const wantsUsage = typeof config.onUsage === "function";
+  const body: Record<string, unknown> = {
     model,
     messages,
     stream: true,
     temperature: config.modelParams["temperature"] ?? 0.7,
     max_tokens: config.modelParams["max_tokens"] ?? 2000,
   };
+  if (wantsUsage) {
+    body["stream_options"] = { include_usage: true };
+  }
 
   const res = await fetch(config.apiEndpoint, {
     method: "POST",
@@ -330,6 +338,18 @@ async function* openaiCompatibleStream(
     if (data === "[DONE]") return null;
     try {
       const obj = JSON.parse(data);
+      // 5.7up · 兼容多家 OpenAI-compatible 的 usage 帧位置：
+      //   - OpenAI 标准：末帧 choices=[]、单独带 usage
+      //   - 智谱 GLM：usage 跟着最后一条 delta（finish_reason="stop"）一起发，choices.length===1
+      //   - 其它兼容厂商：可能在任意位置发 usage
+      // 策略：只要这帧带 usage 就捕获；同时如果还有 delta.content 就照常 yield
+      if (wantsUsage && obj.usage) {
+        config.onUsage?.({
+          prompt_tokens: Number(obj.usage.prompt_tokens) || 0,
+          completion_tokens: Number(obj.usage.completion_tokens) || 0,
+          total_tokens: Number(obj.usage.total_tokens) || 0,
+        });
+      }
       return obj.choices?.[0]?.delta?.content ?? null;
     } catch {}
     return null;

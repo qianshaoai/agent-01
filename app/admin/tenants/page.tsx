@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import {
   Plus, Search, Edit2, Ban, Calendar, Zap, CheckCircle2, Building2,
-  ChevronRight, ChevronDown, GitBranch, Users, Pencil, Trash2, X, Check,
+  ChevronRight, ChevronDown, GitBranch, Users, Pencil, Trash2, X, Check, Key,
 } from "lucide-react";
 
 type Tenant = {
@@ -48,6 +48,13 @@ export default function TenantsPage() {
 
   const [structErr, setStructErr] = useState("");
 
+  // 5.7up · GPT 接入：每个组织一把 OpenAI key（仅 super_admin 可见可改）
+  type KeyStatus = { isSet: boolean; setAt: string | null; setBy: string | null };
+  const [keyStatuses, setKeyStatuses] = useState<Record<string, KeyStatus>>({});
+  const [editingKeyTenantId, setEditingKeyTenantId] = useState<string | null>(null);
+  const [keyInput, setKeyInput] = useState("");
+  const [keyError, setKeyError] = useState("");
+
   // 5.7up · org_admin 只能看自己组织 + 不可改组织本身
   const [adminRole, setAdminRole] = useState<"super_admin" | "system_admin" | "org_admin" | null>(null);
   useEffect(() => {
@@ -59,6 +66,42 @@ export default function TenantsPage() {
       .catch(() => {});
   }, []);
   const isOrgAdmin = adminRole === "org_admin";
+  const isSuperAdmin = adminRole === "super_admin";
+
+  // ── OpenAI key 配置（仅 super_admin）───────────────────────────
+  async function loadKeyStatus(tenantId: string) {
+    const res = await fetch(`/api/admin/tenants/${tenantId}/openai-key`, { cache: "no-store" });
+    if (res.ok) {
+      const d = await res.json();
+      setKeyStatuses((prev) => ({ ...prev, [tenantId]: d }));
+    }
+  }
+  async function saveKey(tenantId: string) {
+    setKeyError("");
+    const k = keyInput.trim();
+    if (!k) { setKeyError("请粘贴 API Key"); return; }
+    if (!/^sk-/.test(k)) { setKeyError("API Key 格式不合法（应以 sk- 开头）"); return; }
+    const res = await fetch(`/api/admin/tenants/${tenantId}/openai-key`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: k }),
+    });
+    if (res.ok) {
+      setEditingKeyTenantId(null);
+      setKeyInput("");
+      await loadKeyStatus(tenantId);
+    } else {
+      const d = await res.json().catch(() => ({}));
+      setKeyError(d.error ?? "保存失败");
+    }
+  }
+  async function clearKey(tenantId: string) {
+    if (!confirm("确认清空此组织的 OpenAI Key？清空后该组织用户将无法使用 GPT 智能体。")) return;
+    const res = await fetch(`/api/admin/tenants/${tenantId}/openai-key`, { method: "DELETE" });
+    if (res.ok) {
+      await loadKeyStatus(tenantId);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -77,7 +120,11 @@ export default function TenantsPage() {
     if (expandedTenant === t.id) { setExpandedTenant(null); return; }
     setExpandedTenant(t.id);
     setStructErr("");
+    setEditingKeyTenantId(null);
+    setKeyError("");
     if (!departments[t.code]) await loadDepts(t.code);
+    // 5.7up · super_admin 展开时顺手拉一次 OpenAI key 状态（不阻塞展开）
+    if (isSuperAdmin && !keyStatuses[t.id]) loadKeyStatus(t.id);
   }
 
   // 5.7up · org_admin 进入时自动展开自己组织那一行
@@ -307,6 +354,62 @@ export default function TenantsPage() {
                   {/* 展开：组织结构 */}
                   {isExpanded && (
                     <div className="border-t border-gray-50 px-5 pb-5 pt-4 bg-gray-50/40">
+                      {/* 5.7up · GPT 接入：OpenAI key 配置（仅 super_admin） */}
+                      {isSuperAdmin && (
+                        <div className="mb-4 p-3 bg-white border border-gray-100 rounded-[12px]">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Key size={14} className="text-[#002FA7]" />
+                            <span className="text-sm font-semibold text-gray-700">OpenAI Key（GPT 接入）</span>
+                            <span className="text-xs text-gray-400">仅超级管理员可见</span>
+                          </div>
+                          {keyStatuses[t.id] === undefined ? (
+                            <div className="h-8 w-40 bg-gray-100 rounded-[8px] animate-pulse" />
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {keyStatuses[t.id].isSet ? (
+                                  <>
+                                    <Badge variant="success">已配置</Badge>
+                                    {keyStatuses[t.id].setAt && (
+                                      <span className="text-xs text-gray-500">
+                                        配置时间：{new Date(keyStatuses[t.id].setAt!).toLocaleString("zh-CN", { hour12: false })}
+                                      </span>
+                                    )}
+                                    <Button size="sm" onClick={() => { setEditingKeyTenantId(t.id); setKeyInput(""); setKeyError(""); }}>更新</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => clearKey(t.id)}>清空</Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Badge variant="muted">未配置</Badge>
+                                    <Button size="sm" onClick={() => { setEditingKeyTenantId(t.id); setKeyInput(""); setKeyError(""); }}>配置</Button>
+                                  </>
+                                )}
+                              </div>
+                              {editingKeyTenantId === t.id && (
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="password"
+                                      placeholder="sk-...（粘贴 OpenAI API Key）"
+                                      value={keyInput}
+                                      onChange={(e) => { setKeyInput(e.target.value); setKeyError(""); }}
+                                      className={`flex-1 h-9 px-3 bg-white border rounded-[10px] text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#002FA7]/10 transition-all ${keyError ? "border-red-300 placeholder:text-red-400" : "border-gray-200 focus:border-[#002FA7]"}`}
+                                      onKeyDown={(e) => { if (e.key === "Enter") saveKey(t.id); if (e.key === "Escape") { setEditingKeyTenantId(null); setKeyInput(""); setKeyError(""); } }}
+                                    />
+                                    <Button size="sm" onClick={() => saveKey(t.id)}>保存</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => { setEditingKeyTenantId(null); setKeyInput(""); setKeyError(""); }}>取消</Button>
+                                  </div>
+                                  {keyError && <p className="text-xs text-red-500">{keyError}</p>}
+                                  <p className="text-[11px] text-gray-400">
+                                    Key 将以 AES-256-GCM 加密落库，平台不会以任何形式回显或转发明文。
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <div className="flex items-center gap-2 mb-3">
                         <GitBranch size={14} className="text-[#002FA7]" />
                         <span className="text-sm font-semibold text-gray-700">组织结构</span>

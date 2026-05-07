@@ -38,6 +38,8 @@
 | `migration_v21.sql` | 删除用户复用账号字段（status='deleted' 的 username/phone 改墓碑值） | ☐ |
 | `migration_v22.sql` | **4.30up · A 方案** — `messages` 表加 `aborted` 列 + 部分索引 `idx_messages_conv_active`（仅索引未中断行）<br>chat 路由拉历史时 `.eq("aborted", false)` 过滤被中断的 turn | ✅ 2026-04-30 |
 | `migration_v24.sql` | **5.6up** — 后台修改用户所属组织。`users` 加 `force_relogin_at TIMESTAMPTZ`；新增 RPC `change_user_tenant(user_id, new_tenant_code)` 单事务做完：改 users（含 user_type/role/dept_id/team_id 同步）+ 清理跨组织分组成员 + 追溯改 logs.tenant_code + 写一条 audit 事件<br>v23 编号已被"组织码可改"草案占名（已搁置），故跳号到 v24 | ✅ 2026-05-06 |
+| `migration_v25.sql` | **5.7up · GPT 接入阶段一** — `tenants` 加 `openai_key_enc / openai_key_set_at / openai_key_set_by`；`logs` 加 `prompt_tokens / completion_tokens / model_used`；新建 `model_quota_weights` 表（种子 4o-mini=1, 4o=5, o1=30/15 默认禁用）；新增加权扣额度 RPC `increment_quota_used_weighted(code, weight)` | ☐ |
+| `migration_v26.sql` | **5.7up · GPT 接入阶段二** — `conversations` 加 `summary_text TEXT` + `summary_until_at TIMESTAMPTZ`，支撑滑动窗口 + 增量摘要降本（详见 `upgrade/5.7up/GPT接入-方案-20260507.md`） | ☐ |
 
 > v20 跳号未使用。
 
