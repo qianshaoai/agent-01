@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentUser, requireFullUser } from "@/lib/auth";
+import { requireFullUser } from "@/lib/auth";
+import { getActiveUser } from "@/lib/session";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const user = await getCurrentUser();
+  // 5.7up · 用 getActiveUser（DB-fresh role）而非 getCurrentUser（JWT 快照）
+  // 这样 admin 改完用户 role 后，用户**刷新即可切换**可见工作流，无需重登
+  const user = await getActiveUser();
   if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
   const guard = requireFullUser(user);
   if (guard) return guard;
