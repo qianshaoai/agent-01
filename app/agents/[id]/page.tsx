@@ -1718,42 +1718,40 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   {wfName}：
                 </span>
                 {wfSteps.map((step, idx) => {
+                  if (idx > resolvedStepIdx) return null;
                   const isCompleted = completedSteps.has(idx);
                   const isCurrent = idx === resolvedStepIdx;
-                  const isFuture = idx > resolvedStepIdx;
                   const isManual = step.exec_type !== "agent";
-                  const isClickable = isCompleted && !!step.agents && step.exec_type === "agent";
+                  const isClickable = isCompleted && !!step.agents && !isManual;
                   const label = step.title;
                   return (
                     <Fragment key={step.id}>
                       {idx > 0 && (
-                        <div className={`w-7 h-px mx-1.5 shrink-0 ${idx <= resolvedStepIdx ? "bg-[#002FA7]/20" : "bg-gray-100"}`} />
+                        <div className="w-7 h-px mx-1.5 shrink-0 bg-[#002FA7]/20" />
                       )}
                       <button
                         onClick={() => isClickable && handleStepBarClick(idx)}
                         disabled={!isClickable && !isCurrent}
                         title={
-                          isFuture && isManual ? `${label}（待完成的人工步骤）`
-                          : isFuture ? `${label}（后续智能体步骤）`
-                          : isManual ? `${label}（人工步骤）`
+                          isManual && isCompleted ? `${label}（人工步骤，已完成）`
                           : isCompleted ? `${label}（点击将本步骤对话记录发送给当前智能体）`
                           : label
                         }
                         className={`flex items-center gap-2 px-3.5 py-2 rounded-full shrink-0 text-[13px] font-medium transition-all ${
                           isCurrent
                             ? "bg-[#002FA7] text-white shadow-[0_2px_10px_rgba(0,47,167,0.28)]"
+                            : isCompleted && isManual
+                            ? "bg-amber-50 text-amber-700 border border-amber-200 cursor-default"
                             : isCompleted
                             ? "bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 cursor-pointer"
-                            : isManual
-                            ? "bg-amber-50 text-amber-600 border border-amber-200 cursor-default"
-                            : "bg-gray-50 text-gray-300 border border-gray-100 cursor-default"
+                            : "bg-gray-100 text-gray-400 cursor-default"
                         }`}
                       >
                         <span className={`w-5 h-5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 ${
                           isCurrent ? "bg-white/20 text-white"
+                          : isCompleted && isManual ? "bg-amber-200 text-amber-700"
                           : isCompleted ? "bg-green-200 text-green-700"
-                          : isManual ? "bg-amber-200 text-amber-700"
-                          : "bg-gray-100 text-gray-300"
+                          : "bg-gray-200 text-gray-400"
                         }`}>
                           {isCompleted ? "✓" : idx + 1}
                         </span>
