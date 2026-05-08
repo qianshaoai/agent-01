@@ -454,9 +454,15 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         setWfName(data.name ?? "");
         const steps: WorkflowStep[] = data.steps ?? [];
         setWfSteps(steps);
-        // 优先用 agent_code 反查当前步下标，URL 的 step 参数仅做兜底
+        // 优先信任 URL 的 step 参数（同一智能体可能出现在多个步骤）：
+        // 若 URL 指向的那个步骤确实对应当前 agentCode，就直接用；
+        // 否则退回 findIndex 第一个匹配；再退回 currentStepIdx 兜底
+        const urlStepValid =
+          currentStepIdx >= 0 &&
+          currentStepIdx < steps.length &&
+          steps[currentStepIdx]?.agents?.agent_code === agentCode;
         const actualIdx = steps.findIndex((s: WorkflowStep) => s.agents?.agent_code === agentCode);
-        const resolved = actualIdx >= 0 ? actualIdx : currentStepIdx;
+        const resolved = urlStepValid ? currentStepIdx : actualIdx >= 0 ? actualIdx : currentStepIdx;
         setResolvedStepIdx(resolved);
         // 把当前步之前的所有步标记为已完成
         const done = new Set<number>();
@@ -1122,25 +1128,36 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       })()
     : -1;
 
-  // 推进到 fromIdx 的下一步：agent → 跳转，manual → 弹窗，无更多 → 完成弹窗
+  // 推进到 fromIdx 的下一步：遍历后续步骤，第一个 manual → 弹窗，第一个有效 agent → 跳转，走完 → 完成弹窗
   function advanceFrom(fromIdx: number) {
-    const nextIdx = fromIdx + 1;
-    if (fromWorkflowId) {
-      try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: Math.min(nextIdx, wfSteps.length - 1) })); } catch {}
+    if (!fromWorkflowId) return;
+    let cursor = fromIdx + 1;
+
+    // 保存进度
+    try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: Math.min(cursor, wfSteps.length - 1) })); } catch {}
+
+    // 向后找第一个需要操作的步骤
+    while (cursor < wfSteps.length) {
+      const step = wfSteps[cursor];
+      if (step.exec_type !== "agent") {
+        // 人工/外部步骤：弹窗引导
+        setPendingManualIdx(cursor);
+        return;
+      }
+      if (step.agents?.agent_code) {
+        // 有效的智能体步骤：跳转
+        const ctxConvId = activeConvId ?? conversations[0]?.id ?? null;
+        const fromParam = ctxConvId ? `&from=${encodeURIComponent(ctxConvId)}` : "";
+        const url = `/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId)}&step=${cursor}${fromParam}`;
+        window.location.assign(url);
+        return;
+      }
+      // agent 步骤但 agents 为空（智能体已删除）：跳过继续找
+      cursor++;
     }
-    if (nextIdx >= wfSteps.length) {
-      setShowWorkflowComplete(true);
-      return;
-    }
-    const nextStep = wfSteps[nextIdx];
-    if (nextStep.exec_type === "agent") {
-      if (!nextStep.agents) { advanceFrom(nextIdx); return; }
-      const ctxConvId = activeConvId ?? conversations[0]?.id ?? null;
-      const fromParam = ctxConvId ? `&from=${encodeURIComponent(ctxConvId)}` : "";
-      router.push(`/agents/${encodeURIComponent(nextStep.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${nextIdx}${fromParam}`);
-    } else {
-      setPendingManualIdx(nextIdx);
-    }
+
+    // 所有步骤已遍历完：显示完成弹窗
+    setShowWorkflowComplete(true);
   }
 
   function handleNextStepClick() {
@@ -1165,7 +1182,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       setShowWorkflowComplete(true);
       return;
     }
-    advanceFrom(resolvedStepIdx);
+    // setTimeout 确保对话框关闭的状态更新先完成，再执行跳转
+    setTimeout(() => advanceFrom(resolvedStepIdx), 0);
   }
 
   async function handleStepBarClick(idx: number) {
@@ -2067,9 +2085,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 </button>
                 <button
                   onClick={() => {
-                    const idx = pendingManualIdx;
+                    const idx = pendingManualIdx!;
                     setPendingManualIdx(null);
-                    advanceFrom(idx);
+                    setTimeout(() => advanceFrom(idx), 0);
                   }}
                   className="px-5 py-2 rounded-[10px] text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 transition-colors"
                 >
