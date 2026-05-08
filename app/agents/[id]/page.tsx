@@ -1155,14 +1155,38 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     );
   }
 
-  function handleStepBarClick(idx: number) {
+  async function handleStepBarClick(idx: number) {
     if (idx === resolvedStepIdx || idx >= resolvedStepIdx) return;
-    const step = wfSteps[idx];
-    if (!step?.agents) return;
-    // 点击已完成步骤 → 跳回该智能体并自动生成大纲
-    router.push(
-      `/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${idx}&outline=1`
-    );
+    if (loading || streaming) return;
+    const clickedStep = wfSteps[idx];
+    if (!clickedStep?.agents?.agent_code) return;
+
+    // 拉取该步骤智能体的最新对话记录，注入给当前智能体
+    try {
+      const convRes = await fetch(`/api/conversations?agentCode=${encodeURIComponent(clickedStep.agents.agent_code)}&pageSize=1`);
+      if (!convRes.ok) return;
+      const convData = await convRes.json();
+      const conv = (convData?.data ?? convData)?.[0] ?? null;
+      if (!conv?.id) return;
+
+      const msgRes = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/messages`);
+      if (!msgRes.ok) return;
+      const msgs: { role: string; content: string }[] = await msgRes.json();
+
+      const lines: string[] = [];
+      for (const m of msgs) {
+        if (m.role !== "user" && m.role !== "assistant") continue;
+        const cleaned = m.content.replace(/\n\n\[附件内容\][\s\S]*$/, "").trim();
+        if (cleaned) lines.push(`${m.role === "user" ? "用户" : "助手"}：${cleaned}`);
+      }
+      let ctx = lines.join("\n\n");
+      if (!ctx) return;
+      if (ctx.length > 3000) ctx = ctx.slice(0, 3000) + "…（内容过长已截断）";
+
+      const currentStepTitle = wfSteps[resolvedStepIdx]?.title;
+      const msg = `以下是我们在「${clickedStep.title}」阶段的对话记录，请你仔细阅读，了解已有的工作成果，然后基于这些信息，开始协助我完成「${currentStepTitle ?? "当前阶段"}」的工作：\n\n${ctx}`;
+      handleSend({ text: msg });
+    } catch {}
   }
 
   // P1 · 搜索过滤后的会话列表
@@ -1696,7 +1720,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                       <button
                         onClick={() => isClickable && handleStepBarClick(idx)}
                         disabled={!isClickable && !isCurrent}
-                        title={isManual ? `${label}（人工步骤）` : isCompleted ? `${label}（点击查看本步骤大纲）` : label}
+                        title={isManual ? `${label}（人工步骤）` : isCompleted ? `${label}（点击将本步骤对话记录发送给当前智能体）` : label}
                         className={`flex items-center gap-2 px-3.5 py-2 rounded-full shrink-0 text-[13px] font-medium transition-all ${
                           isCurrent
                             ? "bg-[#002FA7] text-white shadow-[0_2px_10px_rgba(0,47,167,0.28)]"
