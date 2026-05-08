@@ -394,6 +394,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const stepParam = searchParams.get("step");
   const fromConvId = searchParams.get("from");  // 上一步会话 ID，用于注入上下文
   const currentStepIdx = stepParam !== null ? parseInt(stepParam, 10) : 0;
+  // outline=1：到达本页后自动向智能体请求本步骤产出大纲
+  const outlineMode = searchParams.get("outline") === "1";
   const backHref = fromWorkflowId ? `/?wf=${encodeURIComponent(fromWorkflowId)}` : "/";
 
   const [agent, setAgent] = useState<AgentInfo | null>(null);
@@ -432,6 +434,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   // 跨步骤上下文：用 ref 避免触发重渲染；sent 标记保证只注入一次
   const workflowContextRef = useRef<string | null>(null);
   const workflowContextSentRef = useRef(false);
+  // outline 模式：自动请求大纲，只发一次
+  const outlineSentRef = useRef(false);
 
   // 5.6up · 多格式导出 popover + 进度
   const [exportPopoverOpen, setExportPopoverOpen] = useState(false);
@@ -463,7 +467,6 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   // 5.8up · 自动查找上一个智能体步骤的最新对话，作为跨步骤上下文注入
   // 不依赖 URL from 参数，在 wfSteps 加载完成后自动执行
   useEffect(() => {
-    console.log("[wf-ctx] effect", { fromWorkflowId, stepsLen: wfSteps.length, resolvedStepIdx });
     if (!fromWorkflowId || !wfSteps.length || resolvedStepIdx <= 0) return;
 
     // 向前找最近一个 agent 类型步骤
@@ -474,7 +477,6 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         break;
       }
     }
-    console.log("[wf-ctx] prevAgentCode", prevAgentCode);
     if (!prevAgentCode) return;
 
     // 拉该智能体最新的一条对话
@@ -482,12 +484,10 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         const conv = (data?.data ?? data)?.[0] ?? null;
-        console.log("[wf-ctx] conv", conv?.id);
         if (!conv?.id) return;
         return fetch(`/api/conversations/${encodeURIComponent(conv.id)}/messages`)
           .then((r) => r.ok ? r.json() : [])
           .then((msgs: { role: string; content: string }[]) => {
-            console.log("[wf-ctx] msgs count", msgs.length);
             if (!msgs.length) return;
             const lines: string[] = [];
             for (const m of msgs) {
@@ -498,10 +498,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             let ctx = lines.join("\n\n");
             if (ctx.length > 2000) ctx = ctx.slice(0, 2000) + "…（内容过长已截断）";
             workflowContextRef.current = ctx;
-            console.log("[wf-ctx] context set, length:", ctx.length);
           });
       })
-      .catch((e) => console.error("[wf-ctx] error", e));
+      .catch(() => {});
   }, [fromWorkflowId, wfSteps, resolvedStepIdx]);
 
   // 错误提示 3 秒后自动消失
@@ -510,6 +509,21 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     const t = setTimeout(() => setError(""), 3000);
     return () => clearTimeout(t);
   }, [error]);
+
+  // outline 模式：会话消息加载完成后，自动向智能体请求本步骤产出大纲
+  useEffect(() => {
+    if (!outlineMode || loading || streaming || messages.length === 0 || outlineSentRef.current) return;
+    outlineSentRef.current = true;
+    const stepTitle = wfSteps[resolvedStepIdx]?.title;
+    const outlineMsg = stepTitle
+      ? `请根据我们在「${stepTitle}」步骤中的对话内容，整理一份简要大纲，总结本步骤的主要工作成果和关键产出。`
+      : "请根据我们的对话内容，整理一份简要大纲，总结本步骤的主要工作成果和关键产出。";
+    const t = setTimeout(() => {
+      handleSend({ text: outlineMsg });
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outlineMode, loading, streaming, messages.length]);
 
   // popover · Esc 关闭
   useEffect(() => {
@@ -816,7 +830,6 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     abortControllerRef.current = abortCtrl;
 
     // 5.8up：首条消息带上前一步上下文，之后清零避免重复注入
-    console.log("[wf-ctx] send check: sent=", workflowContextSentRef.current, "ctx=", workflowContextRef.current?.slice(0, 80));
     const wfCtxToSend = workflowContextSentRef.current ? undefined : (workflowContextRef.current ?? undefined);
     if (wfCtxToSend) workflowContextSentRef.current = true;
 
@@ -1100,6 +1113,15 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     ? wfSteps.findIndex((s, i) => i > resolvedStepIdx && s.exec_type === "agent" && s.agents)
     : -1;
   const isLastAgentStep = !!fromWorkflowId && wfSteps.length > 0 && nextAgentStepIdx === -1;
+  // 找到当前步之前最近一个 agent 类型步骤的 index（-1 = 没有 → 当前是第一步）
+  const prevAgentStepIdx = fromWorkflowId
+    ? (() => {
+        for (let i = resolvedStepIdx - 1; i >= 0; i--) {
+          if (wfSteps[i].exec_type === "agent" && wfSteps[i].agents) return i;
+        }
+        return -1;
+      })()
+    : -1;
   // 当前步骤到下一个智能体步骤之间，需要人工处理的中间步骤
   const intermediateManualSteps = fromWorkflowId && nextAgentStepIdx > 0
     ? wfSteps.filter((s, i) => i > resolvedStepIdx && i < nextAgentStepIdx && s.exec_type !== "agent")
@@ -1113,8 +1135,16 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   function confirmNextStep() {
     setShowStepConfirm(false);
     if (isLastAgentStep) {
+      // 完成最后一步，保存进度为全部解锁
+      if (fromWorkflowId) {
+        try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: wfSteps.length - 1 })); } catch {}
+      }
       router.push("/");
       return;
+    }
+    // 保存进度：下一个智能体步骤已解锁
+    if (fromWorkflowId) {
+      try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: nextAgentStepIdx })); } catch {}
     }
     const nextStep = wfSteps[nextAgentStepIdx];
     if (!nextStep?.agents) { router.push("/"); return; }
@@ -1129,8 +1159,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     if (idx === resolvedStepIdx || idx >= resolvedStepIdx) return;
     const step = wfSteps[idx];
     if (!step?.agents) return;
+    // 点击已完成步骤 → 跳回该智能体并自动生成大纲
     router.push(
-      `/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${idx}`
+      `/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${idx}&outline=1`
     );
   }
 
@@ -1626,15 +1657,32 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           onDragLeave={onDragLeave}
           onDrop={onDrop}
         >
-          {/* 5.8up · 工作流水平进度条（聊天列顶部，不影响侧边栏） */}
+          {/* 5.8up · 工作流水平进度条（聊天列顶部） */}
           {fromWorkflowId && wfSteps.length > 0 && (
-            <div className="shrink-0 bg-white border-b border-gray-100 px-5 py-4 flex items-center gap-4">
+            <div className="shrink-0 bg-white border-b border-gray-100 px-5 py-4 flex items-center gap-3">
+              {/* 左侧：上一步按钮（与右侧下一步对称） */}
+              {prevAgentStepIdx >= 0 ? (
+                <button
+                  onClick={() => {
+                    const step = wfSteps[prevAgentStepIdx];
+                    if (!step?.agents) return;
+                    router.push(`/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${prevAgentStepIdx}&outline=1`);
+                  }}
+                  className="shrink-0 flex items-center gap-1.5 px-4 py-2.5 rounded-full text-[13px] font-semibold transition-all bg-gray-100 text-gray-600 hover:bg-gray-200"
+                >
+                  ← 上一步
+                </button>
+              ) : (
+                <div className="shrink-0 w-[88px]" />
+              )}
+
               {/* 步骤滚动区 */}
               <div className="flex items-center flex-1 overflow-x-auto min-w-0 gap-0 pb-2 -mb-2">
                 <span className="text-[11px] text-gray-400 font-medium shrink-0 mr-3 whitespace-nowrap">
                   {wfName}：
                 </span>
                 {wfSteps.map((step, idx) => {
+                  if (idx > resolvedStepIdx) return null;
                   const isCompleted = completedSteps.has(idx);
                   const isCurrent = idx === resolvedStepIdx;
                   const isClickable = isCompleted && !!step.agents && step.exec_type === "agent";
@@ -1648,7 +1696,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                       <button
                         onClick={() => isClickable && handleStepBarClick(idx)}
                         disabled={!isClickable && !isCurrent}
-                        title={isManual ? `${label}（人工步骤）` : label}
+                        title={isManual ? `${label}（人工步骤）` : isCompleted ? `${label}（点击查看本步骤大纲）` : label}
                         className={`flex items-center gap-2 px-3.5 py-2 rounded-full shrink-0 text-[13px] font-medium transition-all ${
                           isCurrent
                             ? "bg-[#002FA7] text-white shadow-[0_2px_10px_rgba(0,47,167,0.28)]"
@@ -1676,7 +1724,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   );
                 })}
               </div>
-              {/* 进入下一步按钮（进度条同行右侧） */}
+
+              {/* 右侧：下一步 / 完成按钮 */}
               <button
                 onClick={handleNextStepClick}
                 disabled={streaming}

@@ -607,10 +607,8 @@ export default function HomePage() {
                       <div className="space-y-5">
                         {activeWorkflow.workflow_steps.map((step, idx) => (
                           <div key={step.id} className="flex gap-4 items-start relative">
-                            <div className="w-8 h-8 rounded-full bg-[#002FA7]/10 border-2 border-white ring-1 ring-gray-100 flex items-center justify-center shrink-0 z-10 mt-0.5">
-                              <span className="text-[12px] font-bold text-[#002FA7]">
-                                {idx + 1}
-                              </span>
+                            <div className="w-8 h-8 rounded-full border-2 border-white ring-1 ring-gray-100 flex items-center justify-center shrink-0 z-10 mt-0.5 bg-[#002FA7]/10">
+                              <span className="text-[12px] font-bold text-[#002FA7]">{idx + 1}</span>
                             </div>
                             <div className="flex-1 min-w-0 flex items-start gap-3 py-0.5">
                               <div className="flex-1 min-w-0">
@@ -666,7 +664,11 @@ export default function HomePage() {
                                 style={{ minWidth: 148 }}
                               >
                                 {step.exec_type === "agent" ? (
-                                  <WorkflowStepButton step={step} fromWorkflow={activeWorkflow?.id} stepIndex={idx} />
+                                  <WorkflowStepButton
+                                    step={step}
+                                    fromWorkflow={activeWorkflow?.id}
+                                    stepIndex={idx}
+                                  />
                                 ) : step.exec_type === "manual" ? (
                                   <span className="text-[12px] text-amber-600 bg-amber-50 px-3 py-1.5 rounded-[8px]">
                                     此步骤需人工处理

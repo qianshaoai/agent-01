@@ -6,11 +6,11 @@
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  admin_id      uuid        REFERENCES admins(id) ON DELETE SET NULL,
+  admin_id      uuid,                   -- no FK: admins can come from admins OR users table
   admin_username text       NOT NULL,
   admin_role    text        NOT NULL,
   action        text        NOT NULL,   -- create | update | delete | enable | disable
-  resource_type text        NOT NULL,   -- agent | workflow
+  resource_type text        NOT NULL,
   resource_id   text,
   resource_name text,
   detail        jsonb       NOT NULL DEFAULT '{}',
