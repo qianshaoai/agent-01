@@ -2,6 +2,7 @@ import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
@@ -49,5 +50,10 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "create", resourceType: "team", resourceId: data.id, resourceName: data.name,
+    detail: { tenant_code: targetTenant, dept_id: deptId },
+  });
   return NextResponse.json(data, { status: 201 });
 }

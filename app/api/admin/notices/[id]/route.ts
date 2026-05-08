@@ -2,6 +2,7 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function PATCH(
   req: NextRequest,
@@ -39,6 +40,12 @@ export async function PATCH(
     .single();
 
   if (error) return dbError(error);
+  const noticeAction = body.enabled === true ? "enable" : body.enabled === false ? "disable" : "update";
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: noticeAction, resourceType: "notice", resourceId: id,
+    resourceName: (data.content as string)?.slice(0, 50),
+  });
   return NextResponse.json(data);
 }
 
@@ -60,6 +67,12 @@ export async function DELETE(
     }
   }
 
+  const { data: noticeRow } = await db.from("notices").select("content").eq("id", id).maybeSingle();
   await db.from("notices").delete().eq("id", id);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "delete", resourceType: "notice", resourceId: id,
+    resourceName: (noticeRow?.content as string | undefined)?.slice(0, 50),
+  });
   return NextResponse.json({ ok: true });
 }

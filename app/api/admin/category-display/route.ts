@@ -2,6 +2,7 @@ import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 // GET /api/admin/category-display?agentId=X
 // 返回该智能体在所有分类下的展示状态
@@ -73,7 +74,8 @@ export async function GET(req: NextRequest) {
 // 支持单条 { agentId, categoryId, isManual, isHidden }
 // 或批量 { agentId, items: [{ categoryId, isManual, isHidden }, ...] }
 export async function PATCH(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const body = await req.json();
   const { agentId } = body;
@@ -121,5 +123,10 @@ export async function PATCH(req: NextRequest) {
       .upsert(toUpsert, { onConflict: "category_id,agent_id" });
   }
 
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "update", resourceType: "category", resourceId: agentId, resourceName: "分类展示设置",
+    detail: { items },
+  });
   return NextResponse.json({ ok: true });
 }

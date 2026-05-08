@@ -2,6 +2,7 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const { error } = await db.from("wf_categories").update({ icon_url: publicUrl }).eq("id", id);
   if (error) return dbError(error);
-
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "update", resourceType: "wf_category", resourceId: id, resourceName: "图标",
+  });
   return NextResponse.json({ url: publicUrl });
 }
 
@@ -51,5 +55,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const { id } = await params;
   const { error } = await db.from("wf_categories").update({ icon_url: null }).eq("id", id);
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "delete", resourceType: "wf_category", resourceId: id, resourceName: "图标",
+  });
   return NextResponse.json({ ok: true });
 }

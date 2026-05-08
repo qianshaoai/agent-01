@@ -2,12 +2,14 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { id: workflowId } = await params;
   const { stepOrder, title, description, execType, agentId, buttonText, enabled } = await req.json();
@@ -33,5 +35,10 @@ export async function POST(
     .single();
 
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "create", resourceType: "workflow_step", resourceId: data.id, resourceName: data.title,
+    detail: { workflow_id: workflowId },
+  });
   return NextResponse.json(data, { status: 201 });
 }

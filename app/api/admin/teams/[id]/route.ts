@@ -2,6 +2,7 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 // 5.7up · 工具：org_admin 只能操作自己组织的小组
 async function ensureOrgScope(
@@ -35,6 +36,10 @@ export async function PATCH(
 
   const { data, error } = await db.from("teams").update(updates).eq("id", id).select().single();
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "update", resourceType: "team", resourceId: id, resourceName: data.name,
+  });
   return NextResponse.json(data);
 }
 
@@ -54,6 +59,11 @@ export async function DELETE(
     return apiError(`该小组下还有 ${count} 名用户，请先移除用户再删除`, "CONFLICT");
   }
 
+  const { data: team } = await db.from("teams").select("name").eq("id", id).maybeSingle();
   await db.from("teams").delete().eq("id", id);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "delete", resourceType: "team", resourceId: id, resourceName: team?.name,
+  });
   return NextResponse.json({ ok: true });
 }

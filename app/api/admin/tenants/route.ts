@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
@@ -64,5 +65,10 @@ export async function POST(req: NextRequest) {
     return dbError(error);
   }
 
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "create", resourceType: "tenant", resourceId: data.id, resourceName: data.name,
+    detail: { code: data.code },
+  });
   return NextResponse.json(data, { status: 201 });
 }

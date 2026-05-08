@@ -1,7 +1,12 @@
 import { db } from "@/lib/db";
 
 export type AuditAction = "create" | "update" | "delete" | "enable" | "disable";
-export type AuditResourceType = "agent" | "workflow";
+export type AuditResourceType =
+  | "agent" | "workflow" | "workflow_step"
+  | "category" | "wf_category"
+  | "notice" | "tenant" | "user"
+  | "department" | "team" | "user_group"
+  | "settings" | "resource_permission";
 
 export async function writeAuditLog(params: {
   adminId: string;

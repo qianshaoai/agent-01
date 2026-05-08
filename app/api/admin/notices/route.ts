@@ -2,6 +2,7 @@ import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -52,5 +53,11 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "create", resourceType: "notice", resourceId: data.id,
+    resourceName: data.content?.slice(0, 50),
+    detail: { tenant_code: finalTenantCode },
+  });
   return NextResponse.json(data, { status: 201 });
 }

@@ -2,12 +2,14 @@ import { dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { id } = await params;
   const body = await req.json();
@@ -30,6 +32,11 @@ export async function PATCH(
     .single();
 
   if (error) return dbError(error);
+  const stepAction = body.enabled === true ? "enable" : body.enabled === false ? "disable" : "update";
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: stepAction, resourceType: "workflow_step", resourceId: id, resourceName: data.title,
+  });
   return NextResponse.json(data);
 }
 
@@ -37,10 +44,16 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { id } = await params;
+  const { data: step } = await db.from("workflow_steps").select("title").eq("id", id).maybeSingle();
   const { error } = await db.from("workflow_steps").delete().eq("id", id);
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "delete", resourceType: "workflow_step", resourceId: id, resourceName: step?.title,
+  });
   return NextResponse.json({ ok: true });
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function GET() {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
@@ -60,5 +61,14 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "update", resourceType: "settings", resourceName: "品牌设置",
+    detail: Object.fromEntries(
+      Object.entries({ platform_name: body.platform_name, logo_url: body.logo_url,
+        help_doc_url: body.help_doc_url, contact_qr_text: body.contact_qr_text })
+        .filter(([, v]) => v !== undefined)
+    ),
+  });
   return NextResponse.json({ ok: true });
 }

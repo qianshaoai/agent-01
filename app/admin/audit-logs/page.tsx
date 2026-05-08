@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
-import { ClipboardList, Bot, GitBranch, Plus, Pencil, Trash2, ToggleLeft, ToggleRight, ChevronLeft, ChevronRight } from "lucide-react";
+import { ClipboardList, Bot, GitBranch, Plus, Pencil, Trash2, ToggleLeft, ToggleRight, ChevronLeft, ChevronRight, Building2, Users, Megaphone, Settings, Layers, UsersRound, Shield, ListTree, User } from "lucide-react";
 
 type AuditLog = {
   id: string;
@@ -47,9 +47,40 @@ const ROLE_LABEL: Record<string, string> = {
   org_admin:    "组织管理员",
 };
 
+const RESOURCE_LABEL: Record<string, string> = {
+  agent:               "智能体",
+  workflow:            "工作流",
+  workflow_step:       "工作流步骤",
+  category:            "智能体分类",
+  wf_category:         "工作流分类",
+  notice:              "公告",
+  tenant:              "组织",
+  user:                "用户",
+  department:          "部门",
+  team:                "小组",
+  user_group:          "用户分组",
+  settings:            "系统设置",
+  resource_permission: "访问权限",
+};
+
 function ResourceIcon({ type }: { type: string }) {
-  if (type === "agent") return <Bot size={13} className="text-purple-500" />;
-  return <GitBranch size={13} className="text-blue-500" />;
+  const props = { size: 13 };
+  switch (type) {
+    case "agent":               return <Bot {...props} className="text-purple-500" />;
+    case "workflow":            return <GitBranch {...props} className="text-blue-500" />;
+    case "workflow_step":       return <ListTree {...props} className="text-blue-400" />;
+    case "category":            return <Layers {...props} className="text-indigo-400" />;
+    case "wf_category":         return <Layers {...props} className="text-cyan-500" />;
+    case "notice":              return <Megaphone {...props} className="text-amber-500" />;
+    case "tenant":              return <Building2 {...props} className="text-teal-500" />;
+    case "user":                return <User {...props} className="text-sky-500" />;
+    case "department":          return <Users {...props} className="text-green-500" />;
+    case "team":                return <UsersRound {...props} className="text-lime-500" />;
+    case "user_group":          return <UsersRound {...props} className="text-orange-400" />;
+    case "settings":            return <Settings {...props} className="text-gray-500" />;
+    case "resource_permission": return <Shield {...props} className="text-rose-400" />;
+    default:                    return <Pencil {...props} className="text-gray-400" />;
+  }
 }
 
 export default function AuditLogsPage() {
@@ -97,7 +128,7 @@ export default function AuditLogsPage() {
         <PageHeader
           icon={<ClipboardList size={20} />}
           title="审计记录"
-          subtitle="记录智能体与工作流的所有新增、修改、删除操作"
+          subtitle="记录所有管理员后台操作：组织、用户、智能体、工作流、公告、设置等"
         />
 
         {/* 筛选栏 */}
@@ -113,6 +144,17 @@ export default function AuditLogsPage() {
                 <option value="all">全部</option>
                 <option value="agent">智能体</option>
                 <option value="workflow">工作流</option>
+                <option value="workflow_step">工作流步骤</option>
+                <option value="tenant">组织</option>
+                <option value="user">用户</option>
+                <option value="category">智能体分类</option>
+                <option value="wf_category">工作流分类</option>
+                <option value="notice">公告</option>
+                <option value="department">部门</option>
+                <option value="team">小组</option>
+                <option value="user_group">用户分组</option>
+                <option value="settings">系统设置</option>
+                <option value="resource_permission">访问权限</option>
               </select>
             </div>
             <div className="flex flex-col gap-1">
@@ -206,7 +248,7 @@ export default function AuditLogsPage() {
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center gap-1 text-gray-600">
                           <ResourceIcon type={log.resource_type} />
-                          {log.resource_type === "agent" ? "智能体" : "工作流"}
+                          {RESOURCE_LABEL[log.resource_type] ?? log.resource_type}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-gray-700">

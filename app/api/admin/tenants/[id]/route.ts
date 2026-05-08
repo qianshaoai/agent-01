@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function PATCH(
   req: NextRequest,
@@ -47,6 +48,11 @@ export async function PATCH(
     .single();
 
   if (error) return dbError(error);
+  const auditAction = body.enabled === true ? "enable" : body.enabled === false ? "disable" : "update";
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: auditAction, resourceType: "tenant", resourceId: id, resourceName: data.name,
+  });
   return NextResponse.json(data);
 }
 
@@ -102,5 +108,10 @@ export async function DELETE(
 
   const { error } = await db.from("tenants").delete().eq("id", id);
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "delete", resourceType: "tenant", resourceId: id, resourceName: tenant.name,
+    detail: { code: tenant.code },
+  });
   return NextResponse.json({ ok: true });
 }

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,10 @@ export async function POST(req: NextRequest) {
       .update({ pwd_hash: newHash, first_login: false })
       .eq("id", admin.adminId);
     if (error) return dbError(error);
+    await writeAuditLog({
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      action: "update", resourceType: "settings", resourceName: "管理员密码",
+    });
     return NextResponse.json({ ok: true });
   }
 
@@ -62,5 +67,9 @@ export async function POST(req: NextRequest) {
     .update({ pwd_hash: newHash })
     .eq("id", admin.adminId);
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "update", resourceType: "settings", resourceName: "管理员密码",
+  });
   return NextResponse.json({ ok: true });
 }

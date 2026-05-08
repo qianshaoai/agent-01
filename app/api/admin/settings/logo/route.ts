@@ -2,6 +2,7 @@ import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function POST(req: NextRequest) {
   const admin = await requireAdmin();
@@ -42,5 +43,9 @@ export async function POST(req: NextRequest) {
     { onConflict: "key" }
   );
 
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "update", resourceType: "settings", resourceName: "Logo",
+  });
   return NextResponse.json({ url: publicUrl });
 }

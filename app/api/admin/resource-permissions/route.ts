@@ -2,6 +2,7 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getScopeLabel(scopeType: string, scopeId: string | null, maps: any) {
@@ -70,7 +71,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { resourceType, resourceId, scopeType, scopeId } = await req.json();
   if (!resourceType || !resourceId || !scopeType) {
@@ -87,14 +89,28 @@ export async function POST(req: NextRequest) {
     if (error.code === "23505") return apiError("该权限已存在", "CONFLICT");
     return dbError(error);
   }
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "create", resourceType: "resource_permission", resourceId: data.id,
+    resourceName: `${resourceType}/${resourceId}`,
+    detail: { scopeType, scopeId: scopeId ?? null },
+  });
   return NextResponse.json(data, { status: 201 });
 }
 
 export async function DELETE(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { id } = await req.json();
+  const { data: perm } = await db.from("resource_permissions").select("resource_type, resource_id, scope_type, scope_id").eq("id", id).maybeSingle();
   const { error } = await db.from("resource_permissions").delete().eq("id", id);
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "delete", resourceType: "resource_permission", resourceId: id,
+    resourceName: perm ? `${perm.resource_type}/${perm.resource_id}` : undefined,
+    detail: perm ? { scopeType: perm.scope_type, scopeId: perm.scope_id } : {},
+  });
   return NextResponse.json({ ok: true });
 }

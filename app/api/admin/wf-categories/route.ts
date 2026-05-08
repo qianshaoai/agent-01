@@ -2,6 +2,7 @@ import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
@@ -17,7 +18,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { name } = await req.json();
   if (!name?.trim()) return apiError("分类名称不能为空", "VALIDATION_ERROR");
@@ -37,5 +39,9 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "create", resourceType: "wf_category", resourceId: data.id, resourceName: data.name,
+  });
   return NextResponse.json(data, { status: 201 });
 }

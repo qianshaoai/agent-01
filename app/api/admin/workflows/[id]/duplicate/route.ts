@@ -2,12 +2,14 @@ import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { id } = await params;
 
@@ -55,5 +57,10 @@ export async function POST(
     );
   }
 
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "create", resourceType: "workflow", resourceId: newWf.id, resourceName: newWf.name,
+    detail: { duplicated_from: id },
+  });
   return NextResponse.json(newWf, { status: 201 });
 }

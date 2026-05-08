@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { canAssignRole, canManageTarget } from "@/lib/auth";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function PATCH(
   req: NextRequest,
@@ -18,7 +19,7 @@ export async function PATCH(
   // 加载目标用户当前信息，用于权限校验
   const { data: target } = await db
     .from("users")
-    .select("id, role, status, tenant_code, user_type")
+    .select("id, role, status, tenant_code, user_type, phone, nickname")
     .eq("id", id)
     .single();
   if (!target) return apiError("用户不存在", "NOT_FOUND");
@@ -46,6 +47,11 @@ export async function PATCH(
     }
     const { error } = await db.from("users").update({ status }).eq("id", id);
     if (error) return dbError(error);
+    await writeAuditLog({
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      action: status === "active" ? "enable" : "disable", resourceType: "user",
+      resourceId: id, resourceName: (target.nickname || target.phone) ?? undefined,
+    });
     return NextResponse.json({ ok: true });
   }
 
@@ -78,6 +84,12 @@ export async function PATCH(
     }
     const { error } = await db.from("users").update({ role }).eq("id", id);
     if (error) return dbError(error);
+    await writeAuditLog({
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      action: "update", resourceType: "user", resourceId: id,
+      resourceName: (target.nickname || target.phone) ?? undefined,
+      detail: { action: "set-role", newRole: role, oldRole: target.role },
+    });
     return NextResponse.json({ ok: true });
   }
 
@@ -107,6 +119,12 @@ export async function PATCH(
         { status: 400 }
       );
     }
+    await writeAuditLog({
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      action: "update", resourceType: "user", resourceId: id,
+      resourceName: (target.nickname || target.phone) ?? undefined,
+      detail: { action: "set-tenant", tenantCode },
+    });
     return NextResponse.json({ ok: true });
   }
 
@@ -119,6 +137,12 @@ export async function PATCH(
     };
     const { error } = await db.from("users").update(updates).eq("id", id);
     if (error) return dbError(error);
+    await writeAuditLog({
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      action: "update", resourceType: "user", resourceId: id,
+      resourceName: (target.nickname || target.phone) ?? undefined,
+      detail: { action: "set-dept", deptId: deptId || null, teamId: teamId || null },
+    });
     return NextResponse.json({ ok: true });
   }
 
@@ -134,6 +158,12 @@ export async function PATCH(
       .update({ pwd_hash, first_login: true })
       .eq("id", id);
     if (error) return dbError(error);
+    await writeAuditLog({
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      action: "update", resourceType: "user", resourceId: id,
+      resourceName: (target.nickname || target.phone) ?? undefined,
+      detail: { action: "reset-password" },
+    });
     return NextResponse.json({ ok: true });
   }
 
@@ -142,6 +172,7 @@ export async function PATCH(
   //   同步把 username/phone 改写成墓碑值，释放原账号信息以便后续重新注册复用。
   //   nickname 改写为"已删除用户"避免后台继续暴露原账号信息。
   if (body.action === "soft-delete" || body.action === "delete") {
+    const displayName = (target.nickname || target.phone) ?? undefined;
     const { error } = await db.from("users").update({
       status: "deleted",
       username: `deleted_${id}`,
@@ -149,6 +180,10 @@ export async function PATCH(
       nickname: "已删除用户",
     }).eq("id", id);
     if (error) return dbError(error);
+    await writeAuditLog({
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      action: "delete", resourceType: "user", resourceId: id, resourceName: displayName,
+    });
     return NextResponse.json({ ok: true });
   }
 

@@ -2,6 +2,7 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
@@ -18,7 +19,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { id } = await params;
   const { userIds } = await req.json();
@@ -30,11 +32,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const rows = userIds.map((uid: string) => ({ group_id: id, user_id: uid }));
   const { error } = await db.from("user_group_members").upsert(rows, { onConflict: "group_id,user_id" });
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "update", resourceType: "user_group", resourceId: id,
+    detail: { action: "add-members", userIds },
+  });
   return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
 
   const { id } = await params;
   const { userId } = await req.json();
@@ -46,5 +54,10 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     .eq("user_id", userId);
 
   if (error) return dbError(error);
+  await writeAuditLog({
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    action: "update", resourceType: "user_group", resourceId: id,
+    detail: { action: "remove-member", userId },
+  });
   return NextResponse.json({ ok: true });
 }
