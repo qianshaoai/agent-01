@@ -510,16 +510,16 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     return () => clearTimeout(t);
   }, [error]);
 
-  // outline 模式：会话消息加载完成后，自动向智能体请求本步骤产出大纲
+  // 工作流步骤衔接：会话消息加载完成后，自动向智能体说明工作背景并请其继续本职工作
   useEffect(() => {
     if (!outlineMode || loading || streaming || messages.length === 0 || outlineSentRef.current) return;
     outlineSentRef.current = true;
     const stepTitle = wfSteps[resolvedStepIdx]?.title;
-    const outlineMsg = stepTitle
-      ? `请根据我们在「${stepTitle}」步骤中的对话内容，整理一份简要大纲，总结本步骤的主要工作成果和关键产出。`
-      : "请根据我们的对话内容，整理一份简要大纲，总结本步骤的主要工作成果和关键产出。";
+    const contextMsg = stepTitle
+      ? `你好！我们正在开展「${stepTitle}」阶段的工作。请回顾一下我们之前的对话记录，了解本阶段已完成的内容和进展，然后继续协助我完成本阶段的任务。`
+      : "你好！请回顾一下我们之前的对话记录，了解当前阶段的工作进展，然后继续协助我完成本阶段的任务。";
     const t = setTimeout(() => {
-      handleSend({ text: outlineMsg });
+      handleSend({ text: contextMsg });
     }, 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
