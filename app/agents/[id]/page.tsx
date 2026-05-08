@@ -1117,7 +1117,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const prevAgentStepIdx = fromWorkflowId
     ? (() => {
         for (let i = resolvedStepIdx - 1; i >= 0; i--) {
-          if (wfSteps[i].exec_type === "agent" && wfSteps[i].agents) return i;
+          if (wfSteps[i]?.exec_type === "agent" && wfSteps[i]?.agents) return i;
         }
         return -1;
       })()
