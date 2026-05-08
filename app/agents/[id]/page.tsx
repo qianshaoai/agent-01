@@ -429,6 +429,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const [wfName, setWfName] = useState("");
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [showStepConfirm, setShowStepConfirm] = useState(false);
+  const [pendingManualIdx, setPendingManualIdx] = useState<number | null>(null);
   // 实际当前步骤下标：优先用 agent_code 反查，URL 的 step 参数仅做兜底
   const [resolvedStepIdx, setResolvedStepIdx] = useState(currentStepIdx);
   // 跨步骤上下文：用 ref 避免触发重渲染；sent 标记保证只注入一次
@@ -1108,11 +1109,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   }
 
   // 5.8up · 工作流进度条辅助计算
-  // 找到当前步之后第一个 agent 类型步骤的 index（-1 = 没有 → 当前是最后一步）
-  const nextAgentStepIdx = fromWorkflowId
-    ? wfSteps.findIndex((s, i) => i > resolvedStepIdx && s.exec_type === "agent" && s.agents)
-    : -1;
-  const isLastAgentStep = !!fromWorkflowId && wfSteps.length > 0 && nextAgentStepIdx === -1;
+  // 是否还有后续步骤
+  const hasMoreStepsAfter = !!fromWorkflowId && wfSteps.length > resolvedStepIdx + 1;
   // 找到当前步之前最近一个 agent 类型步骤的 index（-1 = 没有 → 当前是第一步）
   const prevAgentStepIdx = fromWorkflowId
     ? (() => {
@@ -1122,37 +1120,51 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         return -1;
       })()
     : -1;
-  // 当前步骤到下一个智能体步骤之间，需要人工处理的中间步骤
-  const intermediateManualSteps = fromWorkflowId && nextAgentStepIdx > 0
-    ? wfSteps.filter((s, i) => i > resolvedStepIdx && i < nextAgentStepIdx && s.exec_type !== "agent")
-    : [];
-  const hasManualIntermediate = intermediateManualSteps.length > 0;
+
+  // 推进到 fromIdx 的下一步：agent → 跳转，manual → 弹窗，无更多 → 返回首页
+  function advanceFrom(fromIdx: number) {
+    const nextIdx = fromIdx + 1;
+    if (fromWorkflowId) {
+      try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: Math.min(nextIdx, wfSteps.length - 1) })); } catch {}
+    }
+    if (nextIdx >= wfSteps.length) {
+      router.push("/");
+      return;
+    }
+    const nextStep = wfSteps[nextIdx];
+    if (nextStep.exec_type === "agent") {
+      if (!nextStep.agents) { advanceFrom(nextIdx); return; }
+      const ctxConvId = activeConvId ?? conversations[0]?.id ?? null;
+      const fromParam = ctxConvId ? `&from=${encodeURIComponent(ctxConvId)}` : "";
+      router.push(`/agents/${encodeURIComponent(nextStep.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${nextIdx}${fromParam}`);
+    } else {
+      setPendingManualIdx(nextIdx);
+    }
+  }
 
   function handleNextStepClick() {
-    setShowStepConfirm(true);
+    if (!hasMoreStepsAfter) {
+      setShowStepConfirm(true);
+      return;
+    }
+    const nextIdx = resolvedStepIdx + 1;
+    if (wfSteps[nextIdx]?.exec_type === "agent") {
+      setShowStepConfirm(true);
+    } else {
+      advanceFrom(resolvedStepIdx);
+    }
   }
 
   function confirmNextStep() {
     setShowStepConfirm(false);
-    if (isLastAgentStep) {
-      // 完成最后一步，保存进度为全部解锁
+    if (!hasMoreStepsAfter) {
       if (fromWorkflowId) {
         try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: wfSteps.length - 1 })); } catch {}
       }
       router.push("/");
       return;
     }
-    // 保存进度：下一个智能体步骤已解锁
-    if (fromWorkflowId) {
-      try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: nextAgentStepIdx })); } catch {}
-    }
-    const nextStep = wfSteps[nextAgentStepIdx];
-    if (!nextStep?.agents) { router.push("/"); return; }
-    const ctxConvId = activeConvId ?? conversations[0]?.id ?? null;
-    const fromParam = ctxConvId ? `&from=${encodeURIComponent(ctxConvId)}` : "";
-    router.push(
-      `/agents/${encodeURIComponent(nextStep.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${nextAgentStepIdx}${fromParam}`
-    );
+    advanceFrom(resolvedStepIdx);
   }
 
   async function handleStepBarClick(idx: number) {
@@ -1706,21 +1718,27 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   {wfName}：
                 </span>
                 {wfSteps.map((step, idx) => {
-                  if (idx > resolvedStepIdx) return null;
                   const isCompleted = completedSteps.has(idx);
                   const isCurrent = idx === resolvedStepIdx;
-                  const isClickable = isCompleted && !!step.agents && step.exec_type === "agent";
+                  const isFuture = idx > resolvedStepIdx;
                   const isManual = step.exec_type !== "agent";
+                  const isClickable = isCompleted && !!step.agents && step.exec_type === "agent";
                   const label = step.title;
                   return (
                     <Fragment key={step.id}>
                       {idx > 0 && (
-                        <div className={`w-7 h-px mx-1.5 shrink-0 ${idx <= resolvedStepIdx ? "bg-[#002FA7]/20" : "bg-gray-200"}`} />
+                        <div className={`w-7 h-px mx-1.5 shrink-0 ${idx <= resolvedStepIdx ? "bg-[#002FA7]/20" : "bg-gray-100"}`} />
                       )}
                       <button
                         onClick={() => isClickable && handleStepBarClick(idx)}
                         disabled={!isClickable && !isCurrent}
-                        title={isManual ? `${label}（人工步骤）` : isCompleted ? `${label}（点击将本步骤对话记录发送给当前智能体）` : label}
+                        title={
+                          isFuture && isManual ? `${label}（待完成的人工步骤）`
+                          : isFuture ? `${label}（后续智能体步骤）`
+                          : isManual ? `${label}（人工步骤）`
+                          : isCompleted ? `${label}（点击将本步骤对话记录发送给当前智能体）`
+                          : label
+                        }
                         className={`flex items-center gap-2 px-3.5 py-2 rounded-full shrink-0 text-[13px] font-medium transition-all ${
                           isCurrent
                             ? "bg-[#002FA7] text-white shadow-[0_2px_10px_rgba(0,47,167,0.28)]"
@@ -1728,17 +1746,14 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                             ? "bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 cursor-pointer"
                             : isManual
                             ? "bg-amber-50 text-amber-600 border border-amber-200 cursor-default"
-                            : "bg-gray-100 text-gray-400 cursor-default"
+                            : "bg-gray-50 text-gray-300 border border-gray-100 cursor-default"
                         }`}
                       >
                         <span className={`w-5 h-5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 ${
-                          isCurrent
-                            ? "bg-white/20 text-white"
-                            : isCompleted
-                            ? "bg-green-200 text-green-700"
-                            : isManual
-                            ? "bg-amber-200 text-amber-700"
-                            : "bg-gray-200 text-gray-400"
+                          isCurrent ? "bg-white/20 text-white"
+                          : isCompleted ? "bg-green-200 text-green-700"
+                          : isManual ? "bg-amber-200 text-amber-700"
+                          : "bg-gray-100 text-gray-300"
                         }`}>
                           {isCompleted ? "✓" : idx + 1}
                         </span>
@@ -1754,12 +1769,12 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 onClick={handleNextStepClick}
                 disabled={streaming}
                 className={`shrink-0 flex items-center gap-1.5 px-5 py-2.5 rounded-full text-[13px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                  isLastAgentStep
+                  !hasMoreStepsAfter
                     ? "bg-green-500 text-white hover:bg-green-600"
                     : "bg-[#002FA7] text-white hover:bg-[#1a47c0]"
                 }`}
               >
-                {isLastAgentStep ? "完成 ✓" : "下一步 →"}
+                {!hasMoreStepsAfter ? "完成 ✓" : "下一步 →"}
               </button>
             </div>
           )}
@@ -1954,7 +1969,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         </div>
       </div>
 
-      {/* 5.8up · 工作流步骤切换确认弹窗 */}
+      {/* 5.8up · 工作流步骤切换确认弹窗（仅用于智能体步骤跳转 & 完成工作流） */}
       {showStepConfirm && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
@@ -1967,40 +1982,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="font-semibold text-gray-900 text-lg mb-3">
-              {isLastAgentStep
-                ? "完成工作流"
-                : hasManualIntermediate
-                ? "下一步需要人工处理"
-                : "即将进入下一步"}
+              {!hasMoreStepsAfter ? "完成工作流" : "即将进入下一步"}
             </h3>
-            <p className="text-sm text-gray-600 leading-relaxed mb-4">
-              {isLastAgentStep
-                ? `恭喜！您已完成「${wfName}」的所有步骤。`
-                : hasManualIntermediate
-                ? `进入下一个智能体步骤之前，需要您自行完成以下人工步骤：`
-                : `您即将进入下一个步骤「${wfSteps[nextAgentStepIdx]?.title ?? ""}」，上一步的对话内容将自动传递过去。`}
+            <p className="text-sm text-gray-600 leading-relaxed mb-6">
+              {!hasMoreStepsAfter
+                ? `恭喜！您已完成「${wfName}」的所有智能体步骤。`
+                : `您即将进入下一个步骤「${wfSteps[resolvedStepIdx + 1]?.title ?? ""}」，当前的对话内容将作为上下文传递过去。`}
             </p>
-            {/* 人工步骤列表 */}
-            {hasManualIntermediate && (
-              <>
-                <ul className="mb-4 space-y-2">
-                  {intermediateManualSteps.map((s, i) => (
-                    <li key={i} className="flex items-center gap-2.5 px-3 py-2 rounded-[10px] bg-amber-50 border border-amber-100">
-                      <span className="w-5 h-5 rounded-full bg-amber-200 text-amber-700 text-[11px] font-bold flex items-center justify-center shrink-0">!</span>
-                      <div>
-                        <p className="text-sm font-medium text-amber-800">{s.title}</p>
-                        <p className="text-[11px] text-amber-600">
-                          {s.exec_type === "manual" ? "人工执行" : s.exec_type === "review" ? "人工审核" : "外部工具"}
-                        </p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-                <p className="text-sm text-gray-500 mb-4">
-                  完成以上步骤后，点击「已完成，继续」进入「{wfSteps[nextAgentStepIdx]?.title ?? "下一步"}」。
-                </p>
-              </>
-            )}
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowStepConfirm(false)}
@@ -2011,15 +1999,67 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               <button
                 onClick={confirmNextStep}
                 className={`px-5 py-2 rounded-[10px] text-sm font-medium text-white transition-colors ${
-                  isLastAgentStep ? "bg-green-500 hover:bg-green-600" : "bg-[#002FA7] hover:bg-[#1a47c0]"
+                  !hasMoreStepsAfter ? "bg-green-500 hover:bg-green-600" : "bg-[#002FA7] hover:bg-[#1a47c0]"
                 }`}
               >
-                {isLastAgentStep ? "返回首页" : hasManualIntermediate ? "已完成，继续" : "继续"}
+                {!hasMoreStepsAfter ? "返回首页" : "继续"}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* 人工步骤弹窗：逐步引导用户完成非智能体步骤 */}
+      {pendingManualIdx !== null && (() => {
+        const manualStep = wfSteps[pendingManualIdx];
+        const typeLabel = manualStep?.exec_type === "review" ? "人工审核" : manualStep?.exec_type === "external" ? "外部工具" : "人工执行";
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="bg-white rounded-[20px] p-8 shadow-2xl w-[460px] max-w-[90vw]">
+              <div className="flex items-center gap-3 mb-5">
+                <div className="w-10 h-10 rounded-[12px] bg-amber-100 flex items-center justify-center shrink-0">
+                  <span className="text-amber-600 text-lg font-bold">!</span>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900 text-[16px]">需要人工处理</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">第 {pendingManualIdx + 1} 步 · {typeLabel}</p>
+                </div>
+              </div>
+              <div className="px-4 py-4 rounded-[14px] bg-amber-50 border border-amber-200 mb-5">
+                <p className="text-[15px] font-semibold text-amber-800 mb-1">{manualStep?.title}</p>
+                {manualStep?.description && (
+                  <p className="text-[13px] text-amber-700 leading-relaxed">{manualStep.description}</p>
+                )}
+              </div>
+              <p className="text-sm text-gray-500 mb-6">
+                请完成以上步骤后，点击「已完成，继续」推进工作流。
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setPendingManualIdx(null)}
+                  className="px-4 py-2 rounded-[10px] text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+                >
+                  稍后处理
+                </button>
+                <button
+                  onClick={() => {
+                    const idx = pendingManualIdx;
+                    setPendingManualIdx(null);
+                    advanceFrom(idx);
+                  }}
+                  className="px-5 py-2 rounded-[10px] text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 transition-colors"
+                >
+                  已完成，继续
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
