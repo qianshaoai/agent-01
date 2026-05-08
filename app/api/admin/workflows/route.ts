@@ -2,6 +2,7 @@ import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -144,6 +145,16 @@ export async function POST(req: NextRequest) {
       }))
     );
   }
+
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role ?? "super_admin",
+    action: "create",
+    resourceType: "workflow",
+    resourceId: data.id,
+    resourceName: name,
+  });
 
   return NextResponse.json(data, { status: 201 });
 }

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
+import { writeAuditLog } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +59,7 @@ export async function PATCH(
   }
 
   if (Object.keys(updates).length > 0) {
+    const { data: agentRow } = await db.from("agents").select("name").eq("id", id).single();
     const { error } = await db
       .from("agents")
       .update(updates)
@@ -66,6 +68,16 @@ export async function PATCH(
       if (error.code === "23505") return apiError("该编号已被其他智能体使用，请换一个编号", "CONFLICT");
       return dbError(error);
     }
+    const action = updates.enabled === true ? "enable" : updates.enabled === false ? "disable" : "update";
+    await writeAuditLog({
+      adminId: admin.adminId,
+      adminUsername: admin.username,
+      adminRole: admin.role ?? "super_admin",
+      action,
+      resourceType: "agent",
+      resourceId: id,
+      resourceName: agentRow?.name,
+    });
   }
 
   return NextResponse.json({ ok: true });
@@ -121,16 +133,26 @@ export async function DELETE(
     }
   }
 
-  // 2) 真删；用 .select("id") 区分"被删了 N 行" vs "记录不存在"
+  // 2) 真删；用 .select("id, name") 区分"被删了 N 行" vs "记录不存在"
   const { data: deleted, error: delErr } = await db
     .from("agents")
     .delete()
     .eq("id", id)
-    .select("id");
+    .select("id, name");
   if (delErr) return dbError(delErr);
   if (!deleted || deleted.length === 0) {
     return apiError("智能体不存在或已被删除", "NOT_FOUND");
   }
+
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role ?? "super_admin",
+    action: "delete",
+    resourceType: "agent",
+    resourceId: id,
+    resourceName: (deleted[0] as { name?: string }).name,
+  });
 
   return NextResponse.json({ ok: true });
 }

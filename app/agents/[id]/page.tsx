@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect, use, memo } from "react";
+import { useState, useRef, useEffect, use, memo, Fragment } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -256,7 +256,7 @@ const ChatMessage = memo(function ChatMessage({
 });
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Plus,
@@ -284,6 +284,7 @@ import {
   FileType,
 } from "lucide-react";
 import { exportConversation, triggerDownload } from "@/lib/export-conversation";
+import type { WorkflowStep } from "@/lib/types";
 
 /** 把会话列表按时间桶分组：今天 / 昨天 / 7 天内 / 更早 */
 function bucketConversationsByTime(convs: Conversation[]): { label: string; items: Conversation[] }[] {
@@ -386,10 +387,13 @@ type UploadedFile = {
 export default function AgentChatPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: rawId } = use(params);
   const agentCode = decodeURIComponent(rawId);
-  // 4.30up 导航流：1→2→3→2→1。从工作流详情进 chat 时 URL 带 ?wf=<id>，
-  // 返回时跳回 /?wf=<id> 让主页直接进入对应工作流详情视图
+  const router = useRouter();
+  // 5.8up 工作流进度条参数
   const searchParams = useSearchParams();
   const fromWorkflowId = searchParams.get("wf");
+  const stepParam = searchParams.get("step");
+  const fromConvId = searchParams.get("from");  // 上一步会话 ID，用于注入上下文
+  const currentStepIdx = stepParam !== null ? parseInt(stepParam, 10) : 0;
   const backHref = fromWorkflowId ? `/?wf=${encodeURIComponent(fromWorkflowId)}` : "/";
 
   const [agent, setAgent] = useState<AgentInfo | null>(null);
@@ -418,10 +422,94 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   // P1: 拖拽上传 hover 提示
   const [dragOver, setDragOver] = useState(false);
+  // 5.8up · 工作流步骤进度条
+  const [wfSteps, setWfSteps] = useState<WorkflowStep[]>([]);
+  const [wfName, setWfName] = useState("");
+  const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
+  const [showStepConfirm, setShowStepConfirm] = useState(false);
+  // 实际当前步骤下标：优先用 agent_code 反查，URL 的 step 参数仅做兜底
+  const [resolvedStepIdx, setResolvedStepIdx] = useState(currentStepIdx);
+  // 跨步骤上下文：用 ref 避免触发重渲染；sent 标记保证只注入一次
+  const workflowContextRef = useRef<string | null>(null);
+  const workflowContextSentRef = useRef(false);
+
   // 5.6up · 多格式导出 popover + 进度
   const [exportPopoverOpen, setExportPopoverOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<"markdown" | "docx" | null>(null);
   const [exportProgressText, setExportProgressText] = useState<string | null>(null);
+
+  // 5.8up · 拉取工作流步骤列表（仅 wf 参数存在时）
+  useEffect(() => {
+    if (!fromWorkflowId) return;
+    fetch(`/api/workflows/${encodeURIComponent(fromWorkflowId)}/steps`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!data) return;
+        setWfName(data.name ?? "");
+        const steps: WorkflowStep[] = data.steps ?? [];
+        setWfSteps(steps);
+        // 优先用 agent_code 反查当前步下标，URL 的 step 参数仅做兜底
+        const actualIdx = steps.findIndex((s: WorkflowStep) => s.agents?.agent_code === agentCode);
+        const resolved = actualIdx >= 0 ? actualIdx : currentStepIdx;
+        setResolvedStepIdx(resolved);
+        // 把当前步之前的所有步标记为已完成
+        const done = new Set<number>();
+        for (let i = 0; i < resolved; i++) done.add(i);
+        setCompletedSteps(done);
+      })
+      .catch(() => {});
+  }, [fromWorkflowId, agentCode, currentStepIdx]);
+
+  // 5.8up · 自动查找上一个智能体步骤的最新对话，作为跨步骤上下文注入
+  // 不依赖 URL from 参数，在 wfSteps 加载完成后自动执行
+  useEffect(() => {
+    console.log("[wf-ctx] effect", { fromWorkflowId, stepsLen: wfSteps.length, resolvedStepIdx });
+    if (!fromWorkflowId || !wfSteps.length || resolvedStepIdx <= 0) return;
+
+    // 向前找最近一个 agent 类型步骤
+    let prevAgentCode: string | null = null;
+    for (let i = resolvedStepIdx - 1; i >= 0; i--) {
+      if (wfSteps[i].exec_type === "agent" && wfSteps[i].agents?.agent_code) {
+        prevAgentCode = wfSteps[i].agents!.agent_code;
+        break;
+      }
+    }
+    console.log("[wf-ctx] prevAgentCode", prevAgentCode);
+    if (!prevAgentCode) return;
+
+    // 拉该智能体最新的一条对话
+    fetch(`/api/conversations?agentCode=${encodeURIComponent(prevAgentCode)}&pageSize=1`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        const conv = (data?.data ?? data)?.[0] ?? null;
+        console.log("[wf-ctx] conv", conv?.id);
+        if (!conv?.id) return;
+        return fetch(`/api/conversations/${encodeURIComponent(conv.id)}/messages`)
+          .then((r) => r.ok ? r.json() : [])
+          .then((msgs: { role: string; content: string }[]) => {
+            console.log("[wf-ctx] msgs count", msgs.length);
+            if (!msgs.length) return;
+            const lines: string[] = [];
+            for (const m of msgs) {
+              if (m.role !== "user" && m.role !== "assistant") continue;
+              const cleaned = m.content.replace(/\n\n\[附件内容\][\s\S]*$/, "").trim();
+              if (cleaned) lines.push(`${m.role === "user" ? "用户" : "助手"}：${cleaned}`);
+            }
+            let ctx = lines.join("\n\n");
+            if (ctx.length > 2000) ctx = ctx.slice(0, 2000) + "…（内容过长已截断）";
+            workflowContextRef.current = ctx;
+            console.log("[wf-ctx] context set, length:", ctx.length);
+          });
+      })
+      .catch((e) => console.error("[wf-ctx] error", e));
+  }, [fromWorkflowId, wfSteps, resolvedStepIdx]);
+
+  // 错误提示 3 秒后自动消失
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(""), 3000);
+    return () => clearTimeout(t);
+  }, [error]);
 
   // popover · Esc 关闭
   useEffect(() => {
@@ -727,6 +815,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     const abortCtrl = new AbortController();
     abortControllerRef.current = abortCtrl;
 
+    // 5.8up：首条消息带上前一步上下文，之后清零避免重复注入
+    console.log("[wf-ctx] send check: sent=", workflowContextSentRef.current, "ctx=", workflowContextRef.current?.slice(0, 80));
+    const wfCtxToSend = workflowContextSentRef.current ? undefined : (workflowContextRef.current ?? undefined);
+    if (wfCtxToSend) workflowContextSentRef.current = true;
+
     try {
       const res = await fetch(`/api/agents/${agentCode}/chat`, {
         method: "POST",
@@ -737,6 +830,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           conversationId: activeConvId,
           fileTexts,
           attachments,
+          workflowContext: wfCtxToSend,
         }),
       });
 
@@ -998,6 +1092,46 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       top: messageScrollRef.current.scrollHeight,
       behavior: "smooth",
     });
+  }
+
+  // 5.8up · 工作流进度条辅助计算
+  // 找到当前步之后第一个 agent 类型步骤的 index（-1 = 没有 → 当前是最后一步）
+  const nextAgentStepIdx = fromWorkflowId
+    ? wfSteps.findIndex((s, i) => i > resolvedStepIdx && s.exec_type === "agent" && s.agents)
+    : -1;
+  const isLastAgentStep = !!fromWorkflowId && wfSteps.length > 0 && nextAgentStepIdx === -1;
+  // 当前步骤到下一个智能体步骤之间，需要人工处理的中间步骤
+  const intermediateManualSteps = fromWorkflowId && nextAgentStepIdx > 0
+    ? wfSteps.filter((s, i) => i > resolvedStepIdx && i < nextAgentStepIdx && s.exec_type !== "agent")
+    : [];
+  const hasManualIntermediate = intermediateManualSteps.length > 0;
+
+  function handleNextStepClick() {
+    setShowStepConfirm(true);
+  }
+
+  function confirmNextStep() {
+    setShowStepConfirm(false);
+    if (isLastAgentStep) {
+      router.push("/");
+      return;
+    }
+    const nextStep = wfSteps[nextAgentStepIdx];
+    if (!nextStep?.agents) { router.push("/"); return; }
+    const ctxConvId = activeConvId ?? conversations[0]?.id ?? null;
+    const fromParam = ctxConvId ? `&from=${encodeURIComponent(ctxConvId)}` : "";
+    router.push(
+      `/agents/${encodeURIComponent(nextStep.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${nextAgentStepIdx}${fromParam}`
+    );
+  }
+
+  function handleStepBarClick(idx: number) {
+    if (idx === resolvedStepIdx || idx >= resolvedStepIdx) return;
+    const step = wfSteps[idx];
+    if (!step?.agents) return;
+    router.push(
+      `/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${idx}`
+    );
   }
 
   // P1 · 搜索过滤后的会话列表
@@ -1492,6 +1626,71 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           onDragLeave={onDragLeave}
           onDrop={onDrop}
         >
+          {/* 5.8up · 工作流水平进度条（聊天列顶部，不影响侧边栏） */}
+          {fromWorkflowId && wfSteps.length > 0 && (
+            <div className="shrink-0 bg-white border-b border-gray-100 px-5 py-4 flex items-center gap-4">
+              {/* 步骤滚动区 */}
+              <div className="flex items-center flex-1 overflow-x-auto min-w-0 gap-0 pb-2 -mb-2">
+                <span className="text-[11px] text-gray-400 font-medium shrink-0 mr-3 whitespace-nowrap">
+                  {wfName}：
+                </span>
+                {wfSteps.map((step, idx) => {
+                  const isCompleted = completedSteps.has(idx);
+                  const isCurrent = idx === resolvedStepIdx;
+                  const isClickable = isCompleted && !!step.agents && step.exec_type === "agent";
+                  const isManual = step.exec_type !== "agent";
+                  const label = step.title;
+                  return (
+                    <Fragment key={step.id}>
+                      {idx > 0 && (
+                        <div className={`w-7 h-px mx-1.5 shrink-0 ${idx <= resolvedStepIdx ? "bg-[#002FA7]/20" : "bg-gray-200"}`} />
+                      )}
+                      <button
+                        onClick={() => isClickable && handleStepBarClick(idx)}
+                        disabled={!isClickable && !isCurrent}
+                        title={isManual ? `${label}（人工步骤）` : label}
+                        className={`flex items-center gap-2 px-3.5 py-2 rounded-full shrink-0 text-[13px] font-medium transition-all ${
+                          isCurrent
+                            ? "bg-[#002FA7] text-white shadow-[0_2px_10px_rgba(0,47,167,0.28)]"
+                            : isCompleted
+                            ? "bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 cursor-pointer"
+                            : isManual
+                            ? "bg-amber-50 text-amber-600 border border-amber-200 cursor-default"
+                            : "bg-gray-100 text-gray-400 cursor-default"
+                        }`}
+                      >
+                        <span className={`w-5 h-5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 ${
+                          isCurrent
+                            ? "bg-white/20 text-white"
+                            : isCompleted
+                            ? "bg-green-200 text-green-700"
+                            : isManual
+                            ? "bg-amber-200 text-amber-700"
+                            : "bg-gray-200 text-gray-400"
+                        }`}>
+                          {isCompleted ? "✓" : idx + 1}
+                        </span>
+                        <span className="whitespace-nowrap">{label}</span>
+                      </button>
+                    </Fragment>
+                  );
+                })}
+              </div>
+              {/* 进入下一步按钮（进度条同行右侧） */}
+              <button
+                onClick={handleNextStepClick}
+                disabled={streaming}
+                className={`shrink-0 flex items-center gap-1.5 px-5 py-2.5 rounded-full text-[13px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isLastAgentStep
+                    ? "bg-green-500 text-white hover:bg-green-600"
+                    : "bg-[#002FA7] text-white hover:bg-[#1a47c0]"
+                }`}
+              >
+                {isLastAgentStep ? "完成 ✓" : "下一步 →"}
+              </button>
+            </div>
+          )}
+
           <div ref={messageScrollRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-6 relative bg-[#f8f9fc]">
             {/* P1: 拖拽上传遮罩 — 仅覆盖消息滚动区，**不**遮挡下方输入区，
                 避免遮罩万一卡住时挡到 paperclip */}
@@ -1574,6 +1773,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               <ArrowDown size={16} />
             </button>
           )}
+
 
           {/* Input area */}
           <div className="bg-white border-t border-gray-100 px-4 py-3">
@@ -1680,6 +1880,73 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           </div>
         </div>
       </div>
+
+      {/* 5.8up · 工作流步骤切换确认弹窗 */}
+      {showStepConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setShowStepConfirm(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="bg-white rounded-[20px] p-8 shadow-2xl w-[440px] max-w-[90vw]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-semibold text-gray-900 text-lg mb-3">
+              {isLastAgentStep
+                ? "完成工作流"
+                : hasManualIntermediate
+                ? "下一步需要人工处理"
+                : "即将进入下一步"}
+            </h3>
+            <p className="text-sm text-gray-600 leading-relaxed mb-4">
+              {isLastAgentStep
+                ? `恭喜！您已完成「${wfName}」的所有步骤。`
+                : hasManualIntermediate
+                ? `进入下一个智能体步骤之前，需要您自行完成以下人工步骤：`
+                : `您即将进入下一个步骤「${wfSteps[nextAgentStepIdx]?.title ?? ""}」，上一步的对话内容将自动传递过去。`}
+            </p>
+            {/* 人工步骤列表 */}
+            {hasManualIntermediate && (
+              <>
+                <ul className="mb-4 space-y-2">
+                  {intermediateManualSteps.map((s, i) => (
+                    <li key={i} className="flex items-center gap-2.5 px-3 py-2 rounded-[10px] bg-amber-50 border border-amber-100">
+                      <span className="w-5 h-5 rounded-full bg-amber-200 text-amber-700 text-[11px] font-bold flex items-center justify-center shrink-0">!</span>
+                      <div>
+                        <p className="text-sm font-medium text-amber-800">{s.title}</p>
+                        <p className="text-[11px] text-amber-600">
+                          {s.exec_type === "manual" ? "人工执行" : s.exec_type === "review" ? "人工审核" : "外部工具"}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-sm text-gray-500 mb-4">
+                  完成以上步骤后，点击「已完成，继续」进入「{wfSteps[nextAgentStepIdx]?.title ?? "下一步"}」。
+                </p>
+              </>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowStepConfirm(false)}
+                className="px-4 py-2 rounded-[10px] text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmNextStep}
+                className={`px-5 py-2 rounded-[10px] text-sm font-medium text-white transition-colors ${
+                  isLastAgentStep ? "bg-green-500 hover:bg-green-600" : "bg-[#002FA7] hover:bg-[#1a47c0]"
+                }`}
+              >
+                {isLastAgentStep ? "返回首页" : hasManualIntermediate ? "已完成，继续" : "继续"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

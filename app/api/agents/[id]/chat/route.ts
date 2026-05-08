@@ -19,7 +19,7 @@ export const POST = withRequestLog(async (
 
   const { id: rawId } = await params;
   const agentCode = decodeURIComponent(rawId);
-  const { message, conversationId, fileTexts, attachments } = await req.json();
+  const { message, conversationId, fileTexts, attachments, workflowContext } = await req.json();
 
   if (!message?.trim()) {
     return NextResponse.json({ error: "消息不能为空" }, { status: 400 });
@@ -167,12 +167,20 @@ export const POST = withRequestLog(async (
 
     // 构建消息列表（系统提示 + 历史 + 当前用户消息）
     const systemPrompt = (agent.model_params as Record<string, unknown>)["system_prompt"] as string | undefined;
+    // 工作流跨步骤上下文：拼入 userContent 而非 system 消息，兼容 Coze/Dify/Yuanqi 等不支持 system role 的平台。
+    // displayContent（入库/前端展示）不含上下文，用户看不到。
+    const wfCtx = typeof workflowContext === "string" && workflowContext.trim()
+      ? workflowContext.trim()
+      : null;
+    const aiUserContent = wfCtx
+      ? `【上一步工作记录】\n${wfCtx}\n\n【当前问题】\n${userContent}`
+      : userContent;
     const messages: ChatMessage[] = [
       ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
       ...history,
       {
         role: "user",
-        content: userContent,
+        content: aiUserContent,
         // 把 image attachments 挂到 user message 上，adapter (yuanqi/coze) 会拼成
         // OpenAI 兼容的 {type: "image_url", image_url: {url}} 多模态 part
         ...(imageAtts.length > 0

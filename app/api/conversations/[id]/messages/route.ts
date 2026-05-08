@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const user = await getCurrentUser();
@@ -41,6 +43,7 @@ export async function GET(
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
   if (first.error) {
+    // aborted 列可能还没跑 migration_v22，降级不带 aborted 的查询
     const fallback = await db
       .from("messages")
       .select("id, role, content, created_at")

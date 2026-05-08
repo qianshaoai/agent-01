@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { parseBody } from "@/lib/validate";
 import { z } from "zod";
+import { writeAuditLog } from "@/lib/audit";
 
 const createAgentSchema = z.object({
   agentCode: z.string().min(1, "请填写智能体编号"),
@@ -141,6 +142,17 @@ export async function POST(req: NextRequest) {
   if (catIds.length > 0) {
     await db.from("agent_categories").insert(catIds.map((cid) => ({ agent_id: data.id, category_id: cid })));
   }
+
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role ?? "super_admin",
+    action: "create",
+    resourceType: "agent",
+    resourceId: data.id,
+    resourceName: name,
+    detail: { agent_code: agentCode, platform },
+  });
 
   return NextResponse.json(data, { status: 201 });
 }

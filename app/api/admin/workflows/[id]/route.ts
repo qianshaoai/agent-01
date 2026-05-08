@@ -2,6 +2,7 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -65,11 +66,22 @@ export async function PATCH(
   }
 
   if (Object.keys(updates).length > 0) {
+    const { data: wfRow } = await db.from("workflows").select("name").eq("id", id).single();
     const { error } = await db
       .from("workflows")
       .update(updates)
       .eq("id", id);
     if (error) return dbError(error);
+    const action = updates.enabled === true ? "enable" : updates.enabled === false ? "disable" : "update";
+    await writeAuditLog({
+      adminId: admin.adminId,
+      adminUsername: admin.username,
+      adminRole: admin.role ?? "super_admin",
+      action,
+      resourceType: "workflow",
+      resourceId: id,
+      resourceName: wfRow?.name,
+    });
   }
 
   // 更新分类关联（全量替换）
@@ -126,7 +138,18 @@ export async function DELETE(
     .eq("resource_type", "workflow")
     .eq("resource_id", id);
 
-  const { error } = await db.from("workflows").delete().eq("id", id);
+  const { data: deleted, error } = await db.from("workflows").delete().eq("id", id).select("id, name");
   if (error) return dbError(error);
+
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role ?? "super_admin",
+    action: "delete",
+    resourceType: "workflow",
+    resourceId: id,
+    resourceName: (deleted?.[0] as { name?: string })?.name,
+  });
+
   return NextResponse.json({ ok: true });
 }

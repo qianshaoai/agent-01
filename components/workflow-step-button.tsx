@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ExternalLink, ArrowRight, Bot } from "lucide-react";
 import type { WorkflowStep } from "@/lib/types";
 
-export function WorkflowStepButton({ step, fromWorkflow }: { step: WorkflowStep; fromWorkflow?: string }) {
+export function WorkflowStepButton({ step, fromWorkflow, stepIndex }: { step: WorkflowStep; fromWorkflow?: string; stepIndex?: number }) {
   const agent = step.agents;
 
   // 未绑定智能体
@@ -37,9 +37,9 @@ export function WorkflowStepButton({ step, fromWorkflow }: { step: WorkflowStep;
     );
   }
 
-  // 4.30up 导航流：进 chat 时带上 wf=<workflowId>，聊天页返回时回到对应工作流详情
+  // 5.8up：进 chat 时带上 wf + step 参数，聊天页渲染进度条
   const href = fromWorkflow
-    ? `/agents/${agent.agent_code}?wf=${encodeURIComponent(fromWorkflow)}`
+    ? `/agents/${agent.agent_code}?wf=${encodeURIComponent(fromWorkflow)}&step=${stepIndex ?? 0}`
     : `/agents/${agent.agent_code}`;
   return (
     <Link href={href} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-xs font-medium transition-colors bg-[#002FA7]/8 text-[#002FA7] hover:bg-[#002FA7]/15 shrink-0">

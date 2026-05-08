@@ -666,7 +666,7 @@ export default function HomePage() {
                                 style={{ minWidth: 148 }}
                               >
                                 {step.exec_type === "agent" ? (
-                                  <WorkflowStepButton step={step} fromWorkflow={activeWorkflow?.id} />
+                                  <WorkflowStepButton step={step} fromWorkflow={activeWorkflow?.id} stepIndex={idx} />
                                 ) : step.exec_type === "manual" ? (
                                   <span className="text-[12px] text-amber-600 bg-amber-50 px-3 py-1.5 rounded-[8px]">
                                     此步骤需人工处理
