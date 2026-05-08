@@ -430,6 +430,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [showStepConfirm, setShowStepConfirm] = useState(false);
   const [pendingManualIdx, setPendingManualIdx] = useState<number | null>(null);
+  const [showWorkflowComplete, setShowWorkflowComplete] = useState(false);
   // 实际当前步骤下标：优先用 agent_code 反查，URL 的 step 参数仅做兜底
   const [resolvedStepIdx, setResolvedStepIdx] = useState(currentStepIdx);
   // 跨步骤上下文：用 ref 避免触发重渲染；sent 标记保证只注入一次
@@ -1121,14 +1122,14 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       })()
     : -1;
 
-  // 推进到 fromIdx 的下一步：agent → 跳转，manual → 弹窗，无更多 → 返回首页
+  // 推进到 fromIdx 的下一步：agent → 跳转，manual → 弹窗，无更多 → 完成弹窗
   function advanceFrom(fromIdx: number) {
     const nextIdx = fromIdx + 1;
     if (fromWorkflowId) {
       try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: Math.min(nextIdx, wfSteps.length - 1) })); } catch {}
     }
     if (nextIdx >= wfSteps.length) {
-      router.push("/");
+      setShowWorkflowComplete(true);
       return;
     }
     const nextStep = wfSteps[nextIdx];
@@ -1161,7 +1162,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       if (fromWorkflowId) {
         try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: wfSteps.length - 1 })); } catch {}
       }
-      router.push("/");
+      setShowWorkflowComplete(true);
       return;
     }
     advanceFrom(resolvedStepIdx);
@@ -2003,6 +2004,27 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 {!hasMoreStepsAfter ? "返回首页" : "继续"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 工作流完成庆祝弹窗 */}
+      {showWorkflowComplete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-[24px] p-8 shadow-2xl w-[400px] max-w-[90vw] flex flex-col items-center text-center">
+            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-4">
+              <span className="text-3xl">🎉</span>
+            </div>
+            <h3 className="font-bold text-gray-900 text-[18px] mb-2">工作流已完成！</h3>
+            <p className="text-sm text-gray-500 leading-relaxed mb-6">
+              恭喜您完成了「{wfName}」的全部流程。
+            </p>
+            <button
+              onClick={() => router.push("/")}
+              className="px-8 py-2.5 rounded-full text-sm font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors"
+            >
+              返回首页
+            </button>
           </div>
         </div>
       )}
