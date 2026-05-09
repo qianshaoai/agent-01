@@ -392,7 +392,6 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const searchParams = useSearchParams();
   const fromWorkflowId = searchParams.get("wf");
   const stepParam = searchParams.get("step");
-  const fromConvId = searchParams.get("from");  // 上一步会话 ID，用于注入上下文
   const sessionId = searchParams.get("session"); // 5.9 工作流会话 ID
   const currentStepIdx = stepParam !== null ? parseInt(stepParam, 10) : 0;
   // outline=1：到达本页后自动向智能体请求本步骤产出大纲
@@ -648,7 +647,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
 
     load();
     return () => { cancelled = true; };
-  }, [agentCode, sessionId]);
+  }, [agentCode, sessionId, readonly, initialConvId]);
 
   async function loadConversationMessages(convId: string) {
     setLoading(true);
