@@ -393,6 +393,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const fromWorkflowId = searchParams.get("wf");
   const stepParam = searchParams.get("step");
   const fromConvId = searchParams.get("from");  // 上一步会话 ID，用于注入上下文
+  const sessionId = searchParams.get("session"); // 5.9 工作流会话 ID
   const currentStepIdx = stepParam !== null ? parseInt(stepParam, 10) : 0;
   // outline=1：到达本页后自动向智能体请求本步骤产出大纲
   const outlineMode = searchParams.get("outline") === "1";
@@ -487,8 +488,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     }
     if (!prevAgentCode) return;
 
-    // 拉该智能体最新的一条对话
-    fetch(`/api/conversations?agentCode=${encodeURIComponent(prevAgentCode)}&pageSize=1`)
+    // 拉该智能体最新的一条对话（工作流会话模式下按 sessionId 隔离）
+    const ctxConvsUrl = sessionId
+      ? `/api/conversations?agentCode=${encodeURIComponent(prevAgentCode)}&sessionId=${encodeURIComponent(sessionId)}&pageSize=1`
+      : `/api/conversations?agentCode=${encodeURIComponent(prevAgentCode)}&pageSize=1`;
+    fetch(ctxConvsUrl)
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         const conv = (data?.data ?? data)?.[0] ?? null;
@@ -563,9 +567,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     let cancelled = false;
 
     async function load() {
+      // 工作流会话模式：对话列表按 sessionId 隔离
+      const convsUrl = sessionId
+        ? `/api/conversations?agentCode=${agentCode}&sessionId=${encodeURIComponent(sessionId)}`
+        : `/api/conversations?agentCode=${agentCode}`;
       const [agentsRes, convsRes, meRes] = await Promise.allSettled([
         fetch("/api/agents"),
-        fetch(`/api/conversations?agentCode=${agentCode}`),
+        fetch(convsUrl),
         fetch("/api/me"),
       ]);
       if (cancelled) return;
@@ -852,6 +860,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           fileTexts,
           attachments,
           workflowContext: wfCtxToSend,
+          sessionId: sessionId ?? undefined,
         }),
       });
 
@@ -1133,8 +1142,16 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     if (!fromWorkflowId) return;
     let cursor = fromIdx + 1;
 
-    // 保存进度
+    // 保存进度（localStorage 乐观缓存）
     try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: Math.min(cursor, wfSteps.length - 1) })); } catch {}
+    // 保存进度到服务端（工作流会话模式）
+    if (sessionId) {
+      fetch(`/api/workflow-sessions/${encodeURIComponent(sessionId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentStepIdx: Math.min(cursor, wfSteps.length - 1) }),
+      }).catch(() => {});
+    }
 
     // 向后找第一个需要操作的步骤
     while (cursor < wfSteps.length) {
@@ -1145,10 +1162,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         return;
       }
       if (step.agents?.agent_code) {
-        // 有效的智能体步骤：跳转
-        const ctxConvId = activeConvId ?? conversations[0]?.id ?? null;
-        const fromParam = ctxConvId ? `&from=${encodeURIComponent(ctxConvId)}` : "";
-        const url = `/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId)}&step=${cursor}${fromParam}`;
+        // 有效的智能体步骤：跳转（携带 session 参数保持隔离）
+        const sessionParam = sessionId ? `&session=${encodeURIComponent(sessionId)}` : "";
+        const url = `/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId)}&step=${cursor}${sessionParam}`;
         window.location.assign(url);
         return;
       }
@@ -1156,7 +1172,14 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       cursor++;
     }
 
-    // 所有步骤已遍历完：显示完成弹窗
+    // 所有步骤已遍历完：标记 session 完成，显示完成弹窗
+    if (sessionId) {
+      fetch(`/api/workflow-sessions/${encodeURIComponent(sessionId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "completed", currentStepIdx: wfSteps.length - 1 }),
+      }).catch(() => {});
+    }
     setShowWorkflowComplete(true);
   }
 
@@ -1178,6 +1201,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     if (!hasMoreStepsAfter) {
       if (fromWorkflowId) {
         try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: wfSteps.length - 1 })); } catch {}
+      }
+      if (sessionId) {
+        fetch(`/api/workflow-sessions/${encodeURIComponent(sessionId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "completed", currentStepIdx: wfSteps.length - 1 }),
+        }).catch(() => {});
       }
       setShowWorkflowComplete(true);
       return;

@@ -2,6 +2,56 @@
 
 ---
 
+## 5.8up · 工作流多会话 + UI 迭代（2026-05-08 下午）
+
+详见 [`变更记录-20260508.md`](./变更记录-20260508.md)
+
+### 主菜：工作流多会话（5.9 主菜）
+
+**目标**：让用户同时跑同一个工作流的多个独立实例（如「项目A资料整理」「项目B资料整理」），对话记录完全隔离。
+
+#### 数据库
+| 文件 | 说明 |
+|------|------|
+| `supabase/migration_v29.sql` | 新增 `workflow_sessions` 表（user_id / workflow_id / name / current_step_idx / status） |
+| `supabase/migration_v30.sql` | `conversations` 加 `session_id uuid` 列 |
+
+#### 新增 API
+| 路由 | 方法 | 说明 |
+|------|------|------|
+| `app/api/workflow-sessions/route.ts` | GET / POST | 列出当前用户进行中会话 / 新建会话 |
+| `app/api/workflow-sessions/[id]/route.ts` | PATCH / DELETE | 改名 / 改进度 / 删除（owner-only） |
+
+#### 修改文件
+| 文件 | 修改内容 |
+|------|---------|
+| `app/api/conversations/route.ts` | 新增 `?sessionId=` 过滤；select 加 `session_id` |
+| `app/api/agents/[id]/chat/route.ts` | 请求体加 `sessionId`，写入新 conversation |
+| `app/agents/[id]/page.tsx` | 读取 URL `?session=` 参数，对话列表 / 跨步骤上下文 / chat body 全链路按 sessionId 隔离；`advanceFrom` 推进时 PATCH session 进度 |
+| `app/page.tsx` | 「我的进行中工作流」折叠区块 + 横向轮播 + 命名/重命名弹窗；工作流详情页加「开始新会话」按钮 |
+
+### UI 迭代（用户多轮反馈）
+
+| 迭代 | 实施 |
+|------|------|
+| 进行中会话区块可折叠 | 标题加 `▼`，状态写入 `localStorage('wf_sessions_expanded')` |
+| 区分进行中 vs 全部 | 工作流网格上方加「全部工作流 (N)」标题（不可折叠） |
+| 横向轮播 | 卡片 `w-[calc(50%-4px)]` + `snap-mandatory`；滚轮转横向；标题栏右侧两个圆形箭头按钮，到边界禁用 |
+| 单会话全宽 | `mySessions.length === 1 ? 'w-full' : 'w-[calc(50%-4px)]'` |
+| 重命名 | 卡片加铅笔按钮 + 弹窗；复用现有 PATCH，乐观更新 |
+
+### Bug 修复
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| 「继续」按钮无反应 | React 18+ batching 吞掉 `router.push` | 改 `window.location.assign` + iterative `advanceFrom` |
+| 同一 agent 跨多步骤时进度条不动 | `findIndex` 只返回首个匹配 | 优先用 URL `?step=` 参数（指向当前 agent 时） |
+| 「全部」视图刷新跳到上次工作流详情 | `selectWorkflow` 不同步 URL，`?wf=` 残留 | `selectWorkflow` 加 `history.replaceState` |
+| 横向滚动箭头偶发不显示 | `ResizeObserver` 只观察容器，子元素尺寸晚到测不到 | 同时观察每张卡片 + 50/200/500ms 多次延迟兜底 |
+| 弹窗 autoFocus 触发页面滚动 | `<input autoFocus>` 在 fixed 弹窗里被错误 scroll-into-view | 改 `focus({ preventScroll: true })` |
+
+---
+
 ## 5.8up · 工作流步骤进度条（2026-05-08）
 
 ### 新功能

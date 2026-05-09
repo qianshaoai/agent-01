@@ -13,6 +13,7 @@ export async function GET(req: NextRequest) {
   const { page, pageSize, start } = parsePagination(req, 50);
   const rawAgentCode = req.nextUrl.searchParams.get("agentCode");
   const agentCode = rawAgentCode ? decodeURIComponent(rawAgentCode) : null;
+  const sessionId = req.nextUrl.searchParams.get("sessionId");
 
   const { data: dbUser } = await db
     .from("users")
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
 
   let query = db
     .from("conversations")
-    .select("id, title, created_at, updated_at, agents(agent_code, name)", { count: "exact" })
+    .select("id, title, created_at, updated_at, session_id, agents(agent_code, name)", { count: "exact" })
     .eq("user_id", dbUser.id)
     .order("updated_at", { ascending: false });
 
@@ -36,6 +37,11 @@ export async function GET(req: NextRequest) {
       .eq("agent_code", agentCode)
       .single();
     if (agent) query = query.eq("agent_id", agent.id);
+  }
+
+  // 工作流会话隔离：带 sessionId 时只返回该 session 内的对话
+  if (sessionId) {
+    query = query.eq("session_id", sessionId);
   }
 
   const { data, count } = await query.range(start, start + pageSize - 1);

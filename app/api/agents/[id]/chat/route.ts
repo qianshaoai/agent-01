@@ -19,7 +19,7 @@ export const POST = withRequestLog(async (
 
   const { id: rawId } = await params;
   const agentCode = decodeURIComponent(rawId);
-  const { message, conversationId, fileTexts, attachments, workflowContext } = await req.json();
+  const { message, conversationId, fileTexts, attachments, workflowContext, sessionId } = await req.json();
 
   if (!message?.trim()) {
     return NextResponse.json({ error: "消息不能为空" }, { status: 400 });
@@ -83,9 +83,12 @@ export const POST = withRequestLog(async (
     if (!convId) {
       // 新建会话，标题取消息前20字
       const title = message.slice(0, 20) + (message.length > 20 ? "…" : "");
+      const insertPayload: Record<string, unknown> = { user_id: dbUser.id, agent_id: agent.id, title };
+      // 工作流会话隔离：携带 sessionId 时打标记，使对话归属该 session
+      if (sessionId) insertPayload.session_id = sessionId;
       const { data: conv } = await db
         .from("conversations")
-        .insert({ user_id: dbUser.id, agent_id: agent.id, title })
+        .insert(insertPayload)
         .select()
         .single();
       convId = conv?.id;

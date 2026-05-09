@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { mockNotices } from "@/lib/mock-data";
@@ -20,8 +20,11 @@ import {
   Wrench,
   BookOpen,
   ChevronRight,
+  ChevronLeft,
+  ChevronDown,
   Type,
   Check,
+  Pencil,
 } from "lucide-react";
 import { WorkflowStepButton } from "@/components/workflow-step-button";
 import { AgentCard } from "@/components/agent-card";
@@ -72,6 +75,86 @@ export default function HomePage() {
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   // 4.30up 阶段一：activeWorkflowId === null 表示"全部"视图，渲染工作流卡片网格
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
+  // 5.9 工作流多会话
+  type SessionItem = {
+    id: string; name: string; currentStepIdx: number; totalSteps: number;
+    status: string; updatedAt: string;
+    workflow: { id: string; name: string } | null;
+  };
+  const [mySessions, setMySessions] = useState<SessionItem[]>([]);
+  const [newSessionModal, setNewSessionModal] = useState<{
+    workflowId: string; workflowName: string; inputName: string;
+  } | null>(null);
+  const [sessionCreating, setSessionCreating] = useState(false);
+  const [renameModal, setRenameModal] = useState<{
+    sessionId: string; originalName: string; inputName: string;
+  } | null>(null);
+  const [renameSaving, setRenameSaving] = useState(false);
+  const newSessionInputRef = useRef<HTMLInputElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (newSessionModal) newSessionInputRef.current?.focus({ preventScroll: true });
+  }, [newSessionModal]);
+  useEffect(() => {
+    if (renameModal) renameInputRef.current?.focus({ preventScroll: true });
+  }, [renameModal]);
+  const [sessionsExpanded, setSessionsExpanded] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return localStorage.getItem("wf_sessions_expanded") !== "0";
+  });
+  function toggleSessionsExpanded() {
+    setSessionsExpanded((v) => {
+      const next = !v;
+      try { localStorage.setItem("wf_sessions_expanded", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }
+  // 横向滚动条引用 + 左右箭头可见状态
+  const sessionsScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  function updateScrollArrows() {
+    const el = sessionsScrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }
+  function scrollSessions(dir: "left" | "right") {
+    const el = sessionsScrollRef.current;
+    if (!el) return;
+    const delta = el.clientWidth / 2 + 8; // 一张卡片宽度
+    el.scrollBy({ left: dir === "left" ? -delta : delta, behavior: "smooth" });
+  }
+  // 滚轮垂直滚动转横向滚动
+  function onSessionsWheel(e: React.WheelEvent<HTMLDivElement>) {
+    const el = sessionsScrollRef.current;
+    if (!el) return;
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return; // 已经是横向滚轮就不干预
+    el.scrollBy({ left: e.deltaY, behavior: "auto" });
+    e.preventDefault();
+  }
+  useEffect(() => {
+    if (!sessionsExpanded) return;
+    const el = sessionsScrollRef.current;
+    if (!el) return;
+    updateScrollArrows();
+    // 多次延迟兜底：初始 layout 在慢机器/字体冷加载时可能还没算完
+    const t1 = setTimeout(updateScrollArrows, 50);
+    const t2 = setTimeout(updateScrollArrows, 200);
+    const t3 = setTimeout(updateScrollArrows, 500);
+    // ResizeObserver 只在被观察元素自身尺寸变时触发；
+    // 容器宽度恒等于父级，几乎不变，所以必须把每张卡也观察上，
+    // 任何卡片实际尺寸变化都会触发重新测量
+    const observer = new ResizeObserver(() => updateScrollArrows());
+    observer.observe(el);
+    Array.from(el.children).forEach((c) => observer.observe(c as Element));
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      observer.disconnect();
+    };
+  }, [sessionsExpanded, mySessions]);
   // 初始值直接从 localStorage 读取，避免通知先显示再消失的闪烁
   const [dismissedNotices, setDismissedNotices] = useState<Set<string>>(() => {
     if (typeof window === "undefined") return new Set();
@@ -127,14 +210,18 @@ export default function HomePage() {
         const meData = await meRes.json();
         setUser(meData);
 
-        const [noticesData, workflowsData] = await Promise.all([
+        const [noticesData, workflowsData, sessionsData] = await Promise.all([
           fetch(`/api/notices?tenantCode=${meData.tenantCode}`)
             .then((r) => r.json())
             .catch(() => []),
           fetch("/api/workflows")
             .then((r) => r.json())
             .catch(() => []),
+          fetch("/api/workflow-sessions")
+            .then((r) => r.ok ? r.json() : [])
+            .catch(() => []),
         ]);
+        setMySessions(Array.isArray(sessionsData) ? sessionsData : []);
         setNotices(Array.isArray(noticesData) ? noticesData : []);
         const wfs: WorkflowItem[] = Array.isArray(workflowsData) ? workflowsData : [];
         setWorkflows(wfs);
@@ -182,6 +269,96 @@ export default function HomePage() {
   function selectWorkflow(wfId: string | null) {
     setActiveWorkflowId(wfId);
     setSidebarOpen(false);
+    // 同步 URL —— 否则刷新会读到旧的 ?wf=xxx 把你弹回上次的工作流详情
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (wfId) url.searchParams.set("wf", wfId);
+      else url.searchParams.delete("wf");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }
+
+  // 5.9 工作流多会话
+  function openNewSessionModal(wf: WorkflowItem) {
+    setNewSessionModal({
+      workflowId: wf.id,
+      workflowName: wf.name,
+      inputName: `${wf.name} · ${new Date().toLocaleDateString("zh-CN")}`,
+    });
+  }
+
+  async function createAndStartSession() {
+    if (!newSessionModal || sessionCreating) return;
+    setSessionCreating(true);
+    try {
+      const res = await fetch("/api/workflow-sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflowId: newSessionModal.workflowId, name: newSessionModal.inputName }),
+      });
+      if (!res.ok) return;
+      const session = await res.json();
+      const wf = workflows.find((w) => w.id === newSessionModal.workflowId);
+      if (!wf) return;
+      // 找到第一个有效的 agent 步骤
+      const firstIdx = wf.workflow_steps.findIndex((s) => s.exec_type === "agent" && s.agents?.agent_code);
+      if (firstIdx < 0) return;
+      const firstStep = wf.workflow_steps[firstIdx];
+      window.location.assign(
+        `/agents/${encodeURIComponent(firstStep.agents!.agent_code)}?wf=${encodeURIComponent(wf.id)}&step=${firstIdx}&session=${encodeURIComponent(session.id)}`
+      );
+    } finally {
+      setSessionCreating(false);
+    }
+  }
+
+  function resumeSession(s: SessionItem) {
+    if (!s.workflow) return;
+    const wf = workflows.find((w) => w.id === s.workflow!.id);
+    if (!wf) return;
+    // 从记录的步骤开始往后找第一个有效 agent 步骤
+    let idx = s.currentStepIdx;
+    while (idx < wf.workflow_steps.length) {
+      const step = wf.workflow_steps[idx];
+      if (step.exec_type === "agent" && step.agents?.agent_code) break;
+      idx++;
+    }
+    if (idx >= wf.workflow_steps.length) return;
+    const step = wf.workflow_steps[idx];
+    window.location.assign(
+      `/agents/${encodeURIComponent(step.agents!.agent_code)}?wf=${encodeURIComponent(s.workflow!.id)}&step=${idx}&session=${encodeURIComponent(s.id)}`
+    );
+  }
+
+  async function deleteSession(sessionId: string) {
+    await fetch(`/api/workflow-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    setMySessions((prev) => prev.filter((s) => s.id !== sessionId));
+  }
+
+  function openRenameModal(s: SessionItem) {
+    setRenameModal({ sessionId: s.id, originalName: s.name, inputName: s.name });
+  }
+
+  async function submitRename() {
+    if (!renameModal || renameSaving) return;
+    const newName = renameModal.inputName.trim();
+    if (!newName || newName === renameModal.originalName) {
+      setRenameModal(null);
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      const res = await fetch(`/api/workflow-sessions/${encodeURIComponent(renameModal.sessionId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (!res.ok) return;
+      setMySessions((prev) => prev.map((s) => s.id === renameModal.sessionId ? { ...s, name: newName } : s));
+      setRenameModal(null);
+    } finally {
+      setRenameSaving(false);
+    }
   }
 
   const quota = user?.quota;
@@ -494,6 +671,97 @@ export default function HomePage() {
             </div>
           )}
 
+          {/* ── 5.9 我的进行中工作流 ────────────────────────────────── */}
+          {!loading && mySessions.length > 0 && activeWorkflowId === null && (
+            <div className="mb-8">
+              <div className="flex items-center gap-2 mb-3">
+                <button
+                  type="button"
+                  onClick={toggleSessionsExpanded}
+                  className="flex items-center gap-2 text-left group"
+                  aria-expanded={sessionsExpanded}
+                >
+                  <span className="w-5 h-5 rounded-full bg-[#002FA7]/10 flex items-center justify-center shrink-0">
+                    <GitBranch size={11} className="text-[#002FA7]" />
+                  </span>
+                  <h2 className="text-[15px] font-semibold text-gray-900">我的进行中工作流</h2>
+                  <span className="text-[12px] text-gray-400">({mySessions.length})</span>
+                  <ChevronDown
+                    size={16}
+                    className={`text-gray-400 transition-transform group-hover:text-gray-600 ${sessionsExpanded ? "" : "-rotate-90"}`}
+                  />
+                </button>
+                {sessionsExpanded && (canScrollLeft || canScrollRight) && (
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => scrollSessions("left")}
+                      disabled={!canScrollLeft}
+                      className="w-7 h-7 rounded-full border border-gray-200 bg-white flex items-center justify-center text-gray-500 hover:text-[#002FA7] hover:border-[#002FA7]/40 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      aria-label="向左滚动"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => scrollSessions("right")}
+                      disabled={!canScrollRight}
+                      className="w-7 h-7 rounded-full border border-gray-200 bg-white flex items-center justify-center text-gray-500 hover:text-[#002FA7] hover:border-[#002FA7]/40 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      aria-label="向右滚动"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
+              {sessionsExpanded && (
+                <div
+                  ref={sessionsScrollRef}
+                  onScroll={updateScrollArrows}
+                  onWheel={onSessionsWheel}
+                  className="flex gap-2 overflow-x-auto scroll-smooth snap-x snap-mandatory pb-1 [&::-webkit-scrollbar]:hidden"
+                  style={{ scrollbarWidth: "none" }}
+                >
+                  {mySessions.map((s) => (
+                    <div
+                      key={s.id}
+                      className={`snap-start shrink-0 ${mySessions.length === 1 ? "w-full" : "w-[calc(50%-4px)]"} bg-white border border-gray-200 rounded-[12px] px-4 py-2.5 flex items-center gap-3 shadow-[0_1px_4px_rgba(0,0,0,0.03)] hover:border-[#002FA7]/30 transition-colors`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-semibold text-gray-900 truncate">{s.name}</p>
+                        <p className="text-[11px] text-gray-400 mt-0.5 truncate">
+                          {s.workflow?.name ?? "工作流"} · 第 {s.currentStepIdx + 1}/{s.totalSteps} 步 · {new Date(s.updatedAt).toLocaleDateString("zh-CN")}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => resumeSession(s)}
+                          className="px-3 py-1 rounded-full text-[12px] font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors"
+                        >
+                          继续
+                        </button>
+                        <button
+                          onClick={() => openRenameModal(s)}
+                          className="w-6 h-6 flex items-center justify-center rounded-full text-gray-400 hover:text-[#002FA7] hover:bg-[#002FA7]/10 transition-colors"
+                          title="重命名"
+                        >
+                          <Pencil size={11} />
+                        </button>
+                        <button
+                          onClick={() => deleteSession(s.id)}
+                          className="w-6 h-6 flex items-center justify-center rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                          title="删除此会话"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── 主区：activeWorkflowId === null → 工作流卡片网格 ───────── */}
           {activeWorkflowId === null ? (
             loading ? (
@@ -518,6 +786,14 @@ export default function HomePage() {
                 <p className="text-xs text-gray-400 mt-1">请联系管理员配置工作流</p>
               </div>
             ) : (
+              <>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-5 h-5 rounded-full bg-[#002FA7]/10 flex items-center justify-center shrink-0">
+                  <GitBranch size={11} className="text-[#002FA7]" />
+                </span>
+                <h2 className="text-[15px] font-semibold text-gray-900">全部工作流</h2>
+                <span className="text-[12px] text-gray-400">({workflows.length})</span>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {workflows.map((wf) => (
                   <button
@@ -553,13 +829,14 @@ export default function HomePage() {
                       <span className="inline-flex items-center text-[11px] px-2.5 py-1 rounded-full bg-white/15 text-white border border-white/20">
                         {wf.category || "工作流"}
                       </span>
-                      <div className="flex items-center gap-1 text-[12px] font-medium text-white group-hover:translate-x-1 transition-transform">
-                        查看流程 <ChevronRight size={14} />
-                      </div>
+                      <span className="inline-flex items-center gap-0.5 text-[12px] text-white/80 group-hover:text-white transition-colors">
+                        查看流程 <ChevronRight size={12} />
+                      </span>
                     </div>
                   </button>
                 ))}
               </div>
+              </>
             )
           ) : (
             /* ── 主区：选中某条工作流 → 详情 + 智能体展示 ───────────────── */
@@ -577,13 +854,22 @@ export default function HomePage() {
                     <p className="text-[13px] text-gray-500 mt-1">{activeWorkflow.category}</p>
                   )}
                 </div>
-                <button
-                  onClick={() => selectWorkflow(null)}
-                  className="text-xs text-gray-500 hover:text-[#002FA7] px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors"
-                  title="返回全部"
-                >
-                  返回全部
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  {activeWorkflow && (
+                    <button
+                      onClick={() => openNewSessionModal(activeWorkflow)}
+                      className="text-xs font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] px-3 py-1.5 rounded-[8px] transition-colors"
+                    >
+                      开始新会话
+                    </button>
+                  )}
+                  <button
+                    onClick={() => selectWorkflow(null)}
+                    className="text-xs text-gray-500 hover:text-[#002FA7] px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors"
+                  >
+                    返回全部
+                  </button>
+                </div>
               </div>
 
               <div className="px-7 py-6">
@@ -776,6 +1062,95 @@ export default function HomePage() {
             >
               关闭
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── 5.9 新建工作流会话弹窗 ─────────────────────────────── */}
+      {newSessionModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setNewSessionModal(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="bg-white rounded-[20px] p-8 shadow-2xl w-[420px] max-w-[90vw]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-semibold text-gray-900 text-lg mb-1">开始新的工作流</h3>
+            <p className="text-sm text-gray-400 mb-5">{newSessionModal.workflowName}</p>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">会话名称</label>
+            <input
+              ref={newSessionInputRef}
+              type="text"
+              value={newSessionModal.inputName}
+              onChange={(e) => setNewSessionModal((m) => m ? { ...m, inputName: e.target.value } : m)}
+              onKeyDown={(e) => { if (e.key === "Enter") createAndStartSession(); }}
+              className="w-full border border-gray-200 rounded-[10px] px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#002FA7]/30 focus:border-[#002FA7]/60 mb-6"
+              placeholder="例如：项目A资料整理"
+            />
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setNewSessionModal(null)}
+                className="px-4 py-2 rounded-[10px] text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={createAndStartSession}
+                disabled={sessionCreating || !newSessionModal.inputName.trim()}
+                className="px-6 py-2 rounded-[10px] text-sm font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {sessionCreating ? "创建中…" : "开始"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 5.9 重命名工作流会话弹窗 ─────────────────────────────── */}
+      {renameModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setRenameModal(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="bg-white rounded-[20px] p-8 shadow-2xl w-[420px] max-w-[90vw]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-semibold text-gray-900 text-lg mb-1">重命名会话</h3>
+            <p className="text-sm text-gray-400 mb-5 truncate">原名称：{renameModal.originalName}</p>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">新名称</label>
+            <input
+              ref={renameInputRef}
+              type="text"
+              value={renameModal.inputName}
+              onChange={(e) => setRenameModal((m) => m ? { ...m, inputName: e.target.value } : m)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitRename();
+                if (e.key === "Escape") setRenameModal(null);
+              }}
+              className="w-full border border-gray-200 rounded-[10px] px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#002FA7]/30 focus:border-[#002FA7]/60 mb-6"
+              placeholder="输入新的会话名称"
+            />
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setRenameModal(null)}
+                className="px-4 py-2 rounded-[10px] text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={submitRename}
+                disabled={renameSaving || !renameModal.inputName.trim()}
+                className="px-6 py-2 rounded-[10px] text-sm font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {renameSaving ? "保存中…" : "保存"}
+              </button>
+            </div>
           </div>
         </div>
       )}
