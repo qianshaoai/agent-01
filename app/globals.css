@@ -156,6 +156,12 @@ html {
 :root[data-font-size="large"] svg[width="36"] { width: 59px !important; height: 59px !important; }
 :root[data-font-size="large"] svg[width="40"] { width: 66px !important; height: 66px !important; }
 :root[data-font-size="large"] svg[width="64"] { width: 106px !important; height: 106px !important; }
+
+/* 5.9up · AI 回复 markdown 容器 .trial-md 字号硬编码 14px，
+   不跟 root 缩放 → 大字体下用户消息变大但 AI 回复仍是 14px。
+   这里按字号档位等比覆盖（h1/h2/h3 用 em 相对它，会自动跟着大）。 */
+:root[data-font-size="medium"] .trial-md { font-size: 18px; }
+:root[data-font-size="large"]  .trial-md { font-size: 23px; }
 body {
   font-size: var(--fs-base);
 }
