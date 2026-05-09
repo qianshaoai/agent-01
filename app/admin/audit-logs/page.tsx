@@ -176,6 +176,7 @@ export default function AuditLogsPage() {
               <label className="text-xs text-gray-500">开始日期</label>
               <input
                 type="date"
+                lang="zh-CN"
                 value={dateFrom}
                 onChange={(e) => { setDateFrom(e.target.value); handleFilterChange(); }}
                 className="text-sm border border-gray-200 rounded-[8px] px-3 py-1.5 bg-white"
@@ -185,6 +186,7 @@ export default function AuditLogsPage() {
               <label className="text-xs text-gray-500">结束日期</label>
               <input
                 type="date"
+                lang="zh-CN"
                 value={dateTo}
                 onChange={(e) => { setDateTo(e.target.value); handleFilterChange(); }}
                 className="text-sm border border-gray-200 rounded-[8px] px-3 py-1.5 bg-white"
