@@ -397,7 +397,14 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   const currentStepIdx = stepParam !== null ? parseInt(stepParam, 10) : 0;
   // outline=1：到达本页后自动向智能体请求本步骤产出大纲
   const outlineMode = searchParams.get("outline") === "1";
-  const backHref = fromWorkflowId ? `/?wf=${encodeURIComponent(fromWorkflowId)}` : "/";
+  // 5.9up 历史只读模式：从历史详情页跳来时带 readonly=1 + conv=<convId>
+  const readonly = searchParams.get("readonly") === "1";
+  const initialConvId = searchParams.get("conv"); // 直接定位到某条历史对话
+  const backHref = readonly && sessionId
+    ? `/workflows/history/${encodeURIComponent(sessionId)}`
+    : fromWorkflowId
+    ? `/?wf=${encodeURIComponent(fromWorkflowId)}`
+    : "/";
 
   const [agent, setAgent] = useState<AgentInfo | null>(null);
   const [redirecting, setRedirecting] = useState(false);
@@ -475,7 +482,10 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
 
   // 5.8up · 自动查找上一个智能体步骤的最新对话，作为跨步骤上下文注入
   // 不依赖 URL from 参数，在 wfSteps 加载完成后自动执行
+  // 5.9up bugfix：sessionId 变化时清空旧缓存 + 重置注入标记，避免上一个 session 的上下文残留
   useEffect(() => {
+    workflowContextRef.current = null;
+    workflowContextSentRef.current = false;
     if (!fromWorkflowId || !wfSteps.length || resolvedStepIdx <= 0) return;
 
     // 向前找最近一个 agent 类型步骤
@@ -513,7 +523,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           });
       })
       .catch(() => {});
-  }, [fromWorkflowId, wfSteps, resolvedStepIdx]);
+  }, [fromWorkflowId, wfSteps, resolvedStepIdx, sessionId]);
 
   // 错误提示 3 秒后自动消失
   useEffect(() => {
@@ -523,8 +533,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   }, [error]);
 
   // 工作流步骤衔接：会话消息加载完成后，自动向智能体说明工作背景并请其继续本职工作
+  // readonly 模式下不触发任何自动发送
   useEffect(() => {
-    if (!outlineMode || loading || streaming || messages.length === 0 || outlineSentRef.current) return;
+    if (readonly || !outlineMode || loading || streaming || messages.length === 0 || outlineSentRef.current) return;
     outlineSentRef.current = true;
     const stepTitle = wfSteps[resolvedStepIdx]?.title;
     const contextMsg = stepTitle
@@ -565,6 +576,10 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
 
   useEffect(() => {
     let cancelled = false;
+    // 5.9up bugfix：sessionId 变化（如 上一步 / 切换会话）时也必须重新加载，
+    // 否则上次 session 的 activeConvId / 会话列表残留，导致看到跨 session 数据
+    setActiveConvId(null);
+    setMessages([]);
 
     async function load() {
       // 工作流会话模式：对话列表按 sessionId 隔离
@@ -602,10 +617,24 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       }
       setAgent(found ?? { agent_code: agentCode, name: agentCode, description: "" });
 
+      let convsData: Conversation[] = [];
       if (convsRes.status === "fulfilled" && convsRes.value.ok) {
         const raw = await convsRes.value.json();
         if (cancelled) return;
-        setConversations(raw.data ?? raw ?? []);
+        convsData = raw.data ?? raw ?? [];
+        setConversations(convsData);
+      }
+
+      // 5.9up readonly：URL 里带 conv=<id> 时直接打开该对话
+      if (readonly && initialConvId) {
+        setActiveConvId(initialConvId);
+        loadConversationMessages(initialConvId);
+      } else if (sessionId && convsData.length > 0) {
+        // 5.9up：工作流会话模式下，每个 agent 在该 session 内只有一条对话；
+        // 进入页面时自动打开它，让用户能看到上次的聊天记录
+        const conv = convsData[0];
+        setActiveConvId(conv.id);
+        loadConversationMessages(conv.id);
       }
 
       if (meRes.status === "fulfilled" && meRes.value.ok) {
@@ -619,7 +648,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
 
     load();
     return () => { cancelled = true; };
-  }, [agentCode]);
+  }, [agentCode, sessionId]);
 
   async function loadConversationMessages(convId: string) {
     setLoading(true);
@@ -900,7 +929,12 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             if (obj.done && obj.conversationId) {
               setActiveConvId(obj.conversationId);
               // Refresh conversation list
-              const convsRes = await fetch(`/api/conversations?agentCode=${agentCode}`);
+              // 5.9up bugfix：必须带 sessionId 才能保持 session 隔离，
+              // 否则发完消息后侧边栏会拉回所有跨 session 对话
+              const refreshUrl = sessionId
+                ? `/api/conversations?agentCode=${agentCode}&sessionId=${encodeURIComponent(sessionId)}`
+                : `/api/conversations?agentCode=${agentCode}`;
+              const convsRes = await fetch(refreshUrl);
               if (convsRes.ok) { const raw = await convsRes.json(); setConversations(raw.data ?? raw ?? []); }
               // Update quota
               if (quota) setQuota((q) => q ? { ...q, left: q.left - 1 } : q);
@@ -1146,10 +1180,12 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     try { localStorage.setItem(`wf_progress_${fromWorkflowId}`, JSON.stringify({ unlockedUpTo: Math.min(cursor, wfSteps.length - 1) })); } catch {}
     // 保存进度到服务端（工作流会话模式）
     if (sessionId) {
+      // 5.9up bugfix：keepalive 确保 PATCH 不会被紧随其后的 window.location.assign 取消
       fetch(`/api/workflow-sessions/${encodeURIComponent(sessionId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ currentStepIdx: Math.min(cursor, wfSteps.length - 1) }),
+        keepalive: true,
       }).catch(() => {});
     }
 
@@ -1178,6 +1214,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "completed", currentStepIdx: wfSteps.length - 1 }),
+        keepalive: true,
       }).catch(() => {});
     }
     setShowWorkflowComplete(true);
@@ -1207,6 +1244,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status: "completed", currentStepIdx: wfSteps.length - 1 }),
+          keepalive: true,
         }).catch(() => {});
       }
       setShowWorkflowComplete(true);
@@ -1630,9 +1668,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           <div className="p-4 border-b border-gray-100 flex items-center justify-between">
             <span className="text-sm font-semibold text-gray-700">历史会话</span>
             <div className="flex items-center gap-1">
-              <button onClick={newChat} className="p-1.5 rounded-[8px] hover:bg-[#002FA7] hover:text-white text-gray-500 transition-colors" title="新建对话" aria-label="新建对话">
-                <Plus size={16} />
-              </button>
+              {!readonly && (
+                <button onClick={newChat} className="p-1.5 rounded-[8px] hover:bg-[#002FA7] hover:text-white text-gray-500 transition-colors" title="新建对话" aria-label="新建对话">
+                  <Plus size={16} />
+                </button>
+              )}
               <button className="lg:hidden p-1.5 rounded-[8px] hover:bg-gray-100" onClick={() => setSidebarOpen(false)}>
                 <X size={16} className="text-gray-500" />
               </button>
@@ -1659,9 +1699,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             </div>
           )}
           <div className="flex-1 overflow-y-auto p-2">
-            <button onClick={newChat} className="w-full flex items-center gap-2 px-3 py-2.5 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors mb-1">
-              <Plus size={15} /><span>新建对话</span>
-            </button>
+            {!readonly && (
+              <button onClick={newChat} className="w-full flex items-center gap-2 px-3 py-2.5 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors mb-1">
+                <Plus size={15} /><span>新建对话</span>
+              </button>
+            )}
             {conversations.length === 0 ? (
               <p className="text-xs text-gray-400 text-center py-6 px-2 leading-relaxed">暂无会话记录<br/>发送消息开始对话</p>
             ) : filteredConvs.length === 0 ? (
@@ -1699,8 +1741,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                       )}
                       <p className="text-xs text-gray-400 mt-0.5">{new Date(conv.updated_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</p>
                     </div>
-                    {/* hover 显示重命名 / 删除 */}
-                    {renamingId !== conv.id && (
+                    {/* hover 显示重命名 / 删除（readonly 模式不显示，避免误触） */}
+                    {!readonly && renamingId !== conv.id && (
                       <div className="opacity-0 group-hover/conv:opacity-100 transition-opacity flex items-center gap-0.5 shrink-0">
                         <button
                           onClick={(e) => {
@@ -1751,7 +1793,10 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   onClick={() => {
                     const step = wfSteps[prevAgentStepIdx];
                     if (!step?.agents) return;
-                    router.push(`/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${prevAgentStepIdx}&outline=1`);
+                    // 5.9up：上一步不带 outline=1 —— 用户已经看过那一步的内容，
+                    // 不需要再让 bot 发一遍「请回顾对话记录」的废话
+                    const sessionParam = sessionId ? `&session=${encodeURIComponent(sessionId)}` : "";
+                    router.push(`/agents/${encodeURIComponent(step.agents.agent_code)}?wf=${encodeURIComponent(fromWorkflowId!)}&step=${prevAgentStepIdx}${sessionParam}`);
                   }}
                   className="shrink-0 flex items-center gap-1.5 px-4 py-2.5 rounded-full text-[13px] font-semibold transition-all bg-gray-100 text-gray-600 hover:bg-gray-200"
                 >
@@ -1811,18 +1856,20 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 })}
               </div>
 
-              {/* 右侧：下一步 / 完成按钮 */}
-              <button
-                onClick={handleNextStepClick}
-                disabled={streaming}
-                className={`shrink-0 flex items-center gap-1.5 px-5 py-2.5 rounded-full text-[13px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                  !hasMoreStepsAfter
-                    ? "bg-green-500 text-white hover:bg-green-600"
-                    : "bg-[#002FA7] text-white hover:bg-[#1a47c0]"
-                }`}
-              >
-                {!hasMoreStepsAfter ? "完成 ✓" : "下一步 →"}
-              </button>
+              {/* 右侧：下一步 / 完成按钮（readonly 不显示，历史回看不能推进） */}
+              {!readonly && (
+                <button
+                  onClick={handleNextStepClick}
+                  disabled={streaming}
+                  className={`shrink-0 flex items-center gap-1.5 px-5 py-2.5 rounded-full text-[13px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                    !hasMoreStepsAfter
+                      ? "bg-green-500 text-white hover:bg-green-600"
+                      : "bg-[#002FA7] text-white hover:bg-[#1a47c0]"
+                  }`}
+                >
+                  {!hasMoreStepsAfter ? "完成 ✓" : "下一步 →"}
+                </button>
+              )}
             </div>
           )}
 
@@ -1874,8 +1921,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                     setEditDraft(msg.content);
                     setEditingMsgIdx(i);
                   }}
-                  canEdit={msg.role === "user" && hasDbId && !streaming}
+                  canEdit={!readonly && msg.role === "user" && hasDbId && !streaming}
                   canRegenerate={
+                    !readonly &&
                     isLastAssistant &&
                     hasDbId &&
                     !!prev &&
@@ -1910,7 +1958,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           )}
 
 
-          {/* Input area */}
+          {/* 5.9up readonly：历史回看不允许发送消息，整块输入区不渲染 */}
+          {readonly ? (
+            <div className="bg-amber-50 border-t border-amber-200 px-4 py-3 text-center text-[12px] text-amber-700">
+              只读模式 · 历史会话回看，不可发送消息或修改记录
+            </div>
+          ) : (
+          /* Input area */
           <div className="bg-white border-t border-gray-100 px-4 py-3">
             <div className="max-w-4xl mx-auto">
               {/* Uploaded files preview — 带上传/解析状态角标 */}
@@ -2013,6 +2067,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               <p className="text-center text-[10px] text-gray-400 mt-2">AI 生成内容仅供参考，请注意核实重要信息</p>
             </div>
           </div>
+          )}
         </div>
       </div>
 

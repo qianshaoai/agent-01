@@ -12,6 +12,10 @@ export async function GET(req: NextRequest) {
   if (guard) return guard;
 
   const status = req.nextUrl.searchParams.get("status") ?? "in_progress";
+  // 5.9up：status=history 表示 completed + abandoned 合集
+  const statusFilter = status === "history"
+    ? ["completed", "abandoned"]
+    : [status];
 
   const { data: dbUser } = await db
     .from("users")
@@ -29,9 +33,9 @@ export async function GET(req: NextRequest) {
       workflows:workflow_id ( id, name, description )
     `)
     .eq("user_id", dbUser.id)
-    .eq("status", status)
+    .in("status", statusFilter)
     .order("updated_at", { ascending: false })
-    .limit(50);
+    .limit(200);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

@@ -25,6 +25,7 @@ import {
   Type,
   Check,
   Pencil,
+  History,
 } from "lucide-react";
 import { WorkflowStepButton } from "@/components/workflow-step-button";
 import { AgentCard } from "@/components/agent-card";
@@ -364,6 +365,11 @@ export default function HomePage() {
   const quota = user?.quota;
   const visibleNotices = notices.filter((n) => n.enabled && !dismissedNotices.has(n.id));
   const activeWorkflow = workflows.find((w) => w.id === activeWorkflowId) ?? null;
+  // 5.9up：当前工作流是否已有进行中会话；有则把 sessionId 透传给步骤按钮，保持隔离
+  // 多个进行中会话时取 mySessions 顺序中第一个（API 已按 updated_at desc 排序，即最近的）
+  const activeWorkflowSessionId = activeWorkflow
+    ? mySessions.find((s) => s.workflow?.id === activeWorkflow.id)?.id ?? null
+    : null;
 
   // 当前工作流绑定的智能体（按步骤顺序去重，仅取真正绑定到 step.agents 的）
   // 注意：`/api/workflows` 嵌入的 agent 字段较薄（id/agent_code/name/agent_type/external_url），
@@ -671,8 +677,8 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* ── 5.9 我的进行中工作流 ────────────────────────────────── */}
-          {!loading && mySessions.length > 0 && activeWorkflowId === null && (
+          {/* ── 5.9 我的进行中工作流（含历史入口）─────────────────── */}
+          {!loading && activeWorkflowId === null && (
             <div className="mb-8">
               <div className="flex items-center gap-2 mb-3">
                 <button
@@ -691,8 +697,16 @@ export default function HomePage() {
                     className={`text-gray-400 transition-transform group-hover:text-gray-600 ${sessionsExpanded ? "" : "-rotate-90"}`}
                   />
                 </button>
+                <Link
+                  href="/workflows/history"
+                  className="ml-auto inline-flex items-center gap-1 text-[12px] text-gray-500 hover:text-[#002FA7] px-2.5 py-1 rounded-full border border-gray-200 hover:border-[#002FA7]/40 bg-white transition-colors"
+                  title="查看历史工作流"
+                >
+                  <History size={12} />
+                  历史
+                </Link>
                 {sessionsExpanded && (canScrollLeft || canScrollRight) && (
-                  <div className="ml-auto flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => scrollSessions("left")}
@@ -714,7 +728,12 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
-              {sessionsExpanded && (
+              {sessionsExpanded && mySessions.length === 0 && (
+                <div className="bg-white/60 border border-dashed border-gray-200 rounded-[12px] px-4 py-3 text-[12px] text-gray-400">
+                  暂无进行中工作流 · 在工作流详情页点「开始新会话」即可开始
+                </div>
+              )}
+              {sessionsExpanded && mySessions.length > 0 && (
                 <div
                   ref={sessionsScrollRef}
                   onScroll={updateScrollArrows}
@@ -954,6 +973,7 @@ export default function HomePage() {
                                     step={step}
                                     fromWorkflow={activeWorkflow?.id}
                                     stepIndex={idx}
+                                    sessionId={activeWorkflowSessionId}
                                   />
                                 ) : step.exec_type === "manual" ? (
                                   <span className="text-[12px] text-amber-600 bg-amber-50 px-3 py-1.5 rounded-[8px]">

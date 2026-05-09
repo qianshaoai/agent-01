@@ -9,7 +9,7 @@ import {
 } from "@/lib/auth";
 
 // 需要登录才能访问的用户路由
-const USER_PROTECTED = ["/", "/agents", "/settings", "/user-agents", "/trial"];
+const USER_PROTECTED = ["/", "/agents", "/settings", "/user-agents", "/trial", "/workflows"];
 // 需要管理员才能访问的路由
 const ADMIN_PROTECTED = [
   "/admin/dashboard",
