@@ -8,6 +8,36 @@ export const dynamic = "force-dynamic";
 
 type WfPerm = { scope_type: string; scope_id: string | null };
 
+// 5.9up · 校验 org_admin 提交的 permissions 是否都在本组织范围内
+// 任何 dept_id / team_id 必须真实属于 admin.tenantCode；scope=org 必须等于本组织
+async function validateOrgAdminPermissions(
+  tenantCode: string,
+  permissions: Array<{ scope_type: string; scope_id: string | null }>
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!Array.isArray(permissions) || permissions.length === 0) {
+    return { ok: false, reason: "至少选择一个可见范围" };
+  }
+  const [{ data: depts }, { data: teams }] = await Promise.all([
+    db.from("departments").select("id").eq("tenant_code", tenantCode),
+    db.from("teams").select("id").eq("tenant_code", tenantCode),
+  ]);
+  const deptIds = new Set((depts ?? []).map((d: { id: string }) => d.id));
+  const teamIds = new Set((teams ?? []).map((t: { id: string }) => t.id));
+
+  for (const p of permissions) {
+    if (p.scope_type === "org") {
+      if (p.scope_id !== tenantCode) return { ok: false, reason: "组织管理员只能选本组织" };
+    } else if (p.scope_type === "dept") {
+      if (!p.scope_id || !deptIds.has(p.scope_id)) return { ok: false, reason: "所选部门不属于本组织" };
+    } else if (p.scope_type === "team") {
+      if (!p.scope_id || !teamIds.has(p.scope_id)) return { ok: false, reason: "所选小组不属于本组织" };
+    } else {
+      return { ok: false, reason: `不支持的 scope_type=${p.scope_type}` };
+    }
+  }
+  return { ok: true };
+}
+
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
@@ -97,11 +127,19 @@ export async function POST(req: NextRequest) {
 
   if (!name) return apiError("请填写工作流名称", "VALIDATION_ERROR");
 
-  // 5.7up · org_admin 创建工作流强制 visible_to='org_only' + 自动绑本组织
+  // 5.9up · org_admin 创建工作流：
+  //   - 不传 permissions（或空）→ 兼容旧行为，默认全组织可见
+  //   - 传了 → 校验都在本组织范围内，按 custom 处理
   if (admin.role === "org_admin") {
     if (!admin.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
-    visibleTo = "org_only";
-    permissions = [{ scope_type: "org", scope_id: admin.tenantCode }];
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+      visibleTo = "org_only";
+      permissions = [{ scope_type: "org", scope_id: admin.tenantCode }];
+    } else {
+      const result = await validateOrgAdminPermissions(admin.tenantCode, permissions);
+      if (!result.ok) return apiError(result.reason, "FORBIDDEN");
+      visibleTo = "custom";
+    }
   }
 
   const { data, error } = await db
@@ -127,11 +165,10 @@ export async function POST(req: NextRequest) {
   }
 
   // 插入可见权限规则
-  // org_admin 路径强制写一条 scope=本组织
-  // 其它角色：仅在 visibleTo='custom' 时按提交的 permissions 写
+  // 5.9up：上面已经把 permissions 标准化（org_admin 路径已校验），直接用
   const permsToInsert: Array<{ scope_type: string; scope_id: string | null }> = [];
   if (admin.role === "org_admin") {
-    permsToInsert.push({ scope_type: "org", scope_id: admin.tenantCode! });
+    permsToInsert.push(...(permissions as Array<{ scope_type: string; scope_id: string | null }>));
   } else if (visibleTo === "custom" && Array.isArray(permissions)) {
     permsToInsert.push(...permissions);
   }

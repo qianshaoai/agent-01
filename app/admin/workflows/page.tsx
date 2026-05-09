@@ -85,12 +85,15 @@ const EMPTY_STEP = { title: "", description: "", execType: "agent" as "agent" | 
 export default function WorkflowsAdminPage() {
   const { toast } = useToast();
   // 5.7up · 当前管理员角色，决定 org_admin 是否隐藏 visible_to 选择器
+  // 5.9up · 同时拉 tenantCode，用于过滤 dept/team picker、写 scope=org 的 permission
   const [adminRole, setAdminRole] = useState<"super_admin" | "system_admin" | "org_admin" | null>(null);
+  const [adminTenantCode, setAdminTenantCode] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/admin/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.role) setAdminRole(d.role);
+        if (d?.tenantCode) setAdminTenantCode(d.tenantCode);
       })
       .catch(() => {});
   }, []);
@@ -253,15 +256,28 @@ export default function WorkflowsAdminPage() {
       .filter((r) => r.scope_type === validScope)
       .map((r) => r.scope_id ?? "")
       .filter(Boolean);
+
+    // 5.9up · "org_only + 带 scope=org permission" 是新语义（限定特定组织），
+    // 在编辑面板里映射成 custom:org 展示，避免 select 显示成误导性的"仅组织用户可见"。
+    // 注：org_admin 的"我所在组织全员可见"也是 org_only + scope=org，但 org_admin 的下拉
+    // 没有 custom:org 选项 → 这里只对非 org_admin 做映射，保持 org_admin 原 org_only 视图
+    let visibleTo = wf.visible_to;
+    let permScope = validScope;
+    const hasOrgScopePerm = rules.some((r) => r.scope_type === "org");
+    if (!isOrgAdmin && wf.visible_to === "org_only" && hasOrgScopePerm) {
+      visibleTo = "custom";
+      permScope = "org";
+    }
+
     setWfForm({
       name: wf.name,
       description: wf.description,
       category: wf.category,
       sortOrder: wf.sort_order,
       enabled: wf.enabled,
-      visibleTo: wf.visible_to,
+      visibleTo,
       categoryIds: wf.categoryIds ?? [],
-      permScope: validScope,
+      permScope,
       permIds,
     });
     setWfError(""); setShowWfModal(true);
@@ -277,7 +293,7 @@ export default function WorkflowsAdminPage() {
     }
     setSaving(true);
     try {
-      // 生成 permissions 数组（custom 模式才有）
+      // 生成 permissions 数组（custom 模式才有；org_admin 选"全员"由后端兜底写 scope=org）
       const permissions = wfForm.visibleTo === "custom"
         ? wfForm.permIds.map((scopeId) => ({ scope_type: wfForm.permScope, scope_id: scopeId }))
         : [];
@@ -730,16 +746,51 @@ export default function WorkflowsAdminPage() {
                             </span>
                           );
                         })}
-                        {wf.visible_to === "org_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>}
+                        {wf.visible_to === "org_only" && (() => {
+                          // 5.9up · 区分两种 'org_only' 语义：
+                          //   - 无 scope=org permission（5.7up 之前的"任意组织用户可见"老语义）→ "仅组织用户"
+                          //   - 有 scope=org permission（5.7up+ org_admin 路径，限定特定组织）→ "指定组织：XXX"
+                          const orgRules = (wf.permissions ?? []).filter((r) => r.scope_type === "org");
+                          if (orgRules.length === 0) {
+                            return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>;
+                          }
+                          const names = orgRules
+                            .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id)
+                            .filter(Boolean) as string[];
+                          const label = `指定组织：${names.join("、")}`;
+                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={names.join("、")}>{label}</span>;
+                        })()}
                         {wf.visible_to === "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>}
                         {wf.visible_to === "custom" && (() => {
                           const rules = wf.permissions ?? [];
                           const firstType = rules[0]?.scope_type;
-                          const label = firstType === "dept" ? "指定部门可见"
-                                      : firstType === "team" ? "指定小组可见"
-                                      : "指定组织可见";
-                          const count = rules.length;
-                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`${label}（共 ${count} 项）`}>{label}</span>;
+                          const typeLabel = firstType === "dept" ? "指定部门"
+                                         : firstType === "team" ? "指定小组"
+                                         : "指定组织";
+                          // 5.9up · 把 scope_id 解析成可读名称；dept/team 带上母公司前缀，便于跨组织辨认
+                          const names = rules.map((r) => {
+                            if (r.scope_type === "org") {
+                              return tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id;
+                            }
+                            if (r.scope_type === "dept") {
+                              const d = allDepts.find((x) => x.id === r.scope_id);
+                              if (!d) return r.scope_id;
+                              const tenant = tenants.find((t) => t.code === d.tenant_code)?.name;
+                              return tenant ? `${tenant} / ${d.name}` : d.name;
+                            }
+                            if (r.scope_type === "team") {
+                              const tm = allTeams.find((x) => x.id === r.scope_id);
+                              if (!tm) return r.scope_id;
+                              const d = allDepts.find((x) => x.id === tm.dept_id);
+                              const tenant = d ? tenants.find((t) => t.code === d.tenant_code)?.name : null;
+                              if (tenant && d) return `${tenant} / ${d.name} / ${tm.name}`;
+                              if (d) return `${d.name} / ${tm.name}`;
+                              return tm.name;
+                            }
+                            return r.scope_id;
+                          }).filter(Boolean) as string[];
+                          const label = `${typeLabel}：${names.join("、")}`;
+                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={names.join("、")}>{label}</span>;
                         })()}
                         {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
                         {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
@@ -1015,12 +1066,7 @@ export default function WorkflowsAdminPage() {
               <Input label="排序（数字越小越靠前）" type="number" value={String(wfForm.sortOrder)} onChange={(e) => setWfForm({ ...wfForm, sortOrder: Number(e.target.value) })} />
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
-                {/* 5.7up · org_admin 不可改可见性，强制本组织可见 */}
-                {isOrgAdmin ? (
-                  <div className="px-4 py-2.5 rounded-[12px] bg-blue-50 border border-blue-100 text-sm text-blue-700">
-                    本工作流将自动对您所在组织的所有成员可见（不可修改）
-                  </div>
-                ) : (
+                {/* 5.9up · org_admin 限定本组织范围三档可选 */}
                 <select
                   className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
                   value={wfForm.visibleTo === "custom" ? `custom:${wfForm.permScope}` : wfForm.visibleTo}
@@ -1036,14 +1082,23 @@ export default function WorkflowsAdminPage() {
                     }
                   }}
                 >
-                  <option value="all">全部用户可见</option>
-                  <option value="org_only">仅组织用户可见</option>
-                  <option value="personal_only">仅个人用户可见</option>
-                  <option value="custom:org">指定组织可见</option>
-                  <option value="custom:dept">指定部门可见</option>
-                  <option value="custom:team">指定小组可见</option>
+                  {isOrgAdmin ? (
+                    <>
+                      <option value="org_only">我所在组织全员可见</option>
+                      <option value="custom:dept">指定本组织部门可见</option>
+                      <option value="custom:team">指定本组织小组可见</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="all">全部用户可见</option>
+                      <option value="org_only">仅组织用户可见</option>
+                      <option value="personal_only">仅个人用户可见</option>
+                      <option value="custom:org">指定组织可见</option>
+                      <option value="custom:dept">指定部门可见</option>
+                      <option value="custom:team">指定小组可见</option>
+                    </>
+                  )}
                 </select>
-                )}
 
                 {/* custom 模式下根据 permScope 展示对应 picker */}
                 {wfForm.visibleTo === "custom" && wfForm.permScope === "org" && (
@@ -1091,15 +1146,19 @@ export default function WorkflowsAdminPage() {
                   <div className="flex flex-col gap-1.5">
                     <input
                       className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
-                      placeholder="搜索组织或部门名称…"
+                      placeholder={isOrgAdmin ? "搜索部门名称…" : "搜索组织或部门名称…"}
                       value={tenantSearch}
                       onChange={(e) => setTenantSearch(e.target.value)}
                     />
                     <div className="border border-gray-200 rounded-[12px] p-3 max-h-60 overflow-y-auto">
                       {(() => {
                         const q = tenantSearch.toLowerCase();
+                        // 5.9up · org_admin 只看自己的组织；super/system 看全部
+                        const visibleTenants = isOrgAdmin
+                          ? tenants.filter((t) => t.code === adminTenantCode)
+                          : tenants;
                         // 按组织分组
-                        const groups = tenants
+                        const groups = visibleTenants
                           .map((t) => {
                             const depts = allDepts.filter((d) => d.tenant_code === t.code);
                             const filteredDepts = q
@@ -1151,14 +1210,18 @@ export default function WorkflowsAdminPage() {
                   <div className="flex flex-col gap-1.5">
                     <input
                       className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
-                      placeholder="搜索组织/部门/小组名称…"
+                      placeholder={isOrgAdmin ? "搜索部门/小组名称…" : "搜索组织/部门/小组名称…"}
                       value={tenantSearch}
                       onChange={(e) => setTenantSearch(e.target.value)}
                     />
                     <div className="border border-gray-200 rounded-[12px] p-3 max-h-72 overflow-y-auto">
                       {(() => {
                         const q = tenantSearch.toLowerCase();
-                        const groups = tenants
+                        // 5.9up · org_admin 只看自己的组织
+                        const visibleTenants = isOrgAdmin
+                          ? tenants.filter((t) => t.code === adminTenantCode)
+                          : tenants;
+                        const groups = visibleTenants
                           .map((t) => {
                             const depts = allDepts.filter((d) => d.tenant_code === t.code);
                             const deptWithTeams = depts
