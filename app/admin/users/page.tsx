@@ -1273,29 +1273,6 @@ export default function AdminUsersPage() {
                 )}
               </section>
 
-              {/* 可见智能体 */}
-              <section>
-                <h3 className="text-[13px] font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-                  <Users size={14} className="text-[#002FA7]" /> 可见智能体
-                  {detailVisibility && <span className="text-gray-400 font-normal">（{detailVisibility.agents.length}）</span>}
-                </h3>
-                {detailLoading ? (
-                  <div className="space-y-2">
-                    {[...Array(3)].map((_, i) => <div key={i} className="h-8 bg-gray-50 rounded-[8px] animate-pulse" />)}
-                  </div>
-                ) : !detailVisibility || detailVisibility.agents.length === 0 ? (
-                  <p className="text-sm text-gray-400 py-3 text-center bg-gray-50 rounded-[10px]">该用户暂无可见智能体</p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {detailVisibility.agents.map(a => (
-                      <div key={a.id} className="flex items-center justify-between px-3 py-2 rounded-[8px] bg-gray-50/70">
-                        <span className="text-sm text-gray-800 truncate">{a.name}</span>
-                        {a.category && <span className="text-[11px] text-gray-400 shrink-0 ml-2">{a.category}</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
             </div>
 
             {/* 底部快捷操作 */}

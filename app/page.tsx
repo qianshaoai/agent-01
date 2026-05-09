@@ -331,9 +331,13 @@ export default function HomePage() {
     );
   }
 
-  async function deleteSession(sessionId: string) {
-    await fetch(`/api/workflow-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
-    setMySessions((prev) => prev.filter((s) => s.id !== sessionId));
+  async function deleteSession(s: SessionItem) {
+    const ok = window.confirm(
+      `确认放弃工作流「${s.name}」？\n\n会话将移到"历史工作流"页面，仍可回看对话记录；要彻底删除请去历史页操作。`
+    );
+    if (!ok) return;
+    await fetch(`/api/workflow-sessions/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+    setMySessions((prev) => prev.filter((x) => x.id !== s.id));
   }
 
   function openRenameModal(s: SessionItem) {
@@ -767,9 +771,9 @@ export default function HomePage() {
                           <Pencil size={11} />
                         </button>
                         <button
-                          onClick={() => deleteSession(s.id)}
+                          onClick={() => deleteSession(s)}
                           className="w-6 h-6 flex items-center justify-center rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                          title="删除此会话"
+                          title="放弃此会话"
                         >
                           <X size={12} />
                         </button>

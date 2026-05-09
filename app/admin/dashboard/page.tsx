@@ -18,6 +18,7 @@ export default function DashboardPage() {
   const [data, setData] = useState<Analytics | null>(null);
   const [agentCount, setAgentCount] = useState(0);
   const [noticeCount, setNoticeCount] = useState(0);
+  const [userCount, setUserCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -25,16 +26,19 @@ export default function DashboardPage() {
       fetch("/api/admin/analytics").then((r) => r.json()),
       fetch("/api/admin/agents").then((r) => r.json()).then(d => d.data ?? d),
       fetch("/api/admin/notices").then((r) => r.json()).then(d => d.data ?? d),
-    ]).then(([analytics, agents, notices]) => {
+      // 5.9up · 拉用户总数（pageSize=1 就够，只要 pagination.total）
+      fetch("/api/admin/users?pageSize=1").then((r) => r.json()),
+    ]).then(([analytics, agents, notices, users]) => {
       setData(analytics);
       setAgentCount(Array.isArray(agents) ? agents.length : 0);
       setNoticeCount(Array.isArray(notices) ? notices.length : 0);
+      setUserCount(users?.pagination?.total ?? 0);
     }).finally(() => setLoading(false));
   }, []);
 
   const cards = [
     { label: "组织管理", desc: "新增/编辑/禁用组织，配置额度与到期", icon: Building2, href: "/admin/tenants", count: data?.totalTenants ?? "—", countLabel: "家组织", color: "bg-blue-50 text-blue-600" },
-    { label: "用户管理", desc: "用户账号、角色与分组管理", icon: Users, href: "/admin/users", count: "—", countLabel: "用户总数", color: "bg-indigo-50 text-indigo-600" },
+    { label: "用户管理", desc: "用户账号、角色与分组管理", icon: Users, href: "/admin/users", count: userCount || "—", countLabel: "用户总数", color: "bg-indigo-50 text-indigo-600" },
     { label: "智能体管理", desc: "管理分类与智能体，配置 API 对接", icon: Bot, href: "/admin/agents", count: agentCount || "—", countLabel: "个智能体", color: "bg-purple-50 text-purple-600" },
     { label: "公告管理", desc: "配置全局公告与组织专属公告", icon: Megaphone, href: "/admin/notices", count: noticeCount || "—", countLabel: "条公告", color: "bg-amber-50 text-amber-600" },
     { label: "用量看板", desc: "组织用量统计与 Top 智能体分析", icon: BarChart3, href: "/admin/analytics", count: data?.totalCalls ?? "—", countLabel: "总调用次数", color: "bg-green-50 text-green-600" },
