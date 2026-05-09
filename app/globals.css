@@ -62,8 +62,100 @@ html {
 }
 
 /* 5.7up · 字体大小切换（仅改 root font-size，不再用 zoom 缩放整页） */
-:root[data-font-size="medium"] { font-size: 19px; }   /* +12% */
-:root[data-font-size="large"]  { font-size: 21px; }   /* +24% */
+/* 5.9up · 上调档位：中档 ×1.30、大档 ×1.65（原 1.12/1.24 不明显） */
+:root[data-font-size="medium"] { font-size: 22px; }   /* +30% */
+:root[data-font-size="large"]  { font-size: 28px; }   /* +65% */
+
+/* 5.9up · 字体方案路径 B 替代：覆盖 text-[NNpx] 任意值类。
+   5.7up 只改了 root font-size + Tailwind rem 类（text-xs/sm/base 等），
+   但项目里大量 text-[NNpx] 是绝对像素，不会被 root 缩放影响 → 中/大档基本看不出变化。
+   下面按"中"档 ×1.30 / "大"档 ×1.65 比例覆盖项目实际用到的全部字号。 */
+:root[data-font-size="medium"] .text-\[10px\] { font-size: 13px; }
+:root[data-font-size="medium"] .text-\[11px\] { font-size: 14px; }
+:root[data-font-size="medium"] .text-\[12px\] { font-size: 16px; }
+:root[data-font-size="medium"] .text-\[13px\] { font-size: 17px; }
+:root[data-font-size="medium"] .text-\[14px\] { font-size: 18px; }
+:root[data-font-size="medium"] .text-\[15px\] { font-size: 20px; }
+:root[data-font-size="medium"] .text-\[16px\] { font-size: 21px; }
+:root[data-font-size="medium"] .text-\[18px\] { font-size: 23px; }
+:root[data-font-size="medium"] .text-\[22px\] { font-size: 29px; }
+:root[data-font-size="medium"] .text-\[26px\] { font-size: 34px; }
+
+:root[data-font-size="large"] .text-\[10px\] { font-size: 16px; }
+:root[data-font-size="large"] .text-\[11px\] { font-size: 18px; }
+:root[data-font-size="large"] .text-\[12px\] { font-size: 20px; }
+:root[data-font-size="large"] .text-\[13px\] { font-size: 21px; }
+:root[data-font-size="large"] .text-\[14px\] { font-size: 23px; }
+:root[data-font-size="large"] .text-\[15px\] { font-size: 25px; }
+:root[data-font-size="large"] .text-\[16px\] { font-size: 26px; }
+:root[data-font-size="large"] .text-\[18px\] { font-size: 30px; }
+:root[data-font-size="large"] .text-\[22px\] { font-size: 36px; }
+:root[data-font-size="large"] .text-\[26px\] { font-size: 43px; }
+
+/* 5.9up · 仅在中/大字体档位下减少卡片网格列数，避免文字撑爆卡片
+   小档位保持原 3 列布局不动 */
+@media (min-width: 1024px) {
+  :root[data-font-size="medium"] .lg\:grid-cols-3,
+  :root[data-font-size="medium"] .xl\:grid-cols-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  :root[data-font-size="large"] .lg\:grid-cols-3,
+  :root[data-font-size="large"] .xl\:grid-cols-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 5.9up · 中/大档把内容容器从 1600px 解开，让两侧空白被利用起来 */
+:root[data-font-size="medium"] .max-w-\[1600px\] {
+  max-width: 1900px;
+}
+:root[data-font-size="large"] .max-w-\[1600px\] {
+  max-width: none;
+}
+
+/* 5.9up · lucide 图标按字号档位等比放大（match 字体缩放比例 ×1.30 / ×1.65）。
+   lucide-react size={N} 渲染成 svg[width="N"][height="N"]，CSS 直接覆盖宽高 */
+:root[data-font-size="medium"] svg[width="9"]  { width: 12px !important; height: 12px !important; }
+:root[data-font-size="medium"] svg[width="10"] { width: 13px !important; height: 13px !important; }
+:root[data-font-size="medium"] svg[width="11"] { width: 14px !important; height: 14px !important; }
+:root[data-font-size="medium"] svg[width="12"] { width: 16px !important; height: 16px !important; }
+:root[data-font-size="medium"] svg[width="13"] { width: 17px !important; height: 17px !important; }
+:root[data-font-size="medium"] svg[width="14"] { width: 18px !important; height: 18px !important; }
+:root[data-font-size="medium"] svg[width="15"] { width: 20px !important; height: 20px !important; }
+:root[data-font-size="medium"] svg[width="16"] { width: 21px !important; height: 21px !important; }
+:root[data-font-size="medium"] svg[width="17"] { width: 22px !important; height: 22px !important; }
+:root[data-font-size="medium"] svg[width="18"] { width: 23px !important; height: 23px !important; }
+:root[data-font-size="medium"] svg[width="19"] { width: 25px !important; height: 25px !important; }
+:root[data-font-size="medium"] svg[width="20"] { width: 26px !important; height: 26px !important; }
+:root[data-font-size="medium"] svg[width="22"] { width: 29px !important; height: 29px !important; }
+:root[data-font-size="medium"] svg[width="24"] { width: 31px !important; height: 31px !important; }
+:root[data-font-size="medium"] svg[width="26"] { width: 34px !important; height: 34px !important; }
+:root[data-font-size="medium"] svg[width="28"] { width: 36px !important; height: 36px !important; }
+:root[data-font-size="medium"] svg[width="32"] { width: 42px !important; height: 42px !important; }
+:root[data-font-size="medium"] svg[width="36"] { width: 47px !important; height: 47px !important; }
+:root[data-font-size="medium"] svg[width="40"] { width: 52px !important; height: 52px !important; }
+:root[data-font-size="medium"] svg[width="64"] { width: 83px !important; height: 83px !important; }
+
+:root[data-font-size="large"] svg[width="9"]  { width: 15px !important; height: 15px !important; }
+:root[data-font-size="large"] svg[width="10"] { width: 16px !important; height: 16px !important; }
+:root[data-font-size="large"] svg[width="11"] { width: 18px !important; height: 18px !important; }
+:root[data-font-size="large"] svg[width="12"] { width: 20px !important; height: 20px !important; }
+:root[data-font-size="large"] svg[width="13"] { width: 21px !important; height: 21px !important; }
+:root[data-font-size="large"] svg[width="14"] { width: 23px !important; height: 23px !important; }
+:root[data-font-size="large"] svg[width="15"] { width: 25px !important; height: 25px !important; }
+:root[data-font-size="large"] svg[width="16"] { width: 26px !important; height: 26px !important; }
+:root[data-font-size="large"] svg[width="17"] { width: 28px !important; height: 28px !important; }
+:root[data-font-size="large"] svg[width="18"] { width: 30px !important; height: 30px !important; }
+:root[data-font-size="large"] svg[width="19"] { width: 31px !important; height: 31px !important; }
+:root[data-font-size="large"] svg[width="20"] { width: 33px !important; height: 33px !important; }
+:root[data-font-size="large"] svg[width="22"] { width: 36px !important; height: 36px !important; }
+:root[data-font-size="large"] svg[width="24"] { width: 40px !important; height: 40px !important; }
+:root[data-font-size="large"] svg[width="26"] { width: 43px !important; height: 43px !important; }
+:root[data-font-size="large"] svg[width="28"] { width: 46px !important; height: 46px !important; }
+:root[data-font-size="large"] svg[width="32"] { width: 53px !important; height: 53px !important; }
+:root[data-font-size="large"] svg[width="36"] { width: 59px !important; height: 59px !important; }
+:root[data-font-size="large"] svg[width="40"] { width: 66px !important; height: 66px !important; }
+:root[data-font-size="large"] svg[width="64"] { width: 106px !important; height: 106px !important; }
 body {
   font-size: var(--fs-base);
 }
