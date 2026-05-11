@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, History, Bot, User as UserIcon, Eye, Wrench, ChevronRight } from "lucide-react";
+import { ArrowLeft, History, Bot, User as UserIcon, Eye, Wrench, ChevronRight, Loader2 } from "lucide-react";
 
 type SessionDetail = {
   id: string;
@@ -136,7 +136,10 @@ export default function HistorySessionDetailPage({
 
       <main className="max-w-[1200px] mx-auto px-5 sm:px-8 py-6">
         {loading ? (
-          <div className="py-20 text-center text-sm text-gray-400">加载中…</div>
+          <div className="py-20 flex flex-col items-center justify-center text-gray-400">
+            <Loader2 size={28} className="animate-spin text-[#002FA7]/60 mb-3" />
+            <p className="text-sm">加载中…</p>
+          </div>
         ) : error ? (
           <div className="bg-white border border-gray-200 rounded-[16px] p-10 text-center">
             <p className="text-sm font-medium text-red-500">{error}</p>

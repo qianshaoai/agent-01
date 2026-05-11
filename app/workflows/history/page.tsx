@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, History, Search, Trash2, ChevronRight } from "lucide-react";
+import { ArrowLeft, History, Search, Trash2, ChevronRight, Loader2 } from "lucide-react";
 
 type StatusFilter = "all" | "completed" | "abandoned";
 
@@ -133,7 +133,10 @@ export default function WorkflowHistoryPage() {
 
         <div className="bg-white border border-gray-200 rounded-[16px] shadow-[0_2px_10px_rgba(0,0,0,0.04)] overflow-hidden">
           {loading ? (
-            <div className="py-16 text-center text-sm text-gray-400">加载中…</div>
+            <div className="py-16 flex flex-col items-center justify-center text-gray-400">
+              <Loader2 size={28} className="animate-spin text-[#002FA7]/60 mb-3" />
+              <p className="text-sm">加载历史工作流中…</p>
+            </div>
           ) : filtered.length === 0 ? (
             <div className="py-16 flex flex-col items-center justify-center text-center">
               <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">

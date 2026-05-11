@@ -162,7 +162,11 @@ const ChatMessage = memo(function ChatMessage({
                 )}
               </div>
             ) : streaming ? (
-              <span className="inline-block w-[2px] h-[14px] bg-gray-500 align-middle animate-pulse" />
+              // 5.11up · 流式开始但首 token 未到时，显示 spinner 让用户知道在加载（旧版细光标容易被当成卡死）
+              <span className="inline-flex items-center gap-2 text-gray-400 text-sm">
+                <Loader2 size={14} className="animate-spin" />
+                <span>思考中…</span>
+              </span>
             ) : null
           ) : isEditing ? (
             // P1：编辑用户消息内联 textarea

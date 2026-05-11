@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
-import { Search, Clock, AlertCircle, CheckCircle2, LogIn, Upload, MessageSquare, RefreshCw, FileText } from "lucide-react";
+import { Search, Clock, AlertCircle, CheckCircle2, LogIn, Upload, MessageSquare, RefreshCw, FileText, Loader2 } from "lucide-react";
 
 type Log = {
   id: string;
@@ -112,7 +112,10 @@ export default function LogsPage() {
 
         <Card padding="none" className="overflow-hidden">
           {loading ? (
-            <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="h-12 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
+            <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+              <Loader2 size={28} className="animate-spin text-[#002FA7]/60 mb-3" />
+              <p className="text-sm">加载操作日志中…</p>
+            </div>
           ) : logs.length === 0 ? (
             <div className="py-20 text-center text-gray-400"><MessageSquare size={36} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">暂无日志记录</p></div>
           ) : (

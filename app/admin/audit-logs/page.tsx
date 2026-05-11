@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
-import { ClipboardList, Bot, GitBranch, Plus, Pencil, Trash2, ToggleLeft, ToggleRight, ChevronLeft, ChevronRight, Building2, Users, Megaphone, Settings, Layers, UsersRound, Shield, ListTree, User } from "lucide-react";
+import { ClipboardList, Bot, GitBranch, Plus, Pencil, Trash2, ToggleLeft, ToggleRight, ChevronLeft, ChevronRight, Building2, Users, Megaphone, Settings, Layers, UsersRound, Shield, ListTree, User, Loader2 } from "lucide-react";
 
 type AuditLog = {
   id: string;
@@ -207,7 +207,10 @@ export default function AuditLogsPage() {
         {/* 表格 */}
         <Card className="overflow-hidden">
           {loading ? (
-            <div className="flex items-center justify-center py-20 text-gray-400 text-sm">加载中…</div>
+            <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+              <Loader2 size={28} className="animate-spin text-[#002FA7]/60 mb-3" />
+              <p className="text-sm">加载审计记录中…</p>
+            </div>
           ) : logs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-gray-400">
               <ClipboardList size={32} className="mb-3 opacity-30" />
