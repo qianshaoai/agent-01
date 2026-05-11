@@ -23,6 +23,9 @@ export async function POST(
   if (error || !src) return apiError("工作流不存在", "NOT_FOUND");
 
   // 创建副本工作流
+  // 5.11up · 决策 2=A：副本的创建者是当前管理员（不是源工作流的创建者），
+  // 当前管理员可以对自己的副本进行任意操作
+  const adminRole = (admin.role ?? "super_admin") as "super_admin" | "system_admin" | "org_admin";
   const { data: newWf, error: wfErr } = await db
     .from("workflows")
     .insert({
@@ -32,6 +35,8 @@ export async function POST(
       sort_order: src.sort_order,
       enabled: false,
       visible_to: src.visible_to,
+      created_by: admin.adminId,
+      created_by_role: adminRole,
     })
     .select()
     .single();
@@ -58,7 +63,7 @@ export async function POST(
   }
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "create", resourceType: "workflow", resourceId: newWf.id, resourceName: newWf.name,
     detail: { duplicated_from: id },
   });

@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
     return dbError(error);
   }
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "create", resourceType: "resource_permission", resourceId: data.id,
     resourceName: `${resourceType}/${resourceId}`,
     detail: { scopeType, scopeId: scopeId ?? null },
@@ -107,7 +107,7 @@ export async function DELETE(req: NextRequest) {
   const { error } = await db.from("resource_permissions").delete().eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "delete", resourceType: "resource_permission", resourceId: id,
     resourceName: perm ? `${perm.resource_type}/${perm.resource_id}` : undefined,
     detail: perm ? { scopeType: perm.scope_type, scopeId: perm.scope_id } : {},

@@ -2,7 +2,8 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
-import { writeAuditLog } from "@/lib/audit";
+import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
+import { canActOnRole, noWritePermissionMessage, type AdminRole } from "@/lib/admin-permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,26 @@ async function validateOrgAdminPermissions(
     }
   }
   return { ok: true };
+}
+
+// 5.11up · 工具：上下级权限校验。读取该 workflow 的 created_by_role，对照当前 admin 等级
+// 历史 NULL 数据在 migration_v31 已回填为 system_admin
+async function ensureAdminHierarchyAllows(
+  admin: { role: string },
+  workflowId: string
+): Promise<Response | null> {
+  const { data: wf } = await db
+    .from("workflows")
+    .select("created_by_role")
+    .eq("id", workflowId)
+    .single();
+  if (!wf) return apiError("工作流不存在", "NOT_FOUND");
+  const creatorRole = (wf.created_by_role ?? null) as AdminRole | null;
+  const actorRole = (admin.role ?? "super_admin") as AdminRole;
+  if (!canActOnRole(actorRole, creatorRole)) {
+    return apiError(noWritePermissionMessage(creatorRole), "FORBIDDEN");
+  }
+  return null;
 }
 
 // 5.7up · 工具：org_admin 改 / 删工作流前，校验该工作流是否归属本组织
@@ -77,6 +98,9 @@ export async function PATCH(
   if (admin instanceof Response) return admin;
 
   const { id } = await params;
+  // 5.11up · 先做上下级权限校验
+  const hierarchyGuard = await ensureAdminHierarchyAllows(admin, id);
+  if (hierarchyGuard) return hierarchyGuard;
   const guard = await ensureOrgAdminCanTouch(admin, id);
   if (guard) return guard;
 
@@ -110,6 +134,7 @@ export async function PATCH(
       adminId: admin.adminId,
       adminUsername: admin.username,
       adminRole: admin.role ?? "super_admin",
+      adminTenantCode: admin.tenantCode ?? null,
       action,
       resourceType: "workflow",
       resourceId: id,
@@ -174,8 +199,14 @@ export async function DELETE(
   if (admin instanceof Response) return admin;
 
   const { id } = await params;
+  // 5.11up · 先做上下级权限校验
+  const hierarchyGuard = await ensureAdminHierarchyAllows(admin, id);
+  if (hierarchyGuard) return hierarchyGuard;
   const guard = await ensureOrgAdminCanTouch(admin, id);
   if (guard) return guard;
+
+  // 5.11up · DELETE 前先 snapshot 资源归属，避免删完后反查为 null 导致 org_admin 看不到这条审计
+  const resourceTenantCode = await resolveResourceTenantCode("workflow", id);
 
   // 级联清理：该工作流相关的所有权限规则
   await db
@@ -191,6 +222,8 @@ export async function DELETE(
     adminId: admin.adminId,
     adminUsername: admin.username,
     adminRole: admin.role ?? "super_admin",
+    adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode,
     action: "delete",
     resourceType: "workflow",
     resourceId: id,

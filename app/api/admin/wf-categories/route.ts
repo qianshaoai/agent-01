@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
 
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "create", resourceType: "wf_category", resourceId: data.id, resourceName: data.name,
   });
   return NextResponse.json(data, { status: 201 });

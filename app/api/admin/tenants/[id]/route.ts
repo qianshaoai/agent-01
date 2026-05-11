@@ -50,7 +50,7 @@ export async function PATCH(
   if (error) return dbError(error);
   const auditAction = body.enabled === true ? "enable" : body.enabled === false ? "disable" : "update";
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: auditAction, resourceType: "tenant", resourceId: id, resourceName: data.name,
   });
   return NextResponse.json(data);
@@ -109,7 +109,9 @@ export async function DELETE(
   const { error } = await db.from("tenants").delete().eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    // 5.11up · 自己就是被删的组织，snapshot 已经从 tenant.code 拿到了，直接用
+    resourceTenantCode: tenant.code,
     action: "delete", resourceType: "tenant", resourceId: id, resourceName: tenant.name,
     detail: { code: tenant.code },
   });

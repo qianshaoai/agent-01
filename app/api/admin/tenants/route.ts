@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
   }
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "create", resourceType: "tenant", resourceId: data.id, resourceName: data.name,
     detail: { code: data.code },
   });

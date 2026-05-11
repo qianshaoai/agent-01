@@ -82,6 +82,8 @@ export async function GET(req: NextRequest) {
   let wfQuery = db.from("workflows")
     .select(`
       id, name, description, category, sort_order, enabled, visible_to, created_at,
+      created_by, created_by_role,
+      creator:created_by ( username ),
       workflow_categories ( category_id ),
       workflow_steps (
         id, step_order, title, description, exec_type, agent_id, button_text, enabled
@@ -107,12 +109,18 @@ export async function GET(req: NextRequest) {
     permMap.set(p.resource_id, arr);
   }
 
-  const result = (wfRes.data ?? []).map((wf) => ({
-    ...wf,
-    categoryIds: (wf.workflow_categories ?? []).map((c: { category_id: string }) => c.category_id),
-    workflow_categories: undefined,
-    permissions: permMap.get(wf.id) ?? [],
-  }));
+  type CreatorJoin = { username: string } | null;
+  const result = (wfRes.data ?? []).map((wf) => {
+    const creator = wf.creator as unknown as CreatorJoin;
+    return {
+      ...wf,
+      categoryIds: (wf.workflow_categories ?? []).map((c: { category_id: string }) => c.category_id),
+      workflow_categories: undefined,
+      creator: undefined,
+      created_by_username: creator?.username ?? null,
+      permissions: permMap.get(wf.id) ?? [],
+    };
+  });
 
   return paginatedResponse(result, wfRes.count ?? 0, page, pageSize);
 }
@@ -142,6 +150,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 5.11up · 记录创建者（admin ID + 角色快照），用于上下级权限校验
+  const adminRole = (admin.role ?? "super_admin") as "super_admin" | "system_admin" | "org_admin";
   const { data, error } = await db
     .from("workflows")
     .insert({
@@ -151,6 +161,8 @@ export async function POST(req: NextRequest) {
       sort_order: sortOrder ?? 0,
       enabled: enabled ?? true,
       visible_to: visibleTo ?? "all",
+      created_by: admin.adminId,
+      created_by_role: adminRole,
     })
     .select()
     .single();
@@ -187,6 +199,7 @@ export async function POST(req: NextRequest) {
     adminId: admin.adminId,
     adminUsername: admin.username,
     adminRole: admin.role ?? "super_admin",
+    adminTenantCode: admin.tenantCode ?? null,
     action: "create",
     resourceType: "workflow",
     resourceId: data.id,

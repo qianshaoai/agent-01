@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
   );
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "settings", resourceName: "联系二维码",
   });
   return NextResponse.json({ url: publicUrl });
@@ -63,7 +63,7 @@ export async function DELETE() {
     { onConflict: "key" }
   );
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "delete", resourceType: "settings", resourceName: "联系二维码",
   });
   return NextResponse.json({ ok: true });

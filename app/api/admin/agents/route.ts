@@ -147,6 +147,7 @@ export async function POST(req: NextRequest) {
     adminId: admin.adminId,
     adminUsername: admin.username,
     adminRole: admin.role ?? "super_admin",
+    adminTenantCode: admin.tenantCode ?? null,
     action: "create",
     resourceType: "agent",
     resourceId: data.id,

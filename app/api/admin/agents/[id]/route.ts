@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
-import { writeAuditLog } from "@/lib/audit";
+import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +73,7 @@ export async function PATCH(
       adminId: admin.adminId,
       adminUsername: admin.username,
       adminRole: admin.role ?? "super_admin",
+      adminTenantCode: admin.tenantCode ?? null,
       action,
       resourceType: "agent",
       resourceId: id,
@@ -133,6 +134,9 @@ export async function DELETE(
     }
   }
 
+  // 5.11up · 删除前缓存 tenant 归属（agent 通过 tenant_agents 反查，删完就没了）
+  const resourceTenantCode = await resolveResourceTenantCode("agent", id);
+
   // 2) 真删；用 .select("id, name") 区分"被删了 N 行" vs "记录不存在"
   const { data: deleted, error: delErr } = await db
     .from("agents")
@@ -148,6 +152,8 @@ export async function DELETE(
     adminId: admin.adminId,
     adminUsername: admin.username,
     adminRole: admin.role ?? "super_admin",
+    adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode,
     action: "delete",
     resourceType: "agent",
     resourceId: id,

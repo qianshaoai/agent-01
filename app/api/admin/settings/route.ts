@@ -62,7 +62,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "settings", resourceName: "品牌设置",
     detail: Object.fromEntries(
       Object.entries({ platform_name: body.platform_name, logo_url: body.logo_url,

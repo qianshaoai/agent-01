@@ -48,7 +48,7 @@ export async function PATCH(
     const { error } = await db.from("users").update({ status }).eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({
-      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: status === "active" ? "enable" : "disable", resourceType: "user",
       resourceId: id, resourceName: (target.nickname || target.phone) ?? undefined,
     });
@@ -85,7 +85,7 @@ export async function PATCH(
     const { error } = await db.from("users").update({ role }).eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({
-      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "update", resourceType: "user", resourceId: id,
       resourceName: (target.nickname || target.phone) ?? undefined,
       detail: { action: "set-role", newRole: role, oldRole: target.role },
@@ -120,7 +120,7 @@ export async function PATCH(
       );
     }
     await writeAuditLog({
-      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "update", resourceType: "user", resourceId: id,
       resourceName: (target.nickname || target.phone) ?? undefined,
       detail: { action: "set-tenant", tenantCode },
@@ -138,7 +138,7 @@ export async function PATCH(
     const { error } = await db.from("users").update(updates).eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({
-      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "update", resourceType: "user", resourceId: id,
       resourceName: (target.nickname || target.phone) ?? undefined,
       detail: { action: "set-dept", deptId: deptId || null, teamId: teamId || null },
@@ -159,7 +159,7 @@ export async function PATCH(
       .eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({
-      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "update", resourceType: "user", resourceId: id,
       resourceName: (target.nickname || target.phone) ?? undefined,
       detail: { action: "reset-password" },
@@ -181,7 +181,7 @@ export async function PATCH(
     }).eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({
-      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "delete", resourceType: "user", resourceId: id, resourceName: displayName,
     });
     return NextResponse.json({ ok: true });

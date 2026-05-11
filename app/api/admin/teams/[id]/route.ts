@@ -2,7 +2,7 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
-import { writeAuditLog } from "@/lib/audit";
+import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
 
 // 5.7up · 工具：org_admin 只能操作自己组织的小组
 async function ensureOrgScope(
@@ -37,7 +37,7 @@ export async function PATCH(
   const { data, error } = await db.from("teams").update(updates).eq("id", id).select().single();
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "team", resourceId: id, resourceName: data.name,
   });
   return NextResponse.json(data);
@@ -60,9 +60,12 @@ export async function DELETE(
   }
 
   const { data: team } = await db.from("teams").select("name").eq("id", id).maybeSingle();
+  // 5.11up · 删除前缓存 tenant 归属
+  const resourceTenantCode = await resolveResourceTenantCode("team", id);
   await db.from("teams").delete().eq("id", id);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode,
     action: "delete", resourceType: "team", resourceId: id, resourceName: team?.name,
   });
   return NextResponse.json({ ok: true });
