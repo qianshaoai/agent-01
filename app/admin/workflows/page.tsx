@@ -65,6 +65,10 @@ type Workflow = {
   categoryIds: string[];
   permissions?: Permission[];
   workflow_steps: WorkflowStep[];
+  // 5.11up · 创建者信息
+  created_by?: string | null;
+  created_by_role?: "super_admin" | "system_admin" | "org_admin" | null;
+  created_by_username?: string | null;
 };
 
 type PermScope = "org" | "dept" | "team";
@@ -98,6 +102,20 @@ export default function WorkflowsAdminPage() {
       .catch(() => {});
   }, []);
   const isOrgAdmin = adminRole === "org_admin";
+
+  // 5.11up · 上下级权限工具：super=3 / system=2 / org=1，actor >= creator 才能动
+  const ROLE_LEVEL_MAP: Record<string, number> = { super_admin: 3, system_admin: 2, org_admin: 1 };
+  const ROLE_LABEL_MAP: Record<string, string> = { super_admin: "超级管理员", system_admin: "系统管理员", org_admin: "组织管理员" };
+  function canTouchWf(wf: Workflow): boolean {
+    if (!adminRole) return false;
+    const creatorRole = wf.created_by_role ?? "system_admin"; // 兜底
+    return (ROLE_LEVEL_MAP[adminRole] ?? 0) >= (ROLE_LEVEL_MAP[creatorRole] ?? 0);
+  }
+  function noTouchReason(wf: Workflow): string {
+    const creatorRole = wf.created_by_role ?? "system_admin";
+    const label = ROLE_LABEL_MAP[creatorRole] ?? creatorRole;
+    return `该工作流由${label}创建，无权修改`;
+  }
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -795,17 +813,31 @@ export default function WorkflowsAdminPage() {
                         {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
                         {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
+                        {/* 5.11up · 创建者徽章（决策 4=C：真名 + 角色双显示） */}
+                        {wf.created_by_role && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-500 border border-gray-200" title={`创建者：${wf.created_by_username ?? "未知"}（${ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}）`}>
+                            {wf.created_by_username ?? "—"}（{ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}）
+                          </span>
+                        )}
                       </div>
                       {wf.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{wf.description}</p>}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <span className="text-xs text-gray-400 mr-2">{steps.length} 个步骤</span>
-                      <button onClick={() => toggleWfEnabled(wf)} className={`p-1.5 rounded-[8px] transition-colors ${wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={wf.enabled ? "停用" : "启用"}>
-                        {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                      </button>
-                      <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流" aria-label="复制工作流"><Copy size={14} /></button>
-                      <button onClick={() => openEditWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
-                      <button onClick={() => deleteWf(wf)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
+                      {/* 5.11up · 决策 5=A：无权时按钮置灰 + tooltip 说明原因，不直接隐藏 */}
+                      {(() => {
+                        const ok = canTouchWf(wf);
+                        const reason = ok ? "" : noTouchReason(wf);
+                        return <>
+                          <button onClick={() => ok && toggleWfEnabled(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={ok ? (wf.enabled ? "停用" : "启用") : reason}>
+                            {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                          </button>
+                          {/* 复制按钮：所有人都能复制（决策 2=A，副本归当前 admin） */}
+                          <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流" aria-label="复制工作流"><Copy size={14} /></button>
+                          <button onClick={() => ok && openEditWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={ok ? "编辑" : reason} aria-label="编辑"><Edit2 size={14} /></button>
+                          <button onClick={() => ok && deleteWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-500"}`} title={ok ? "删除" : reason} aria-label="删除"><Trash2 size={14} /></button>
+                        </>;
+                      })()}
                     </div>
                   </div>
 
@@ -853,9 +885,9 @@ export default function WorkflowsAdminPage() {
                         ) : (
                           steps.map((step, idx) => (
                             <div key={step.id}>
-                              {/* 在每个步骤前插入按钮（第一个步骤前） */}
+                              {/* 在每个步骤前插入按钮（第一个步骤前）·· 5.11up 同步守卫 */}
                               {idx === 0 && (
-                                <button onClick={() => openInsertStep(wf.id, 0)} className="w-full flex items-center gap-1 py-0.5 text-xs text-gray-300 hover:text-[#002FA7] transition-colors group mb-1">
+                                <button onClick={() => canTouchWf(wf) && openInsertStep(wf.id, 0)} disabled={!canTouchWf(wf)} className={`w-full flex items-center gap-1 py-0.5 text-xs transition-colors group mb-1 ${!canTouchWf(wf) ? "text-gray-200 cursor-not-allowed" : "text-gray-300 hover:text-[#002FA7]"}`} title={canTouchWf(wf) ? "插入步骤" : noTouchReason(wf)}>
                                   <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
                                   <PlusCircle size={12} />
                                   <span>插入</span>
@@ -906,15 +938,22 @@ export default function WorkflowsAdminPage() {
                                 })()}
                               </div>
                               <div className="flex items-center gap-1 shrink-0">
-                                <button onClick={() => toggleStepEnabled(step)} className={`p-1 rounded-[6px] transition-colors text-xs ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}>
-                                  {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                                </button>
-                                <button onClick={() => openEditStep(wf.id, step)} className="p-1 rounded-[6px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"><Edit2 size={12} /></button>
-                                <button onClick={() => deleteStep(step)} className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
+                                {/* 5.11up · 步骤层面的写操作守卫，跟所属 workflow 共用判断 */}
+                                {(() => {
+                                  const okStep = canTouchWf(wf);
+                                  const reasonStep = okStep ? "" : noTouchReason(wf);
+                                  return <>
+                                    <button onClick={() => okStep && toggleStepEnabled(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors text-xs ${!okStep ? "text-gray-300 cursor-not-allowed" : step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={okStep ? (step.enabled ? "停用" : "启用") : reasonStep}>
+                                      {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                                    </button>
+                                    <button onClick={() => okStep && openEditStep(wf.id, step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "编辑步骤" : reasonStep}><Edit2 size={12} /></button>
+                                    <button onClick={() => okStep && deleteStep(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-400"}`} title={okStep ? "删除步骤" : reasonStep}><Trash2 size={12} /></button>
+                                  </>;
+                                })()}
                               </div>
                             </div>
-                            {/* 每个步骤后面的插入按钮 */}
-                            <button onClick={() => openInsertStep(wf.id, idx + 1)} className="w-full flex items-center gap-1 py-0.5 text-xs text-gray-300 hover:text-[#002FA7] transition-colors group mt-1">
+                            {/* 每个步骤后面的插入按钮（5.11up · 同步守卫） */}
+                            <button onClick={() => canTouchWf(wf) && openInsertStep(wf.id, idx + 1)} disabled={!canTouchWf(wf)} className={`w-full flex items-center gap-1 py-0.5 text-xs transition-colors group mt-1 ${!canTouchWf(wf) ? "text-gray-200 cursor-not-allowed" : "text-gray-300 hover:text-[#002FA7]"}`} title={canTouchWf(wf) ? "插入步骤" : noTouchReason(wf)}>
                               <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
                               <PlusCircle size={12} />
                               <span>插入</span>
@@ -924,7 +963,7 @@ export default function WorkflowsAdminPage() {
                           ))
                         )}
                       </div>
-                      <button onClick={() => openAddStep(wf.id, steps.length)} className="mt-3 w-full py-2 border border-dashed border-gray-200 rounded-[10px] text-sm text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors flex items-center justify-center gap-1">
+                      <button onClick={() => canTouchWf(wf) && openAddStep(wf.id, steps.length)} disabled={!canTouchWf(wf)} className={`mt-3 w-full py-2 border border-dashed rounded-[10px] text-sm transition-colors flex items-center justify-center gap-1 ${!canTouchWf(wf) ? "border-gray-100 text-gray-300 cursor-not-allowed" : "border-gray-200 text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40"}`} title={canTouchWf(wf) ? "添加步骤" : noTouchReason(wf)}>
                         <Plus size={14} /> 添加步骤
                       </button>
                       </>
