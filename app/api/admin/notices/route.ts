@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "create", resourceType: "notice", resourceId: data.id,
     resourceName: data.content?.slice(0, 50),
     detail: { tenant_code: finalTenantCode },

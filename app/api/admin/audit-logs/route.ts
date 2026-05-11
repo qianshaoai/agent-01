@@ -1,18 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
-import { parsePagination, paginatedResponse, apiError } from "@/lib/api-error";
+import { parsePagination, paginatedResponse } from "@/lib/api-error";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-
-  // 仅 super_admin / system_admin 可访问
-  if (admin.role === "org_admin") {
-    return apiError("无权查看变更审计记录", "FORBIDDEN");
-  }
+  // 5.11up · 所有管理员（含 org_admin）可访问审计记录入口
+  // org_admin 看到的内容按本组织过滤（见下方 OR 条件）
 
   const { page, pageSize, start } = parsePagination(req, 50);
   const sp = req.nextUrl.searchParams;
@@ -26,6 +23,13 @@ export async function GET(req: NextRequest) {
     .from("audit_logs")
     .select("*", { count: "exact" })
     .order("created_at", { ascending: false });
+
+  // 5.11up · org_admin 只看本组织相关：admin_tenant_code = 本组织（自己发起的） OR
+  // resource_tenant_code = 本组织（任何管理员动了本组织资源）
+  if (admin.role === "org_admin" && admin.tenantCode) {
+    const tc = admin.tenantCode;
+    query = query.or(`admin_tenant_code.eq.${tc},resource_tenant_code.eq.${tc}`);
+  }
 
   if (resourceType) query = query.eq("resource_type", resourceType);
   if (action)       query = query.eq("action", action);

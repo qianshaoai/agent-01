@@ -65,6 +65,10 @@ type Workflow = {
   categoryIds: string[];
   permissions?: Permission[];
   workflow_steps: WorkflowStep[];
+  // 5.11up · 创建者信息
+  created_by?: string | null;
+  created_by_role?: "super_admin" | "system_admin" | "org_admin" | null;
+  created_by_username?: string | null;
 };
 
 type PermScope = "org" | "dept" | "team";
@@ -85,16 +89,33 @@ const EMPTY_STEP = { title: "", description: "", execType: "agent" as "agent" | 
 export default function WorkflowsAdminPage() {
   const { toast } = useToast();
   // 5.7up · 当前管理员角色，决定 org_admin 是否隐藏 visible_to 选择器
+  // 5.9up · 同时拉 tenantCode，用于过滤 dept/team picker、写 scope=org 的 permission
   const [adminRole, setAdminRole] = useState<"super_admin" | "system_admin" | "org_admin" | null>(null);
+  const [adminTenantCode, setAdminTenantCode] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/admin/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.role) setAdminRole(d.role);
+        if (d?.tenantCode) setAdminTenantCode(d.tenantCode);
       })
       .catch(() => {});
   }, []);
   const isOrgAdmin = adminRole === "org_admin";
+
+  // 5.11up · 上下级权限工具：super=3 / system=2 / org=1，actor >= creator 才能动
+  const ROLE_LEVEL_MAP: Record<string, number> = { super_admin: 3, system_admin: 2, org_admin: 1 };
+  const ROLE_LABEL_MAP: Record<string, string> = { super_admin: "超级管理员", system_admin: "系统管理员", org_admin: "组织管理员" };
+  function canTouchWf(wf: Workflow): boolean {
+    if (!adminRole) return false;
+    const creatorRole = wf.created_by_role ?? "system_admin"; // 兜底
+    return (ROLE_LEVEL_MAP[adminRole] ?? 0) >= (ROLE_LEVEL_MAP[creatorRole] ?? 0);
+  }
+  function noTouchReason(wf: Workflow): string {
+    const creatorRole = wf.created_by_role ?? "system_admin";
+    const label = ROLE_LABEL_MAP[creatorRole] ?? creatorRole;
+    return `该工作流由${label}创建，无权修改`;
+  }
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -253,15 +274,28 @@ export default function WorkflowsAdminPage() {
       .filter((r) => r.scope_type === validScope)
       .map((r) => r.scope_id ?? "")
       .filter(Boolean);
+
+    // 5.9up · "org_only + 带 scope=org permission" 是新语义（限定特定组织），
+    // 在编辑面板里映射成 custom:org 展示，避免 select 显示成误导性的"仅组织用户可见"。
+    // 注：org_admin 的"我所在组织全员可见"也是 org_only + scope=org，但 org_admin 的下拉
+    // 没有 custom:org 选项 → 这里只对非 org_admin 做映射，保持 org_admin 原 org_only 视图
+    let visibleTo = wf.visible_to;
+    let permScope = validScope;
+    const hasOrgScopePerm = rules.some((r) => r.scope_type === "org");
+    if (!isOrgAdmin && wf.visible_to === "org_only" && hasOrgScopePerm) {
+      visibleTo = "custom";
+      permScope = "org";
+    }
+
     setWfForm({
       name: wf.name,
       description: wf.description,
       category: wf.category,
       sortOrder: wf.sort_order,
       enabled: wf.enabled,
-      visibleTo: wf.visible_to,
+      visibleTo,
       categoryIds: wf.categoryIds ?? [],
-      permScope: validScope,
+      permScope,
       permIds,
     });
     setWfError(""); setShowWfModal(true);
@@ -277,7 +311,7 @@ export default function WorkflowsAdminPage() {
     }
     setSaving(true);
     try {
-      // 生成 permissions 数组（custom 模式才有）
+      // 生成 permissions 数组（custom 模式才有；org_admin 选"全员"由后端兜底写 scope=org）
       const permissions = wfForm.visibleTo === "custom"
         ? wfForm.permIds.map((scopeId) => ({ scope_type: wfForm.permScope, scope_id: scopeId }))
         : [];
@@ -730,31 +764,80 @@ export default function WorkflowsAdminPage() {
                             </span>
                           );
                         })}
-                        {wf.visible_to === "org_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>}
+                        {wf.visible_to === "org_only" && (() => {
+                          // 5.9up · 区分两种 'org_only' 语义：
+                          //   - 无 scope=org permission（5.7up 之前的"任意组织用户可见"老语义）→ "仅组织用户"
+                          //   - 有 scope=org permission（5.7up+ org_admin 路径，限定特定组织）→ "指定组织：XXX"
+                          const orgRules = (wf.permissions ?? []).filter((r) => r.scope_type === "org");
+                          if (orgRules.length === 0) {
+                            return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>;
+                          }
+                          const names = orgRules
+                            .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id)
+                            .filter(Boolean) as string[];
+                          const label = `指定组织：${names.join("、")}`;
+                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={names.join("、")}>{label}</span>;
+                        })()}
                         {wf.visible_to === "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>}
                         {wf.visible_to === "custom" && (() => {
                           const rules = wf.permissions ?? [];
                           const firstType = rules[0]?.scope_type;
-                          const label = firstType === "dept" ? "指定部门可见"
-                                      : firstType === "team" ? "指定小组可见"
-                                      : "指定组织可见";
-                          const count = rules.length;
-                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`${label}（共 ${count} 项）`}>{label}</span>;
+                          const typeLabel = firstType === "dept" ? "指定部门"
+                                         : firstType === "team" ? "指定小组"
+                                         : "指定组织";
+                          // 5.9up · 把 scope_id 解析成可读名称；dept/team 带上母公司前缀，便于跨组织辨认
+                          const names = rules.map((r) => {
+                            if (r.scope_type === "org") {
+                              return tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id;
+                            }
+                            if (r.scope_type === "dept") {
+                              const d = allDepts.find((x) => x.id === r.scope_id);
+                              if (!d) return r.scope_id;
+                              const tenant = tenants.find((t) => t.code === d.tenant_code)?.name;
+                              return tenant ? `${tenant} / ${d.name}` : d.name;
+                            }
+                            if (r.scope_type === "team") {
+                              const tm = allTeams.find((x) => x.id === r.scope_id);
+                              if (!tm) return r.scope_id;
+                              const d = allDepts.find((x) => x.id === tm.dept_id);
+                              const tenant = d ? tenants.find((t) => t.code === d.tenant_code)?.name : null;
+                              if (tenant && d) return `${tenant} / ${d.name} / ${tm.name}`;
+                              if (d) return `${d.name} / ${tm.name}`;
+                              return tm.name;
+                            }
+                            return r.scope_id;
+                          }).filter(Boolean) as string[];
+                          const label = `${typeLabel}：${names.join("、")}`;
+                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={names.join("、")}>{label}</span>;
                         })()}
                         {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
                         {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
+                        {/* 5.11up · 创建者徽章（决策 4=C：真名 + 角色双显示） */}
+                        {wf.created_by_role && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-500 border border-gray-200" title={`创建者：${wf.created_by_username ?? "未知"}（${ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}）`}>
+                            {wf.created_by_username ?? "—"}（{ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}）
+                          </span>
+                        )}
                       </div>
                       {wf.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{wf.description}</p>}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <span className="text-xs text-gray-400 mr-2">{steps.length} 个步骤</span>
-                      <button onClick={() => toggleWfEnabled(wf)} className={`p-1.5 rounded-[8px] transition-colors ${wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={wf.enabled ? "停用" : "启用"}>
-                        {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                      </button>
-                      <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流" aria-label="复制工作流"><Copy size={14} /></button>
-                      <button onClick={() => openEditWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
-                      <button onClick={() => deleteWf(wf)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
+                      {/* 5.11up · 决策 5=A：无权时按钮置灰 + tooltip 说明原因，不直接隐藏 */}
+                      {(() => {
+                        const ok = canTouchWf(wf);
+                        const reason = ok ? "" : noTouchReason(wf);
+                        return <>
+                          <button onClick={() => ok && toggleWfEnabled(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={ok ? (wf.enabled ? "停用" : "启用") : reason}>
+                            {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                          </button>
+                          {/* 复制按钮：所有人都能复制（决策 2=A，副本归当前 admin） */}
+                          <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流" aria-label="复制工作流"><Copy size={14} /></button>
+                          <button onClick={() => ok && openEditWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={ok ? "编辑" : reason} aria-label="编辑"><Edit2 size={14} /></button>
+                          <button onClick={() => ok && deleteWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-500"}`} title={ok ? "删除" : reason} aria-label="删除"><Trash2 size={14} /></button>
+                        </>;
+                      })()}
                     </div>
                   </div>
 
@@ -802,9 +885,9 @@ export default function WorkflowsAdminPage() {
                         ) : (
                           steps.map((step, idx) => (
                             <div key={step.id}>
-                              {/* 在每个步骤前插入按钮（第一个步骤前） */}
+                              {/* 在每个步骤前插入按钮（第一个步骤前）·· 5.11up 同步守卫 */}
                               {idx === 0 && (
-                                <button onClick={() => openInsertStep(wf.id, 0)} className="w-full flex items-center gap-1 py-0.5 text-xs text-gray-300 hover:text-[#002FA7] transition-colors group mb-1">
+                                <button onClick={() => canTouchWf(wf) && openInsertStep(wf.id, 0)} disabled={!canTouchWf(wf)} className={`w-full flex items-center gap-1 py-0.5 text-xs transition-colors group mb-1 ${!canTouchWf(wf) ? "text-gray-200 cursor-not-allowed" : "text-gray-300 hover:text-[#002FA7]"}`} title={canTouchWf(wf) ? "插入步骤" : noTouchReason(wf)}>
                                   <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
                                   <PlusCircle size={12} />
                                   <span>插入</span>
@@ -855,15 +938,22 @@ export default function WorkflowsAdminPage() {
                                 })()}
                               </div>
                               <div className="flex items-center gap-1 shrink-0">
-                                <button onClick={() => toggleStepEnabled(step)} className={`p-1 rounded-[6px] transition-colors text-xs ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}>
-                                  {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                                </button>
-                                <button onClick={() => openEditStep(wf.id, step)} className="p-1 rounded-[6px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"><Edit2 size={12} /></button>
-                                <button onClick={() => deleteStep(step)} className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
+                                {/* 5.11up · 步骤层面的写操作守卫，跟所属 workflow 共用判断 */}
+                                {(() => {
+                                  const okStep = canTouchWf(wf);
+                                  const reasonStep = okStep ? "" : noTouchReason(wf);
+                                  return <>
+                                    <button onClick={() => okStep && toggleStepEnabled(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors text-xs ${!okStep ? "text-gray-300 cursor-not-allowed" : step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={okStep ? (step.enabled ? "停用" : "启用") : reasonStep}>
+                                      {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                                    </button>
+                                    <button onClick={() => okStep && openEditStep(wf.id, step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "编辑步骤" : reasonStep}><Edit2 size={12} /></button>
+                                    <button onClick={() => okStep && deleteStep(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-400"}`} title={okStep ? "删除步骤" : reasonStep}><Trash2 size={12} /></button>
+                                  </>;
+                                })()}
                               </div>
                             </div>
-                            {/* 每个步骤后面的插入按钮 */}
-                            <button onClick={() => openInsertStep(wf.id, idx + 1)} className="w-full flex items-center gap-1 py-0.5 text-xs text-gray-300 hover:text-[#002FA7] transition-colors group mt-1">
+                            {/* 每个步骤后面的插入按钮（5.11up · 同步守卫） */}
+                            <button onClick={() => canTouchWf(wf) && openInsertStep(wf.id, idx + 1)} disabled={!canTouchWf(wf)} className={`w-full flex items-center gap-1 py-0.5 text-xs transition-colors group mt-1 ${!canTouchWf(wf) ? "text-gray-200 cursor-not-allowed" : "text-gray-300 hover:text-[#002FA7]"}`} title={canTouchWf(wf) ? "插入步骤" : noTouchReason(wf)}>
                               <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
                               <PlusCircle size={12} />
                               <span>插入</span>
@@ -873,7 +963,7 @@ export default function WorkflowsAdminPage() {
                           ))
                         )}
                       </div>
-                      <button onClick={() => openAddStep(wf.id, steps.length)} className="mt-3 w-full py-2 border border-dashed border-gray-200 rounded-[10px] text-sm text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors flex items-center justify-center gap-1">
+                      <button onClick={() => canTouchWf(wf) && openAddStep(wf.id, steps.length)} disabled={!canTouchWf(wf)} className={`mt-3 w-full py-2 border border-dashed rounded-[10px] text-sm transition-colors flex items-center justify-center gap-1 ${!canTouchWf(wf) ? "border-gray-100 text-gray-300 cursor-not-allowed" : "border-gray-200 text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40"}`} title={canTouchWf(wf) ? "添加步骤" : noTouchReason(wf)}>
                         <Plus size={14} /> 添加步骤
                       </button>
                       </>
@@ -1015,12 +1105,7 @@ export default function WorkflowsAdminPage() {
               <Input label="排序（数字越小越靠前）" type="number" value={String(wfForm.sortOrder)} onChange={(e) => setWfForm({ ...wfForm, sortOrder: Number(e.target.value) })} />
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
-                {/* 5.7up · org_admin 不可改可见性，强制本组织可见 */}
-                {isOrgAdmin ? (
-                  <div className="px-4 py-2.5 rounded-[12px] bg-blue-50 border border-blue-100 text-sm text-blue-700">
-                    本工作流将自动对您所在组织的所有成员可见（不可修改）
-                  </div>
-                ) : (
+                {/* 5.9up · org_admin 限定本组织范围三档可选 */}
                 <select
                   className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
                   value={wfForm.visibleTo === "custom" ? `custom:${wfForm.permScope}` : wfForm.visibleTo}
@@ -1036,14 +1121,23 @@ export default function WorkflowsAdminPage() {
                     }
                   }}
                 >
-                  <option value="all">全部用户可见</option>
-                  <option value="org_only">仅组织用户可见</option>
-                  <option value="personal_only">仅个人用户可见</option>
-                  <option value="custom:org">指定组织可见</option>
-                  <option value="custom:dept">指定部门可见</option>
-                  <option value="custom:team">指定小组可见</option>
+                  {isOrgAdmin ? (
+                    <>
+                      <option value="org_only">我所在组织全员可见</option>
+                      <option value="custom:dept">指定本组织部门可见</option>
+                      <option value="custom:team">指定本组织小组可见</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="all">全部用户可见</option>
+                      <option value="org_only">仅组织用户可见</option>
+                      <option value="personal_only">仅个人用户可见</option>
+                      <option value="custom:org">指定组织可见</option>
+                      <option value="custom:dept">指定部门可见</option>
+                      <option value="custom:team">指定小组可见</option>
+                    </>
+                  )}
                 </select>
-                )}
 
                 {/* custom 模式下根据 permScope 展示对应 picker */}
                 {wfForm.visibleTo === "custom" && wfForm.permScope === "org" && (
@@ -1091,15 +1185,19 @@ export default function WorkflowsAdminPage() {
                   <div className="flex flex-col gap-1.5">
                     <input
                       className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
-                      placeholder="搜索组织或部门名称…"
+                      placeholder={isOrgAdmin ? "搜索部门名称…" : "搜索组织或部门名称…"}
                       value={tenantSearch}
                       onChange={(e) => setTenantSearch(e.target.value)}
                     />
                     <div className="border border-gray-200 rounded-[12px] p-3 max-h-60 overflow-y-auto">
                       {(() => {
                         const q = tenantSearch.toLowerCase();
+                        // 5.9up · org_admin 只看自己的组织；super/system 看全部
+                        const visibleTenants = isOrgAdmin
+                          ? tenants.filter((t) => t.code === adminTenantCode)
+                          : tenants;
                         // 按组织分组
-                        const groups = tenants
+                        const groups = visibleTenants
                           .map((t) => {
                             const depts = allDepts.filter((d) => d.tenant_code === t.code);
                             const filteredDepts = q
@@ -1151,14 +1249,18 @@ export default function WorkflowsAdminPage() {
                   <div className="flex flex-col gap-1.5">
                     <input
                       className="w-full h-9 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
-                      placeholder="搜索组织/部门/小组名称…"
+                      placeholder={isOrgAdmin ? "搜索部门/小组名称…" : "搜索组织/部门/小组名称…"}
                       value={tenantSearch}
                       onChange={(e) => setTenantSearch(e.target.value)}
                     />
                     <div className="border border-gray-200 rounded-[12px] p-3 max-h-72 overflow-y-auto">
                       {(() => {
                         const q = tenantSearch.toLowerCase();
-                        const groups = tenants
+                        // 5.9up · org_admin 只看自己的组织
+                        const visibleTenants = isOrgAdmin
+                          ? tenants.filter((t) => t.code === adminTenantCode)
+                          : tenants;
+                        const groups = visibleTenants
                           .map((t) => {
                             const depts = allDepts.filter((d) => d.tenant_code === t.code);
                             const deptWithTeams = depts

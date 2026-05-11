@@ -2,7 +2,7 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
-import { writeAuditLog } from "@/lib/audit";
+import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
 
 export async function PATCH(
   req: NextRequest,
@@ -42,7 +42,7 @@ export async function PATCH(
   if (error) return dbError(error);
   const noticeAction = body.enabled === true ? "enable" : body.enabled === false ? "disable" : "update";
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: noticeAction, resourceType: "notice", resourceId: id,
     resourceName: (data.content as string)?.slice(0, 50),
   });
@@ -68,9 +68,12 @@ export async function DELETE(
   }
 
   const { data: noticeRow } = await db.from("notices").select("content").eq("id", id).maybeSingle();
+  // 5.11up · 删除前缓存 tenant 归属
+  const resourceTenantCode = await resolveResourceTenantCode("notice", id);
   await db.from("notices").delete().eq("id", id);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode,
     action: "delete", resourceType: "notice", resourceId: id,
     resourceName: (noticeRow?.content as string | undefined)?.slice(0, 50),
   });

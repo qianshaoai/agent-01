@@ -39,7 +39,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { error } = await db.from("categories").update({ icon_url: publicUrl }).eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "category", resourceId: id, resourceName: "图标",
   });
   return NextResponse.json({ url: publicUrl });
@@ -57,7 +57,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const { error } = await db.from("categories").update({ icon_url: null }).eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "delete", resourceType: "category", resourceId: id, resourceName: "图标",
   });
   return NextResponse.json({ ok: true });

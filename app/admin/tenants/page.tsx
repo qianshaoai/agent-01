@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import {
   Plus, Search, Edit2, Ban, Calendar, Zap, CheckCircle2, Building2,
   ChevronRight, ChevronDown, GitBranch, Users, Pencil, Trash2, X, Check,
+  Loader2,
 } from "lucide-react";
 
 type Tenant = {
@@ -35,6 +36,9 @@ export default function TenantsPage() {
   const [departments, setDepartments] = useState<Record<string, Department[]>>({});
   const [teams, setTeams] = useState<Record<string, Team[]>>({});
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
+  // 5.11up · 加载中状态：避免"空-内容"闪烁，按 tenantCode/deptId 维度跟踪
+  const [loadingDepts, setLoadingDepts] = useState<Set<string>>(new Set());
+  const [loadingTeams, setLoadingTeams] = useState<Set<string>>(new Set());
 
   // 部门内联编辑
   const [newDeptName, setNewDeptName] = useState<Record<string, string>>({});
@@ -93,24 +97,43 @@ export default function TenantsPage() {
   }, [isOrgAdmin, tenants.length]);
 
   async function loadDepts(tenantCode: string) {
-    const res = await fetch(`/api/admin/departments?tenantCode=${tenantCode}`);
-    if (res.ok) {
-      const raw = await res.json();
-      const data: Department[] = raw.data ?? raw;
-      setDepartments((prev) => ({ ...prev, [tenantCode]: data }));
-      // 预加载所有部门的小组
-      for (const dept of data) {
-        await loadTeams(dept.id);
+    // 5.11up · 加载中标记，UI 渲染 spinner 直到数据回来
+    setLoadingDepts((prev) => new Set(prev).add(tenantCode));
+    try {
+      const res = await fetch(`/api/admin/departments?tenantCode=${tenantCode}`);
+      if (res.ok) {
+        const raw = await res.json();
+        const data: Department[] = raw.data ?? raw;
+        setDepartments((prev) => ({ ...prev, [tenantCode]: data }));
+        // 预加载所有部门的小组
+        for (const dept of data) {
+          await loadTeams(dept.id);
+        }
       }
+    } finally {
+      setLoadingDepts((prev) => {
+        const next = new Set(prev);
+        next.delete(tenantCode);
+        return next;
+      });
     }
   }
 
   async function loadTeams(deptId: string) {
-    const res = await fetch(`/api/admin/teams?deptId=${deptId}`);
-    if (res.ok) {
-      const raw = await res.json();
-      const data: Team[] = raw.data ?? raw;
-      setTeams((prev) => ({ ...prev, [deptId]: data }));
+    setLoadingTeams((prev) => new Set(prev).add(deptId));
+    try {
+      const res = await fetch(`/api/admin/teams?deptId=${deptId}`);
+      if (res.ok) {
+        const raw = await res.json();
+        const data: Team[] = raw.data ?? raw;
+        setTeams((prev) => ({ ...prev, [deptId]: data }));
+      }
+    } finally {
+      setLoadingTeams((prev) => {
+        const next = new Set(prev);
+        next.delete(deptId);
+        return next;
+      });
     }
   }
 
@@ -322,9 +345,15 @@ export default function TenantsPage() {
 
                       {/* 部门列表 */}
                       <div className="space-y-2">
-                        {depts.length === 0 && (
+                        {/* 5.11up · loadingDepts 中表示首次加载中，显示 spinner 避免空内容闪烁 */}
+                        {loadingDepts.has(t.code) ? (
+                          <div className="flex items-center gap-2 text-xs text-gray-400 py-3">
+                            <Loader2 size={12} className="animate-spin" />
+                            <span>加载部门中…</span>
+                          </div>
+                        ) : depts.length === 0 ? (
                           <p className="text-xs text-gray-400 py-2">暂无部门，在下方添加</p>
-                        )}
+                        ) : null}
                         {depts.map((dept) => {
                           const deptTeams = teams[dept.id] ?? [];
                           const isDeptExpanded = expandedDept === dept.id;
@@ -364,9 +393,15 @@ export default function TenantsPage() {
                               {/* 小组列表 */}
                               {isDeptExpanded && (
                                 <div className="border-t border-gray-50 px-4 pb-3 pt-2 bg-gray-50/60 space-y-1.5">
-                                  {deptTeams.length === 0 && (
+                                  {/* 5.11up · 小组加载中 spinner */}
+                                  {loadingTeams.has(dept.id) ? (
+                                    <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                                      <Loader2 size={11} className="animate-spin" />
+                                      <span>加载小组中…</span>
+                                    </div>
+                                  ) : deptTeams.length === 0 ? (
                                     <p className="text-xs text-gray-400 py-1">暂无小组</p>
-                                  )}
+                                  ) : null}
                                   {deptTeams.map((team) => (
                                     <div key={team.id} className="flex items-center gap-2 px-2 py-1.5 bg-white rounded-[8px] border border-gray-100">
                                       <div className="w-1.5 h-1.5 rounded-full bg-[#002FA7]/30 shrink-0" />

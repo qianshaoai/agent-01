@@ -33,7 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { error } = await db.from("user_group_members").upsert(rows, { onConflict: "group_id,user_id" });
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "user_group", resourceId: id,
     detail: { action: "add-members", userIds },
   });
@@ -55,7 +55,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "user_group", resourceId: id,
     detail: { action: "remove-member", userId },
   });

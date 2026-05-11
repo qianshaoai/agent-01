@@ -124,7 +124,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "category", resourceId: agentId, resourceName: "分类展示设置",
     detail: { items },
   });

@@ -29,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       );
     }
     await writeAuditLog({
-      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+      adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "update", resourceType: "category", resourceId: id, resourceName: cat?.name,
       detail: { tenantCodes: body.tenantCodes },
     });
@@ -48,7 +48,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role,
+    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "category", resourceId: id, resourceName: data.name,
   });
   return NextResponse.json(data);

@@ -59,7 +59,7 @@ const navGroups: NavGroup[] = [
     label: "系统",
     items: [
       { href: "/admin/logs",       label: "操作日志", icon: FileText,       allowedRoles: ALL_ROLES },
-      { href: "/admin/audit-logs", label: "审计记录", icon: ClipboardList,  allowedRoles: SUPER_SYSTEM },
+      { href: "/admin/audit-logs", label: "审计记录", icon: ClipboardList,  allowedRoles: ALL_ROLES },
       { href: "/admin/settings",   label: "品牌设置", icon: Settings,       allowedRoles: SUPER_ONLY },
     ],
   },
