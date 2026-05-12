@@ -983,6 +983,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             }
             if (obj.error) {
               setError(obj.error);
+              // 5.12up · 服务端发 error（含上游 AI 空响应）时清掉乐观气泡，避免留个孤零零的"思考中…"
+              setMessages((prev) => prev.filter((m) => m.id !== aiId));
             }
           } catch {}
         }

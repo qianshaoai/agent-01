@@ -234,6 +234,23 @@ export const POST = withRequestLog(async (
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`));
           }
 
+          // 5.12up · 空响应保护：上游 AI 平台偶尔会 200 ok 但内容是空（风控拦截 / 模型偶发失败）
+          // 这种情况不入库、不扣配额、不写 success 日志，转成 error 事件给前端
+          if (!fullResponse.trim()) {
+            await db.from("logs").insert({
+              user_phone: user.phone,
+              tenant_code: user.tenantCode,
+              agent_code: agent.agent_code,
+              agent_name: agent.name,
+              action: "chat",
+              status: "error",
+              duration_ms: Date.now() - startTime,
+              error_msg: "AI 返回空内容",
+            });
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: "AI 没有返回内容，请重新发送或换种方式提问" })}\n\n`));
+            return;
+          }
+
           // 流结束：保存 AI 回复 & 扣配额 & 写日志
           await Promise.all([
             db.from("messages").insert({
