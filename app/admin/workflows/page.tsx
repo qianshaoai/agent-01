@@ -813,10 +813,10 @@ export default function WorkflowsAdminPage() {
                         {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
                         {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
-                        {/* 5.11up · 创建者徽章（决策 4=C：真名 + 角色双显示） */}
+                        {/* 5.12up · 创建者徽章：只显示角色（用户名查审计记录） */}
                         {wf.created_by_role && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-500 border border-gray-200" title={`创建者：${wf.created_by_username ?? "未知"}（${ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}）`}>
-                            {wf.created_by_username ?? "—"}（{ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}）
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-500 border border-gray-200" title="具体创建者请查审计记录">
+                            {ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}
                           </span>
                         )}
                       </div>
