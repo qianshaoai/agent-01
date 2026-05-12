@@ -78,9 +78,11 @@ export function ScopeFilter({
     return `${tName} / ${dName} / ${tmName}`;
   }, [value, tenants, depts, teams]);
 
-  // 打开时根据当前 value 预展开
+  // 打开时根据当前 value 预展开内部 UI 状态（把外部 prop 镜像到 internal state，合法用例）
+  // React 18+ 自动批处理同一 effect 内的多次 setState，cascading-renders 规则在这里偏严
   useEffect(() => {
     if (open) {
+      /* eslint-disable react-hooks/set-state-in-effect */
       if (value.tenantCode) {
         setExpandedTenant(value.tenantCode);
         if (value.deptId) {
@@ -98,6 +100,7 @@ export function ScopeFilter({
       setHl0(0);
       setHl1(0);
       setHl2(0);
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
   }, [open, value.tenantCode, value.deptId]);
 

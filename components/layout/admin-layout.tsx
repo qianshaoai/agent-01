@@ -29,7 +29,6 @@ type NavGroup = { label: string; items: NavItem[] };
 type AdminRole = "super_admin" | "system_admin" | "org_admin";
 
 const ALL_ROLES: AdminRole[] = ["super_admin", "system_admin", "org_admin"];
-const SUPER_SYSTEM: AdminRole[] = ["super_admin", "system_admin"];
 const SUPER_ONLY: AdminRole[] = ["super_admin"];
 
 const navGroups: NavGroup[] = [
