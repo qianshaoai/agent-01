@@ -28,6 +28,7 @@ import {
   History,
 } from "lucide-react";
 import { WorkflowStepButton } from "@/components/workflow-step-button";
+import { QuotaPopover } from "@/components/quota-popover";
 import { AgentCard } from "@/components/agent-card";
 import type { UserInfo, NoticeItem, WorkflowItem, AgentItem } from "@/lib/types";
 
@@ -483,11 +484,13 @@ export default function HomePage() {
             )}
 
             {quota && (
-              <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-white/10 rounded-[10px]">
-                <Zap size={13} className="text-amber-300" />
-                <span className="text-xs text-white/85">剩余 {quota.left} 次</span>
-                <span className="text-xs text-white/55">· 至 {quota.expiresAt}</span>
-              </div>
+              <QuotaPopover trigger={
+                <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/15 rounded-[10px] transition-colors">
+                  <Zap size={13} className="text-amber-300" />
+                  <span className="text-xs text-white/85">剩余 {quota.left} 次</span>
+                  <span className="text-xs text-white/55">· 至 {quota.expiresAt}</span>
+                </div>
+              } />
             )}
 
             <div className="flex items-center gap-1 ml-1">

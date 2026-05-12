@@ -296,6 +296,7 @@ import {
 } from "lucide-react";
 import { exportConversation, triggerDownload } from "@/lib/export-conversation";
 import type { WorkflowStep } from "@/lib/types";
+import { QuotaPopover } from "@/components/quota-popover";
 
 /** 把会话列表按时间桶分组：今天 / 昨天 / 7 天内 / 更早 */
 function bucketConversationsByTime(convs: Conversation[]): { label: string; items: Conversation[] }[] {
@@ -1695,11 +1696,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             );
           })()}
           {quota && (
-            <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-[10px] bg-white/10">
-              <Zap size={13} className="text-amber-300" />
-              <span className="text-xs text-white/85">剩余 {quota.left} 次</span>
-              <span className="hidden sm:inline text-xs text-white/55">· 至 {quota.expiresAt}</span>
-            </div>
+            <QuotaPopover trigger={
+              <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-[10px] bg-white/10 hover:bg-white/15 transition-colors">
+                <Zap size={13} className="text-amber-300" />
+                <span className="text-xs text-white/85">剩余 {quota.left} 次</span>
+                <span className="hidden sm:inline text-xs text-white/55">· 至 {quota.expiresAt}</span>
+              </div>
+            } />
           )}
         </div>
       </header>
