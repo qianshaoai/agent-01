@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   const userTypeFilter = searchParams.get("user_type") ?? "";
   const roleFilter = searchParams.get("role") ?? "";
   const deptFilter = searchParams.get("dept_id") ?? "";
+  const teamFilter = searchParams.get("team_id") ?? "";
   const orgFilter = searchParams.get("org") ?? "";
   // 是否包含已删除用户（默认不包含）。只有当管理员主动筛选"已删除"时才显示
   const includeDeleted = searchParams.get("includeDeleted") === "1";
@@ -50,6 +51,7 @@ export async function GET(req: NextRequest) {
     query = query.eq("role", roleFilter);
   }
   if (deptFilter) query = query.eq("dept_id", deptFilter);
+  if (teamFilter) query = query.eq("team_id", teamFilter);
 
   // 组织管理员只能看自己组织的用户
   if (admin.role === "org_admin" && admin.tenantCode) {
@@ -58,11 +60,12 @@ export async function GET(req: NextRequest) {
 
   // 数据库层排序 + 分页（避免全量加载到内存）
   // status 字母序：active < cancelled < deleted < disabled，cancelled/deleted 自然靠后
-  // role 字母序：org_admin < super_admin < system_admin < user，近似角色优先级
+  // 5.12up · 用 role_priority 生成列（migration_v33）替代字母序的 role，
+  // 优先级：super(4) > system(3) > org(2) > user(1)
   const start = (page - 1) * pageSize;
   const { data, count, error } = await query
     .order("status")
-    .order("role")
+    .order("role_priority", { ascending: false })
     .order("created_at", { ascending: false })
     .range(start, start + pageSize - 1);
 
