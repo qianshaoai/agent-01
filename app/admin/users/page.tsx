@@ -5,7 +5,8 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { useDebounce } from "@/lib/use-debounce";
-import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus, Eye, Bell, Building2 } from "lucide-react";
+import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus, Eye, Bell, Building2, Loader2 } from "lucide-react";
+import { ScopeFilter } from "@/components/admin/scope-filter";
 
 type UserRow = {
   id: string;
@@ -75,12 +76,26 @@ export default function AdminUsersPage() {
   const [userTypeFilter, setUserTypeFilter] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
+  const [teamFilter, setTeamFilter] = useState("");
   const [orgFilter, setOrgFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [tenants, setTenants] = useState<{ id: string; code: string; name: string }[]>([]);
   const [allDepts, setAllDepts] = useState<{ id: string; name: string; tenant_code: string }[]>([]);
+  const [allTeams, setAllTeams] = useState<{ id: string; name: string; dept_id: string }[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
+
+  // 5.12up · 批量调整所属组织
+  const [bulkTenantOpen, setBulkTenantOpen] = useState(false);
+  const [bulkTenantTarget, setBulkTenantTarget] = useState<string>(""); // "" = 未选；"PERSONAL" = 个人空间
+  const [bulkTenantSaving, setBulkTenantSaving] = useState(false);
+  const [bulkTenantResult, setBulkTenantResult] = useState<
+    | null
+    | {
+        succeeded: Array<{ id: string; phone: string }>;
+        failed: Array<{ id: string; phone?: string; reason: string }>;
+      }
+  >(null);
 
   // 重置密码弹窗
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null);
@@ -159,6 +174,7 @@ export default function AdminUsersPage() {
       if (userTypeFilter) params.set("user_type", userTypeFilter);
       if (roleFilter) params.set("role", roleFilter);
       if (deptFilter) params.set("dept_id", deptFilter);
+      if (teamFilter) params.set("team_id", teamFilter);
       if (orgFilter) params.set("org", orgFilter);
       const res = await fetch(`/api/admin/users?${params}`);
       const data = await res.json();
@@ -167,10 +183,10 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter]);
+  }, [page, pageSize, debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, teamFilter, orgFilter]);
 
   // 筛选变化时重置页码（fetchUsers 会随 useCallback 依赖变化自动刷新）
-  useEffect(() => { setPage(1); setSelectedIds([]); }, [debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, orgFilter, pageSize]);
+  useEffect(() => { setPage(1); setSelectedIds([]); }, [debouncedSearch, statusFilter, userTypeFilter, roleFilter, deptFilter, teamFilter, orgFilter, pageSize]);
   // fetchUsers 或 page 变化时发起请求
   useEffect(() => { fetchUsers(page); }, [fetchUsers, page]);
   useEffect(() => { if (activeTab === "groups") loadGroups(); }, [activeTab]);
@@ -183,10 +199,12 @@ export default function AdminUsersPage() {
     Promise.all([
       fetch("/api/admin/tenants").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
       fetch("/api/admin/departments").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
+      fetch("/api/admin/teams").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
       fetch("/api/admin/me", { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([tr, dr, me]) => {
+    ]).then(([tr, dr, teamsR, me]) => {
       setTenants(Array.isArray(tr) ? tr : []);
       setAllDepts(Array.isArray(dr) ? dr : []);
+      setAllTeams(Array.isArray(teamsR) ? teamsR : []);
       if (me && me.role) setAdminMeta({ role: me.role, tenantCode: me.tenantCode ?? null });
     });
   }, []);
@@ -281,6 +299,40 @@ export default function AdminUsersPage() {
       fetchUsers(page);
     } finally {
       setBatchLoading(false);
+    }
+  }
+
+  // 5.12up · 批量调整所属组织
+  async function doBulkSetTenant() {
+    if (!bulkTenantTarget || selectedIds.length === 0) return;
+    setBulkTenantSaving(true);
+    try {
+      const res = await fetch("/api/admin/users/bulk-set-tenant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userIds: selectedIds,
+          tenantCode: bulkTenantTarget,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error ?? "批量调整失败", "error");
+        return;
+      }
+      const data: {
+        succeeded: Array<{ id: string; phone: string }>;
+        failed: Array<{ id: string; phone?: string; reason: string }>;
+      } = await res.json();
+      setBulkTenantResult(data);
+      setBulkTenantOpen(false);
+      setBulkTenantTarget("");
+      // 把成功的从选中里移除（失败的留着方便管理员看哪些没动）
+      const okIds = new Set(data.succeeded.map((x) => x.id));
+      setSelectedIds((prev) => prev.filter((id) => !okIds.has(id)));
+      fetchUsers(page);
+    } finally {
+      setBulkTenantSaving(false);
     }
   }
 
@@ -509,7 +561,7 @@ export default function AdminUsersPage() {
     return new Date(s).toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
   }
 
-  const hasFilter = search || statusFilter || userTypeFilter || roleFilter || deptFilter || orgFilter;
+  const hasFilter = search || statusFilter || userTypeFilter || roleFilter || deptFilter || teamFilter || orgFilter;
 
   return (
     <AdminLayout>
@@ -550,35 +602,54 @@ export default function AdminUsersPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <select className={`${inputCls} pr-2`} value={orgFilter} onChange={(e) => setOrgFilter(e.target.value)}>
-            <option value="">全部组织</option>
-            {tenants.map(t => <option key={t.id} value={t.code}>{t.name}（{t.code}）</option>)}
-          </select>
-          <select className={`${inputCls} pr-2`} value={userTypeFilter} onChange={(e) => setUserTypeFilter(e.target.value)}>
-            <option value="">全部类型</option>
-            <option value="personal">个人用户</option>
-            <option value="organization">组织用户</option>
-          </select>
-          <select className={`${inputCls} pr-2`} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
-            <option value="">全部角色</option>
-            <option value="super_admin">超级管理员</option>
-            <option value="system_admin">系统管理员</option>
-            <option value="org_admin">组织管理员</option>
-            <option value="user">普通用户</option>
-          </select>
-          <select className={`${inputCls} pr-2`} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="">全部状态</option>
-            <option value="active">正常</option>
-            <option value="disabled">已禁用</option>
-            <option value="deleted">已注销</option>
-          </select>
-          <select className={`${inputCls} pr-2`} value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)}>
-            <option value="">全部部门</option>
-            {allDepts.map(d => <option key={d.id} value={d.id}>{d.name}（{d.tenant_code}）</option>)}
-          </select>
+          {/* 5.12up · 级联三级筛选：组织 → 部门 → 小组（替代原"全部组织 + 全部部门"两个独立 select） */}
+          <ScopeFilter
+            tenants={tenants}
+            depts={allDepts}
+            teams={allTeams}
+            value={{
+              tenantCode: orgFilter || undefined,
+              deptId: deptFilter || undefined,
+              teamId: teamFilter || undefined,
+            }}
+            onChange={(v) => {
+              setOrgFilter(v.tenantCode ?? "");
+              setDeptFilter(v.deptId ?? "");
+              setTeamFilter(v.teamId ?? "");
+            }}
+            className="min-w-[280px]"
+          />
+          {/* 5.12up · 用 wrapper 隐藏原生 select 的 OS 箭头，统一换成 lucide ChevronDown */}
+          <div className="relative">
+            <select className={`${inputCls} pr-8 appearance-none`} value={userTypeFilter} onChange={(e) => setUserTypeFilter(e.target.value)}>
+              <option value="">全部类型</option>
+              <option value="personal">个人用户</option>
+              <option value="organization">组织用户</option>
+            </select>
+            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+          <div className="relative">
+            <select className={`${inputCls} pr-8 appearance-none`} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+              <option value="">全部角色</option>
+              <option value="super_admin">超级管理员</option>
+              <option value="system_admin">系统管理员</option>
+              <option value="org_admin">组织管理员</option>
+              <option value="user">普通用户</option>
+            </select>
+            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+          <div className="relative">
+            <select className={`${inputCls} pr-8 appearance-none`} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">全部状态</option>
+              <option value="active">正常</option>
+              <option value="disabled">已禁用</option>
+              <option value="deleted">已注销</option>
+            </select>
+            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
           {hasFilter && (
             <button
-              onClick={() => { setSearch(""); setStatusFilter(""); setUserTypeFilter(""); setRoleFilter(""); setDeptFilter(""); setOrgFilter(""); }}
+              onClick={() => { setSearch(""); setStatusFilter(""); setUserTypeFilter(""); setRoleFilter(""); setDeptFilter(""); setTeamFilter(""); setOrgFilter(""); }}
               className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2 transition-colors"
             >
               <X size={13} /> 清除
@@ -604,6 +675,16 @@ export default function AdminUsersPage() {
             >
               <ShieldOff size={13} /> 批量禁用
             </button>
+            {/* 5.12up · 批量调整所属组织（org_admin 不显示） */}
+            {adminMeta?.role !== "org_admin" && (
+              <button
+                onClick={() => { setBulkTenantTarget(""); setBulkTenantOpen(true); }}
+                disabled={batchLoading}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-[8px] text-xs font-medium bg-[#002FA7] text-white hover:bg-[#1a47c0] transition-colors disabled:opacity-60"
+              >
+                <Building2 size={13} /> 批量调整组织
+              </button>
+            )}
             <button
               onClick={() => setSelectedIds([])}
               className="ml-auto text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
@@ -1294,6 +1375,115 @@ export default function AdminUsersPage() {
                 </button>
               )}
               <button onClick={() => setDetailUser(null)} className="ml-auto px-4 h-9 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 transition-colors">关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5.12up · 批量调整组织 — 选择目标 */}
+      {bulkTenantOpen && (() => {
+        const selectedUsers = users.filter((u) => selectedIds.includes(u.id));
+        // 来源汇总
+        const sourceMap = new Map<string, number>();
+        for (const u of selectedUsers) {
+          const key = !u.tenant_code || u.tenant_code === "PERSONAL" ? "PERSONAL" : u.tenant_code;
+          sourceMap.set(key, (sourceMap.get(key) ?? 0) + 1);
+        }
+        // 选中的人里有可能跨页（这一页之外的 id 也在 selectedIds 里），无法在前端展示其原属，
+        // 直接显示总数 + 当前页可展示的分布
+        const visibleCount = selectedUsers.length;
+        const offPageCount = selectedIds.length - visibleCount;
+        return (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => !bulkTenantSaving && setBulkTenantOpen(false)}>
+            <div className="bg-white rounded-[16px] shadow-2xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-base font-semibold text-gray-900 mb-1">批量调整所属组织</h3>
+              <p className="text-xs text-gray-500 mb-4">选中 {selectedIds.length} 人</p>
+
+              {visibleCount > 0 && (
+                <div className="text-xs text-gray-500 mb-4 p-3 bg-gray-50 rounded-[10px]">
+                  <p className="font-medium text-gray-700 mb-1.5">来自以下来源：</p>
+                  <ul className="space-y-0.5">
+                    {[...sourceMap.entries()].map(([code, cnt]) => {
+                      const name = code === "PERSONAL" ? "个人空间（无组织归属）" : (tenants.find((t) => t.code === code)?.name ?? code);
+                      return <li key={code}>· {name}（{cnt} 人）</li>;
+                    })}
+                    {offPageCount > 0 && <li className="text-gray-400">· 其它 {offPageCount} 人（不在当前页，无法展示来源）</li>}
+                  </ul>
+                </div>
+              )}
+
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">目标组织</label>
+              <select
+                value={bulkTenantTarget}
+                onChange={(e) => setBulkTenantTarget(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-[10px] focus:outline-none focus:ring-2 focus:ring-[#002FA7]/30 focus:border-[#002FA7]/60 bg-white"
+              >
+                <option value="">请选择目标组织…</option>
+                <option value="PERSONAL">个人空间（无组织归属）</option>
+                {tenants.map((t) => (
+                  <option key={t.id} value={t.code}>{t.name}（{t.code}）</option>
+                ))}
+              </select>
+
+              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-[10px] p-3 mt-4">
+                ⚠ 移动后所有人将被强制重登，原部门/小组归属会清空。
+                <br />已删除用户、超级管理员、已在目标组织内的用户会自动跳过。
+              </div>
+
+              <div className="flex gap-2 mt-5">
+                <button
+                  onClick={() => setBulkTenantOpen(false)}
+                  disabled={bulkTenantSaving}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-[10px] hover:bg-gray-50 transition-colors disabled:opacity-60"
+                >取消</button>
+                <button
+                  onClick={doBulkSetTenant}
+                  disabled={bulkTenantSaving || !bulkTenantTarget}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-[#002FA7] rounded-[10px] hover:bg-[#1a47c0] transition-colors disabled:opacity-60 inline-flex items-center justify-center gap-1.5"
+                >
+                  {bulkTenantSaving && <Loader2 size={14} className="animate-spin" />}
+                  {bulkTenantSaving ? "处理中…" : `确认移动 ${selectedIds.length} 人`}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 5.12up · 批量调整组织 — 结果弹窗 */}
+      {bulkTenantResult && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setBulkTenantResult(null)}>
+          <div className="bg-white rounded-[16px] shadow-2xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-gray-900 mb-4">批量调整结果</h3>
+            <div className="space-y-3 max-h-[400px] overflow-y-auto">
+              {bulkTenantResult.succeeded.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-emerald-700 mb-1.5">
+                    ✓ 成功 {bulkTenantResult.succeeded.length} 人
+                  </p>
+                  <p className="text-xs text-gray-500 pl-5">
+                    {bulkTenantResult.succeeded.map((s) => s.phone).join("、")}
+                  </p>
+                </div>
+              )}
+              {bulkTenantResult.failed.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-red-600 mb-1.5">
+                    ✗ 失败 {bulkTenantResult.failed.length} 人
+                  </p>
+                  <ul className="text-xs text-gray-500 pl-5 space-y-0.5">
+                    {bulkTenantResult.failed.map((f) => (
+                      <li key={f.id}>· {f.phone ?? f.id}：<span className="text-red-500">{f.reason}</span></li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end mt-5">
+              <button
+                onClick={() => setBulkTenantResult(null)}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#002FA7] rounded-[10px] hover:bg-[#1a47c0] transition-colors"
+              >知道了</button>
             </div>
           </div>
         </div>

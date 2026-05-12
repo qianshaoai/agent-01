@@ -1,6 +1,5 @@
 import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
@@ -34,8 +33,8 @@ export async function POST(req: NextRequest) {
     return apiError("无权创建组织", "FORBIDDEN");
   }
 
-  const { code, name, initialPwd, quota, expiresAt } = await req.json();
-  if (!code || !name || !initialPwd || !quota || !expiresAt) {
+  const { code, name, quota, expiresAt } = await req.json();
+  if (!code || !name || !quota || !expiresAt) {
     return apiError("请填写所有必填字段", "VALIDATION_ERROR");
   }
 
@@ -44,7 +43,9 @@ export async function POST(req: NextRequest) {
   }
 
   const normalizedCode = code.trim().toUpperCase();
-  const pwdHash = await bcrypt.hash(initialPwd, 12);
+  // 5.12up · tenants.pwd_hash 已废弃（早期"组织码做初始密码"流程的残留，自助注册上线后
+  // 没人再读这列）。NOT NULL 约束还在，填个占位墓碑值，后续 migration 会删列。
+  const pwdHash = "deprecated:tenant-pwd-no-longer-used";
 
   const { data, error } = await db
     .from("tenants")

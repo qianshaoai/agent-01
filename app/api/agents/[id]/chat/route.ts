@@ -19,7 +19,7 @@ export const POST = withRequestLog(async (
 
   const { id: rawId } = await params;
   const agentCode = decodeURIComponent(rawId);
-  const { message, conversationId, fileTexts, attachments, workflowContext, sessionId } = await req.json();
+  const { message, conversationId, fileTexts, attachments, workflowContext, workflowReferenceLabel, sessionId } = await req.json();
 
   if (!message?.trim()) {
     return NextResponse.json({ error: "消息不能为空" }, { status: 400 });
@@ -156,6 +156,11 @@ export const POST = withRequestLog(async (
     const incomingAtts: IncomingAttachment[] = Array.isArray(attachments) ? attachments : [];
     const imageAtts = incomingAtts.filter((a) => a.kind === "image" && a.url);
     let displayContent = userContent;
+    // 5.12up · 进度条参考：prepend 一个标记到 displayContent，前端解析后显示成 chip
+    // 实际的上下文内容已通过 workflowContext 拼到 AI prompt 里，标记只是个标签
+    if (workflowContext && typeof workflowReferenceLabel === "string" && workflowReferenceLabel.trim()) {
+      displayContent = `[参考：${workflowReferenceLabel.trim()}]\n${displayContent}`;
+    }
     if (imageAtts.length > 0) {
       // 幂等：URL 已经出现在 userContent 里（regenerate / edit 路径，message 自带旧图片标记）
       // 就跳过追加，否则同一图片会有两份标记

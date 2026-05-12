@@ -71,7 +71,7 @@ function friendlyError(msg: string): string {
 }
 
 type ChatMsgProps = {
-  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean; attachedFiles?: string[]; attachedImages?: { filename: string; url: string }[] };
+  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean; attachedFiles?: string[]; attachedImages?: { filename: string; url: string }[]; stepReference?: string };
   streaming: boolean;
   onCopy: () => void;
   copied: boolean;
@@ -112,6 +112,13 @@ const ChatMessage = memo(function ChatMessage({
       <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
         <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
           {/* 用户消息：先渲染图片缩略 + 文件 chip（如果有），再渲染正文 */}
+          {/* 5.12up · 进度条参考 chip：保留在历史消息里，让回看时知道这条带了参考 */}
+          {!isAssistant && msg.stepReference && (
+            <div className="mb-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-white/15 text-white border border-white/25">
+              <Paperclip size={10} />
+              参考：{msg.stepReference}
+            </div>
+          )}
           {!isAssistant && msg.attachedImages && msg.attachedImages.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2">
               {msg.attachedImages.map((img, ii) => (
@@ -289,6 +296,7 @@ import {
 } from "lucide-react";
 import { exportConversation, triggerDownload } from "@/lib/export-conversation";
 import type { WorkflowStep } from "@/lib/types";
+import { QuotaPopover } from "@/components/quota-popover";
 
 /** 把会话列表按时间桶分组：今天 / 昨天 / 7 天内 / 更早 */
 function bucketConversationsByTime(convs: Conversation[]): { label: string; items: Conversation[] }[] {
@@ -328,6 +336,8 @@ type Message = {
   attachedFiles?: string[];
   /** 用户消息附带的图片（缩略图渲染） */
   attachedImages?: { filename: string; url: string }[];
+  /** 5.12up · 进度条参考的步骤标题 — 仅显示在气泡里做提示，AI prompt 走 workflowContext */
+  stepReference?: string;
   /** user 消息原始入库 content（含 [附件内容] 段）。
    *  渲染层只用 content（已 strip）；regenerate / editAndResend 必须用 rawContent
    *  以保证带原文件块重发，否则 bot 第二次回答看不到附件内容。 */
@@ -344,9 +354,19 @@ function parseUserContent(raw: string): {
   text: string;
   attachedFiles: string[];
   attachedImages: { filename: string; url: string }[];
+  stepReference?: string;
 } {
-  const match = raw.match(/^([\s\S]*?)\n\n\[附件内容\]\n([\s\S]*)$/);
-  if (!match) return { text: raw, attachedFiles: [], attachedImages: [] };
+  // 5.12up · 进度条参考标记：`[参考：xx]\n` 在 content 最前面
+  let working = raw;
+  let stepReference: string | undefined;
+  const refMatch = working.match(/^\[参考：([^\]]+)\]\n/);
+  if (refMatch) {
+    stepReference = refMatch[1].trim();
+    working = working.slice(refMatch[0].length);
+  }
+
+  const match = working.match(/^([\s\S]*?)\n\n\[附件内容\]\n([\s\S]*)$/);
+  if (!match) return { text: working, attachedFiles: [], attachedImages: [], stepReference };
   const [, userText, fileSection] = match;
   const filenames = Array.from(fileSection.matchAll(/文件《([^》]+)》内容[：:]/g)).map(
     (m) => m[1]
@@ -356,7 +376,7 @@ function parseUserContent(raw: string): {
   const images = Array.from(
     fileSection.matchAll(/\[图片[:：]\s*([^,，\]]+)[,，]\s*URL[:：]\s*(https?:\/\/[^\]\s]+)\]/g)
   ).map((m) => ({ filename: m[1].trim(), url: m[2].trim() }));
-  return { text: userText.trim(), attachedFiles: filenames, attachedImages: images };
+  return { text: userText.trim(), attachedFiles: filenames, attachedImages: images, stepReference };
 }
 
 type Conversation = {
@@ -447,6 +467,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   // 跨步骤上下文：用 ref 避免触发重渲染；sent 标记保证只注入一次
   const workflowContextRef = useRef<string | null>(null);
   const workflowContextSentRef = useRef(false);
+  // 5.12up · 进度条点击带的"参考"步骤标题，用于在输入框上方显示 chip
+  const [stepReferenceLabel, setStepReferenceLabel] = useState<string | null>(null);
   // outline 模式：自动请求大纲，只发一次
   const outlineSentRef = useRef(false);
 
@@ -582,6 +604,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     // 5.9up bugfix：sessionId 变化（如 上一步 / 切换会话）时也必须重新加载，
     // 否则上次 session 的 activeConvId / 会话列表残留，导致看到跨 session 数据
     setActiveConvId(null);
+    // 5.12up · 同步清掉进度条参考 chip
+    setStepReferenceLabel(null);
     setMessages([]);
 
     async function load() {
@@ -669,7 +693,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             const parsed =
               m.role === "user"
                 ? parseUserContent(m.content)
-                : { text: m.content, attachedFiles: [] as string[], attachedImages: [] as { filename: string; url: string }[] };
+                : { text: m.content, attachedFiles: [] as string[], attachedImages: [] as { filename: string; url: string }[], stepReference: undefined as string | undefined };
             const hasAttach = parsed.attachedFiles.length > 0 || parsed.attachedImages.length > 0;
             return {
               id: m.id,
@@ -677,6 +701,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               content: parsed.text,
               attachedFiles: parsed.attachedFiles.length > 0 ? parsed.attachedFiles : undefined,
               attachedImages: parsed.attachedImages.length > 0 ? parsed.attachedImages : undefined,
+              stepReference: parsed.stepReference,
               rawContent: m.role === "user" && hasAttach ? m.content : undefined,
               createdAt: new Date(m.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
               // 优先用 DB 字段；client 端临时 aborted 标记作为回退（异步 PATCH 还没回来时）
@@ -848,12 +873,19 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     // 要剥离成干净文本展示（chip 单独渲染），rawContent 留住原始带 dump 版本以备再次重发
     const optimisticContent = opts ? parseUserContent(sentInput).text : sentInput;
 
+    // 5.12up · 提前算 wfCtxToSend / wfRefLabelToSend 以便挂到乐观气泡上
+    // （真正的 ref 标记重置在下方紧接着的代码里，保持原子性）
+    const wfCtxToSend = workflowContextSentRef.current ? undefined : (workflowContextRef.current ?? undefined);
+    const wfRefLabelToSend = wfCtxToSend ? (stepReferenceLabel ?? undefined) : undefined;
+
     const userMsg: Message = {
       id: `tmp-${Date.now()}`,
       role: "user",
       content: optimisticContent,
       attachedFiles: attachedFilenames.length > 0 ? attachedFilenames : undefined,
       attachedImages: attachedImages.length > 0 ? attachedImages : undefined,
+      // 5.12up · 进度条参考的步骤名同步挂到乐观气泡上
+      stepReference: wfRefLabelToSend,
       rawContent: opts && (attachedFilenames.length > 0 || attachedImages.length > 0) ? sentInput : undefined,
       createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
     };
@@ -878,8 +910,12 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     abortControllerRef.current = abortCtrl;
 
     // 5.8up：首条消息带上前一步上下文，之后清零避免重复注入
-    const wfCtxToSend = workflowContextSentRef.current ? undefined : (workflowContextRef.current ?? undefined);
-    if (wfCtxToSend) workflowContextSentRef.current = true;
+    // 注：wfCtxToSend / wfRefLabelToSend 已经在 userMsg 创建那里算好，这里只做"标记已消费"
+    if (wfCtxToSend) {
+      workflowContextSentRef.current = true;
+      // 5.12up · 进度条 chip 在发送时一次性消费完，UI 上摘掉
+      setStepReferenceLabel(null);
+    }
 
     try {
       const res = await fetch(`/api/agents/${agentCode}/chat`, {
@@ -892,6 +928,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           fileTexts,
           attachments,
           workflowContext: wfCtxToSend,
+          workflowReferenceLabel: wfRefLabelToSend,
           sessionId: sessionId ?? undefined,
         }),
       });
@@ -1263,7 +1300,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
     const clickedStep = wfSteps[idx];
     if (!clickedStep?.agents?.agent_code) return;
 
-    // 拉取该步骤智能体的最新对话记录，注入给当前智能体
+    // 5.12up · 不再把 ctx 作为用户消息直接发送，改成挂到 workflowContextRef +
+    // 显示 chip，等用户下次主动 send 时静默拼到 AI prompt（不入库不显示）
+    // 旧版套娃：每次点击 → 长文本入库 → 下一步注入又包进去 → 雪球
     try {
       const convRes = await fetch(`/api/conversations?agentCode=${encodeURIComponent(clickedStep.agents.agent_code)}&pageSize=1`);
       if (!convRes.ok) return;
@@ -1285,9 +1324,10 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
       if (!ctx) return;
       if (ctx.length > 3000) ctx = ctx.slice(0, 3000) + "…（内容过长已截断）";
 
-      const currentStepTitle = wfSteps[resolvedStepIdx]?.title;
-      const msg = `以下是我们在「${clickedStep.title}」阶段的对话记录，请你仔细阅读，了解已有的工作成果，然后基于这些信息，开始协助我完成「${currentStepTitle ?? "当前阶段"}」的工作：\n\n${ctx}`;
-      handleSend({ text: msg });
+      // 挂到 ref，后续主动 send 时由 handleSend 一次性消费
+      workflowContextRef.current = ctx;
+      workflowContextSentRef.current = false;
+      setStepReferenceLabel(clickedStep.title);
     } catch {}
   }
 
@@ -1656,11 +1696,13 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             );
           })()}
           {quota && (
-            <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-[10px] bg-white/10">
-              <Zap size={13} className="text-amber-300" />
-              <span className="text-xs text-white/85">剩余 {quota.left} 次</span>
-              <span className="hidden sm:inline text-xs text-white/55">· 至 {quota.expiresAt}</span>
-            </div>
+            <QuotaPopover trigger={
+              <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-[10px] bg-white/10 hover:bg-white/15 transition-colors">
+                <Zap size={13} className="text-amber-300" />
+                <span className="text-xs text-white/85">剩余 {quota.left} 次</span>
+                <span className="hidden sm:inline text-xs text-white/55">· 至 {quota.expiresAt}</span>
+              </div>
+            } />
           )}
         </div>
       </header>
@@ -1970,6 +2012,25 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
           /* Input area */
           <div className="bg-white border-t border-gray-100 px-4 py-3">
             <div className="max-w-4xl mx-auto">
+              {/* 5.12up · 进度条参考 chip：点击已完成步骤后挂上，发送时一次性消费 */}
+              {stepReferenceLabel && (
+                <div className="mb-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] bg-[#002FA7]/8 text-[#002FA7] border border-[#002FA7]/15">
+                  <Paperclip size={11} />
+                  <span>参考：{stepReferenceLabel}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      workflowContextRef.current = null;
+                      workflowContextSentRef.current = false;
+                      setStepReferenceLabel(null);
+                    }}
+                    className="ml-0.5 text-[#002FA7]/60 hover:text-red-500 transition-colors"
+                    title="移除参考"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              )}
               {/* Uploaded files preview — 带上传/解析状态角标 */}
               {uploadedFiles.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-2">
