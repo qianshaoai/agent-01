@@ -245,7 +245,8 @@ export default function TenantsPage() {
   async function handleSave() {
     setFormError("");
     if (!form.name || !form.quota || !form.expiresAt) { setFormError("请填写组织名称、配额和到期日"); return; }
-    if (!editing && (!form.code || !form.initialPwd)) { setFormError("新建时请填写组织码和初始密码"); return; }
+    // 5.12up · initialPwd 已废弃，不再校验
+    if (!editing && !form.code) { setFormError("新建时请填写组织码"); return; }
     if (!editing && !/^[A-Za-z]{4,8}$/.test(form.code.trim())) { setFormError("组织码只能为 4~8 位英文字母"); return; }
     setSaving(true);
     try {
@@ -499,7 +500,7 @@ export default function TenantsPage() {
             <div className="space-y-4">
               <Input label="组织码（4~8 位英文字母）" placeholder="如 DEMO" value={form.code} disabled={!!editing} onChange={(e) => setForm({ ...form, code: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 8) })} />
               <Input label="组织名称" placeholder="如 前哨科技有限公司" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              <Input label={editing ? "组织初始密码（留空不修改）" : "组织初始密码"} type="password" placeholder={editing ? "留空则不修改" : "设置初始密码"} value={form.initialPwd} onChange={(e) => setForm({ ...form, initialPwd: e.target.value })} />
+              {/* 5.12up · "组织初始密码"字段已废弃 — 用户自助注册上线后此字段写入 DB 但从不参与登录校验，UI 中隐藏 */}
               <Input label="总配额（次数）" type="number" placeholder="500" value={form.quota} onChange={(e) => setForm({ ...form, quota: e.target.value })} />
               <Input label="到期日" type="date" value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} />
               {formError && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{formError}</div>}

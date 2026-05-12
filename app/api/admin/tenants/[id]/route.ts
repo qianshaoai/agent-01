@@ -1,6 +1,5 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
@@ -36,9 +35,7 @@ export async function PATCH(
     updates.expires_at = body.expiresAt;
   }
   if (body.enabled !== undefined) updates.enabled = body.enabled;
-  if (body.initialPwd) {
-    updates.pwd_hash = await bcrypt.hash(body.initialPwd, 12);
-  }
+  // 5.12up · initialPwd 已废弃（见 POST 路由注释），传过来也不再处理
 
   const { data, error } = await db
     .from("tenants")
