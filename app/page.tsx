@@ -318,14 +318,24 @@ export default function HomePage() {
     if (!s.workflow) return;
     const wf = workflows.find((w) => w.id === s.workflow!.id);
     if (!wf) return;
-    // 从记录的步骤开始往后找第一个有效 agent 步骤
+    // 5.12up bug fix · 双向搜索：先 forward 找下一个能进的 agent 步，找不到再 backward
+    // 回退到最近一个 agent 步（场景：currentStepIdx 停在末尾的人工/审核步骤，
+    // forward scan 跑到末尾直接 return，导致点"继续"完全没反应）
+    const isUsableAgent = (i: number) => {
+      const step = wf.workflow_steps[i];
+      return !!step && step.exec_type === "agent" && !!step.agents?.agent_code;
+    };
     let idx = s.currentStepIdx;
-    while (idx < wf.workflow_steps.length) {
-      const step = wf.workflow_steps[idx];
-      if (step.exec_type === "agent" && step.agents?.agent_code) break;
-      idx++;
+    while (idx < wf.workflow_steps.length && !isUsableAgent(idx)) idx++;
+    if (idx >= wf.workflow_steps.length) {
+      // forward 失败 → backward 找最近一个 agent
+      idx = Math.min(s.currentStepIdx, wf.workflow_steps.length - 1);
+      while (idx >= 0 && !isUsableAgent(idx)) idx--;
     }
-    if (idx >= wf.workflow_steps.length) return;
+    if (idx < 0) {
+      alert("该工作流没有可进入的智能体步骤，无法继续。请联系管理员检查工作流配置。");
+      return;
+    }
     const step = wf.workflow_steps[idx];
     window.location.assign(
       `/agents/${encodeURIComponent(step.agents!.agent_code)}?wf=${encodeURIComponent(s.workflow!.id)}&step=${idx}&session=${encodeURIComponent(s.id)}`
