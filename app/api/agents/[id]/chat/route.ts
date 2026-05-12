@@ -130,13 +130,16 @@ export const POST = withRequestLog(async (
     // 下次拼 messages 数组会出现连续两条 user，元器（及任何严格平台）400：
     // "请求消息中user与assistant角色没有交替出现"
     const rawHistory = (historyRows ?? []) as ChatMessage[];
+    // 5.12up · 去掉 user 消息开头的 [参考：xx]\n 标记 —— 这是前端 chip UI 用的标签，
+    // 不该让 AI 看到（否则 AI 会把它当成访问不了的链接 / 引用，影响回答质量）
+    const stripRefMarker = (content: string) => content.replace(/^\[参考：[^\]]+\]\n/, "");
     const history: ChatMessage[] = [];
     for (let i = 0; i < rawHistory.length; i++) {
       const cur = rawHistory[i];
       if (cur.role === "user") {
         const next = rawHistory[i + 1];
         if (next && next.role === "assistant") {
-          history.push(cur, next);
+          history.push({ ...cur, content: stripRefMarker(cur.content) }, next);
           i++; // 跳过 next
         }
         // 否则丢弃 dangling user
