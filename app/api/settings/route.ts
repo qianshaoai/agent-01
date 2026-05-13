@@ -7,7 +7,7 @@ export async function GET() {
     const { data } = await db
       .from("system_settings")
       .select("key, value")
-      .in("key", ["logo_url", "platform_name", "help_doc_url", "contact_qr_url", "contact_qr_text"]);
+      .in("key", ["logo_url", "platform_name", "help_doc_url", "contact_qr_url", "contact_qr_text", "login_showcase_url"]);
 
     const map: Record<string, string> = {};
     for (const row of data ?? []) {
@@ -20,6 +20,7 @@ export async function GET() {
       help_doc_url: map.help_doc_url ?? "",
       contact_qr_url: map.contact_qr_url ?? "",
       contact_qr_text: map.contact_qr_text ?? "扫码添加微信，获取专属服务",
+      login_showcase_url: map.login_showcase_url ?? "",
     });
   } catch {
     // 表不存在时（迁移未执行）返回默认值，避免前台报错
@@ -29,6 +30,7 @@ export async function GET() {
       help_doc_url: "",
       contact_qr_url: "",
       contact_qr_text: "扫码添加微信，获取专属服务",
+      login_showcase_url: "",
     });
   }
 }

@@ -35,9 +35,15 @@ export const POST = withRequestLog(async (req: NextRequest) => {
   }
 
   const newHash = await bcrypt.hash(newPassword, 12);
+  // 5.13up · 加 force_relogin_at —— 改完密码踢掉所有其他设备的 token；
+  // 当前设备靠下面的 buildClearCookieHeader + requireRelogin=true 引导重登（保持现有产品语义）。
   await db
     .from("users")
-    .update({ pwd_hash: newHash, first_login: false })
+    .update({
+      pwd_hash: newHash,
+      first_login: false,
+      force_relogin_at: new Date().toISOString(),
+    })
     .eq("id", user.userId);
 
   // Clear cookie to force re-login

@@ -3,12 +3,12 @@ import { useState, useEffect, useRef } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
-import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon, BookOpen, QrCode, Settings as SettingsIcon } from "lucide-react";
+import { Upload, CheckCircle2, AlertCircle, Image as ImageIcon, BookOpen, QrCode, Settings as SettingsIcon, Monitor } from "lucide-react";
 
-type Settings = { logo_url: string; platform_name: string; help_doc_url: string; contact_qr_url: string; contact_qr_text: string };
+type Settings = { logo_url: string; platform_name: string; help_doc_url: string; contact_qr_url: string; contact_qr_text: string; login_showcase_url: string };
 
 export default function AdminSettingsPage() {
-  const [settings, setSettings] = useState<Settings>({ logo_url: "", platform_name: "", help_doc_url: "", contact_qr_url: "", contact_qr_text: "" });
+  const [settings, setSettings] = useState<Settings>({ logo_url: "", platform_name: "", help_doc_url: "", contact_qr_url: "", contact_qr_text: "", login_showcase_url: "" });
   const [name, setName] = useState("");
   const [helpDocUrl, setHelpDocUrl] = useState("");
   const [contactQrText, setContactQrText] = useState("");
@@ -17,9 +17,11 @@ export default function AdminSettingsPage() {
   const [uploading, setUploading] = useState(false);
   const [qrUploading, setQrUploading] = useState(false);
   const [qrTextSaving, setQrTextSaving] = useState(false);
+  const [showcaseUploading, setShowcaseUploading] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const qrFileRef = useRef<HTMLInputElement>(null);
+  const showcaseFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch("/api/admin/settings")
@@ -125,6 +127,44 @@ export default function AdminSettingsPage() {
       flash("err", "操作失败，请重试");
     } finally {
       setQrUploading(false);
+    }
+  }
+
+  async function handleShowcaseFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // 2MB 前端软提示（后端 5MB 硬限）
+    if (file.size > 2 * 1024 * 1024) {
+      flash("err", `图片较大（${(file.size / 1024 / 1024).toFixed(1)}MB），建议压缩到 2MB 以内以加快加载`);
+    }
+    setShowcaseUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/admin/settings/login-showcase", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "上传失败");
+      setSettings((s) => ({ ...s, login_showcase_url: data.url }));
+      flash("ok", "登录页展示图已更新");
+    } catch (err: unknown) {
+      flash("err", err instanceof Error ? err.message : "上传失败，请重试");
+    } finally {
+      setShowcaseUploading(false);
+      if (showcaseFileRef.current) showcaseFileRef.current.value = "";
+    }
+  }
+
+  async function clearShowcase() {
+    setShowcaseUploading(true);
+    try {
+      const res = await fetch("/api/admin/settings/login-showcase", { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setSettings((s) => ({ ...s, login_showcase_url: "" }));
+      flash("ok", "已删除登录页展示图（恢复默认纯色）");
+    } catch {
+      flash("err", "操作失败，请重试");
+    } finally {
+      setShowcaseUploading(false);
     }
   }
 
@@ -356,6 +396,60 @@ export default function AdminSettingsPage() {
           {contactQrText !== settings.contact_qr_text && (
             <p className="mt-1 text-xs text-amber-600">有未保存的修改</p>
           )}
+        </div>
+
+        {/* 登录页展示图 */}
+        <div className="card p-6">
+          <h2 className="text-[15px] font-semibold text-gray-900 mb-1 flex items-center gap-2">
+            <Monitor size={15} className="text-[#002FA7]" /> 登录页展示图
+          </h2>
+          <p className="text-xs text-gray-500 mb-5">
+            登录页左侧大图区域 · 建议 <strong>横向 4:3</strong> · 推荐尺寸 <strong>约 800 × 600 px</strong> · 格式 <strong>PNG / JPG / WEBP</strong> · 大小不超过 <strong>5MB</strong>（建议 2MB 以内）· 留空则使用默认深蓝纯色
+          </p>
+
+          <div className="flex flex-col items-center gap-3">
+            <input
+              ref={showcaseFileRef}
+              type="file"
+              accept=".png,.jpg,.jpeg,.webp"
+              className="hidden"
+              onChange={handleShowcaseFileChange}
+            />
+            {/* 4:3 预览框 */}
+            <div className="w-full max-w-sm aspect-[4/3] rounded-[12px] overflow-hidden bg-[#001f7a] border border-gray-100 flex items-center justify-center relative">
+              {settings.login_showcase_url ? (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={settings.login_showcase_url}
+                    alt="登录页展示图"
+                    className="absolute inset-0 w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-black/15 pointer-events-none" />
+                </>
+              ) : (
+                <span className="text-white/40 text-xs">默认深蓝纯色（未配置展示图）</span>
+              )}
+            </div>
+            <Button
+              size="sm"
+              onClick={() => showcaseFileRef.current?.click()}
+              loading={showcaseUploading}
+              className="flex items-center gap-1.5"
+            >
+              <Upload size={14} />
+              {showcaseUploading ? "上传中…" : settings.login_showcase_url ? "替换展示图" : "上传展示图"}
+            </Button>
+            {settings.login_showcase_url && (
+              <button
+                onClick={clearShowcase}
+                disabled={showcaseUploading}
+                className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+              >
+                删除展示图（恢复默认纯色）
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </AdminLayout>

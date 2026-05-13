@@ -42,17 +42,18 @@ export async function POST(req: NextRequest) {
       ...(byUsername ?? []).filter((u) => !byPhone?.some((p) => p.id === u.id)),
     ];
 
+    // 5.13up · 收紧错误文案，消除账号枚举：未注册 / 密码错 / 多匹配 三种情况
+    // 一律返回相同的"账号或密码错误"。外部观察者无法判断手机号是否注册过、注册过几次。
+    // 保留的状态错误（已禁用 / 已注销 / 组织已禁用 / 组织已到期）只对已通过密码校验的真用户暴露。
     if (!matches || matches.length === 0) {
       recordLoginFail(rateKey);
-      return NextResponse.json({ error: "账号不存在，请先注册" }, { status: 401 });
+      return NextResponse.json({ error: "账号或密码错误" }, { status: 401 });
     }
 
     // 手机号在多个组织下重复时，要求改用用户名登录
     if (matches.length > 1) {
-      return NextResponse.json(
-        { error: "该手机号存在多个账号，请使用用户名登录" },
-        { status: 409 }
-      );
+      recordLoginFail(rateKey);
+      return NextResponse.json({ error: "账号或密码错误" }, { status: 401 });
     }
 
     const user = matches[0];
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest) {
     const ok = await bcrypt.compare(password, user.pwd_hash);
     if (!ok) {
       recordLoginFail(rateKey);
-      return NextResponse.json({ error: "密码错误" }, { status: 401 });
+      return NextResponse.json({ error: "账号或密码错误" }, { status: 401 });
     }
     // 登录成功，清空该 key 的失败记录
     clearLoginFail(rateKey);
