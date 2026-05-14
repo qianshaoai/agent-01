@@ -5,8 +5,10 @@ import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, CheckCircle2, AlertCircle, Save, Send, MessageSquare,
-  Settings2, Bot, Sparkles, ChevronRight, Loader2,
+  Settings2, Bot, Sparkles, ChevronRight, Loader2, X, Eraser, Rocket, ExternalLink,
 } from "lucide-react";
+
+type TestMsg = { role: "user" | "assistant"; content: string };
 
 // 5.14up PR-B · 智能体搭建器编辑页
 // 5 个分区：基础信息 / 模型设置 / 提示词设置 / 对话体验 / 发布设置
@@ -88,6 +90,23 @@ export default function AgentBuilderEditPage({
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // PR-C · 测试聊天 state
+  const [testHistory, setTestHistory] = useState<TestMsg[]>([]);
+  const [testInput, setTestInput] = useState("");
+  const [testStreaming, setTestStreaming] = useState(false);
+  const [testStreamingText, setTestStreamingText] = useState("");
+  const [testError, setTestError] = useState<string | null>(null);
+  const [testAbort, setTestAbort] = useState<AbortController | null>(null);
+
+  // PR-C · 发布 state
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState<{
+    agent_id: string;
+    agent_code: string | null;
+    republish: boolean;
+  } | null>(null);
 
   function flash(type: "ok" | "err", text: string) {
     setMsg({ type, text });
@@ -183,6 +202,141 @@ export default function AgentBuilderEditPage({
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, [dirty]);
 
+  // ─── PR-C · 测试聊天 ───────────────────────────────────────
+  async function sendTestChat() {
+    if (!draft) return;
+    const text = testInput.trim();
+    if (!text || testStreaming) return;
+    if (dirty) {
+      flash("err", "请先保存草稿再测试聊天，否则测试用的是上次保存的配置");
+      return;
+    }
+    if (draft.agent_type !== "chat") {
+      flash("err", "外链型智能体不支持测试聊天");
+      return;
+    }
+    if (!draft.provider_id) {
+      flash("err", "请先在「模型设置」选择模型供应商");
+      return;
+    }
+
+    const userMsg: TestMsg = { role: "user", content: text };
+    const history = [...testHistory, userMsg];
+    setTestHistory(history);
+    setTestInput("");
+    setTestStreaming(true);
+    setTestStreamingText("");
+    setTestError(null);
+
+    const abort = new AbortController();
+    setTestAbort(abort);
+
+    try {
+      const res = await fetch(`/api/admin/agent-drafts/${id}/test-chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: text,
+          history: testHistory, // 不含刚加的 userMsg，server 端会在末尾追加
+        }),
+        signal: abort.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let acc = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          try {
+            const obj = JSON.parse(payload);
+            if (obj.text) {
+              acc += obj.text;
+              setTestStreamingText(acc);
+            } else if (obj.error) {
+              throw new Error(obj.error);
+            }
+          } catch {
+            // 单行 JSON 解析失败忽略
+          }
+        }
+      }
+
+      // 流结束 → 把 acc 落到 history
+      if (acc) {
+        setTestHistory([...history, { role: "assistant", content: acc }]);
+      } else {
+        setTestError("上游返回空响应");
+      }
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : "测试失败";
+      if (errMsg !== "AbortError" && !errMsg.includes("aborted")) {
+        setTestError(errMsg);
+      }
+    } finally {
+      setTestStreaming(false);
+      setTestStreamingText("");
+      setTestAbort(null);
+    }
+  }
+
+  function stopTestChat() {
+    if (testAbort) {
+      testAbort.abort();
+    }
+  }
+
+  function clearTestChat() {
+    if (testStreaming) {
+      flash("err", "请先停止当前测试再清空");
+      return;
+    }
+    setTestHistory([]);
+    setTestError(null);
+    setTestStreamingText("");
+  }
+
+  // ─── PR-C · 发布 ───────────────────────────────────────────
+  async function doPublish() {
+    if (!draft) return;
+    if (dirty) {
+      flash("err", "请先保存草稿再发布");
+      return;
+    }
+    setPublishing(true);
+    try {
+      const res = await fetch(`/api/admin/agent-drafts/${id}/publish`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "发布失败");
+      setPublishResult({
+        agent_id: data.agent_id,
+        agent_code: data.agent_code ?? null,
+        republish: data.republish ?? false,
+      });
+      // 重新拉草稿，更新 status
+      load();
+    } catch (e: unknown) {
+      flash("err", e instanceof Error ? e.message : "发布失败");
+      setPublishOpen(false);
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   if (loading || !draft) {
     return (
       <AdminLayout>
@@ -220,11 +374,16 @@ export default function AgentBuilderEditPage({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              disabled
-              title="PR-C 发布功能即将上线"
-              className="px-3 h-9 rounded-[8px] text-sm text-gray-400 bg-gray-50 border border-gray-200 cursor-not-allowed inline-flex items-center gap-1.5"
+              onClick={() => {
+                if (dirty) { flash("err", "请先保存草稿再发布"); return; }
+                setPublishOpen(true);
+                setPublishResult(null);
+              }}
+              disabled={dirty || saving || draft.status === "archived"}
+              className="px-3 h-9 rounded-[8px] text-sm text-[#002FA7] bg-white border border-[#002FA7] hover:bg-[#002FA7]/5 disabled:text-gray-400 disabled:border-gray-200 disabled:bg-gray-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+              title={dirty ? "有未保存修改，先保存草稿" : "把当前草稿发布为正式智能体（默认 disabled，待 PR-D 启用）"}
             >
-              <Send size={14} /> 发布（即将上线）
+              <Rocket size={14} /> 发布
             </button>
             <Button onClick={save} loading={saving} className="flex items-center gap-1.5">
               <Save size={14} /> 保存草稿
@@ -470,24 +629,186 @@ export default function AgentBuilderEditPage({
             </section>
           </div>
 
-          {/* 右侧：测试聊天占位（PR-C 实现） */}
+          {/* 右侧：测试聊天面板（PR-C 已实现） */}
           <aside className="lg:sticky lg:top-4 self-start">
-            <div className="card p-5 min-h-[400px] flex flex-col">
-              <SectionTitle icon={<MessageSquare size={16} />} title="测试聊天" />
-              <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-400 py-12">
-                <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
-                  <MessageSquare size={20} />
+            <div className="card p-4 flex flex-col" style={{ height: "calc(100vh - 120px)" }}>
+              <div className="flex items-center justify-between mb-2">
+                <SectionTitle icon={<MessageSquare size={16} />} title="测试聊天" />
+                <div className="flex items-center gap-2">
+                  {selectedProvider && (
+                    <span className="text-[11px] text-gray-400">
+                      {selectedProvider.platform} · {(draft.model_params?.model as string) || selectedProvider.default_model || "默认"}
+                    </span>
+                  )}
+                  <button
+                    onClick={clearTestChat}
+                    disabled={testHistory.length === 0 || testStreaming}
+                    className="text-xs text-gray-400 hover:text-red-500 disabled:text-gray-200 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                    title="清空测试对话"
+                  >
+                    <Eraser size={12} /> 清空
+                  </button>
                 </div>
-                <p className="text-sm font-medium text-gray-500">测试聊天即将上线</p>
-                <p className="text-xs text-gray-400 mt-1">
-                  PR-C 阶段实现：在右侧用当前草稿配置试聊几句，<br />
-                  不入正式对话历史，不消耗用户额度。
-                </p>
+              </div>
+
+              {/* 消息列表 */}
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1 mb-2 text-sm">
+                {testHistory.length === 0 && !testStreamingText && !testError && (
+                  <div className="text-center text-gray-400 py-12">
+                    <Bot size={28} className="mx-auto mb-2 opacity-30" />
+                    <p className="text-xs">在下面发一条消息开始测试</p>
+                    <p className="text-[11px] mt-1">不入正式对话历史，不扣额度</p>
+                  </div>
+                )}
+                {testHistory.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`px-3 py-2 rounded-[10px] whitespace-pre-wrap break-words ${
+                      m.role === "user"
+                        ? "bg-[#002FA7] text-white ml-8"
+                        : "bg-gray-100 text-gray-800 mr-8"
+                    }`}
+                  >
+                    {m.content}
+                  </div>
+                ))}
+                {testStreamingText && (
+                  <div className="px-3 py-2 rounded-[10px] bg-gray-100 text-gray-800 mr-8 whitespace-pre-wrap break-words">
+                    {testStreamingText}
+                    <span className="inline-block w-1.5 h-3 bg-gray-400 ml-0.5 animate-pulse align-middle" />
+                  </div>
+                )}
+                {testError && (
+                  <div className="px-3 py-2 rounded-[10px] bg-red-50 text-red-600 text-xs whitespace-pre-wrap break-words mr-8">
+                    {testError}
+                  </div>
+                )}
+              </div>
+
+              {/* 输入区 */}
+              <div className="border-t border-gray-100 pt-3">
+                <textarea
+                  value={testInput}
+                  onChange={(e) => setTestInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      sendTestChat();
+                    }
+                  }}
+                  rows={2}
+                  placeholder={
+                    dirty
+                      ? "先保存草稿再测试…"
+                      : "Enter 发送，Shift+Enter 换行"
+                  }
+                  disabled={testStreaming || dirty}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-[8px] text-sm resize-none focus:outline-none focus:border-[#002FA7] disabled:bg-gray-50 disabled:text-gray-400"
+                />
+                <div className="flex items-center justify-between mt-2">
+                  <p className="text-[11px] text-gray-400">
+                    {dirty
+                      ? "⚠️ 有未保存修改"
+                      : testHistory.length > 0
+                        ? `本轮 ${testHistory.length / 2 | 0} 轮对话`
+                        : "测试不入库 / 不扣额度"}
+                  </p>
+                  {testStreaming ? (
+                    <Button size="sm" onClick={stopTestChat} className="bg-red-50 text-red-600 hover:bg-red-100 border-red-200">
+                      <X size={14} /> 停止
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={sendTestChat}
+                      disabled={!testInput.trim() || dirty}
+                      className="flex items-center gap-1"
+                    >
+                      <Send size={14} /> 发送
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           </aside>
         </div>
       </div>
+
+      {/* 发布弹窗 */}
+      {publishOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => !publishing && setPublishOpen(false)}
+        >
+          <div
+            className="bg-white rounded-[14px] shadow-2xl w-full max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-2">
+              <Rocket size={18} className="text-[#002FA7]" />
+              <h3 className="text-lg font-semibold text-gray-900">发布到正式智能体</h3>
+            </div>
+
+            {!publishResult ? (
+              <>
+                <div className="px-6 py-5 space-y-3 text-sm text-gray-700">
+                  <p>把当前草稿发布到正式 <code className="text-xs bg-gray-100 px-1 rounded">agents</code> 表，员工就能在前台看到它。</p>
+                  <div className="bg-amber-50 border border-amber-200 rounded-[8px] p-3 text-xs text-amber-900">
+                    ⚠️ <strong>本次发布的智能体默认禁用</strong>（enabled=false）。<br />
+                    PR-D 阶段把聊天链路适配到新的模型供应商体系后，再统一启用。这样可以避免「发布出来但聊不通」的体验断层。
+                  </div>
+                  {draft.status === "published" && (
+                    <p className="text-xs text-gray-500">
+                      该草稿之前发布过，会<strong>重新更新</strong>已有的智能体记录，不会重复创建。
+                    </p>
+                  )}
+                </div>
+                <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
+                  <button
+                    onClick={() => setPublishOpen(false)}
+                    disabled={publishing}
+                    className="px-4 h-9 rounded-[8px] text-sm text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed"
+                  >
+                    取消
+                  </button>
+                  <Button onClick={doPublish} loading={publishing} className="flex items-center gap-1.5">
+                    <Rocket size={14} /> 确认发布
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="px-6 py-5 space-y-3 text-sm">
+                  <div className="flex items-center gap-2 text-green-600">
+                    <CheckCircle2 size={18} />
+                    <span className="font-medium">
+                      {publishResult.republish ? "已重新发布" : "首次发布成功"}
+                    </span>
+                  </div>
+                  <div className="text-gray-700 space-y-1">
+                    <p>智能体 ID：<code className="text-xs bg-gray-100 px-1 rounded">{publishResult.agent_id}</code></p>
+                    {publishResult.agent_code && (
+                      <p>智能体编号：<code className="text-xs bg-gray-100 px-1 rounded">{publishResult.agent_code}</code></p>
+                    )}
+                    <p className="text-xs text-amber-600 mt-2">
+                      已写入 agents 表但默认 <strong>未启用</strong>，员工还看不到，待 PR-D 后启用。
+                    </p>
+                  </div>
+                </div>
+                <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
+                  <Link
+                    href={`/admin/agents`}
+                    className="px-4 h-9 rounded-[8px] text-sm text-[#002FA7] border border-[#002FA7] hover:bg-[#002FA7]/5 inline-flex items-center gap-1.5"
+                  >
+                    <ExternalLink size={14} /> 去智能体管理
+                  </Link>
+                  <Button onClick={() => setPublishOpen(false)}>关闭</Button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }
