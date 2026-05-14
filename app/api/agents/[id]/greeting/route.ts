@@ -46,7 +46,15 @@ export async function GET(
     return NextResponse.json({ prologue: null });
   }
 
-  const token = decrypt(agent.api_key_enc);
+  // 5.14up Fix 3 · decrypt 失败时不再返回密文穿透，而是抛错 → 这里要包 try-catch，
+  // 失败时静默走"无开场白"路径（跟 token 为空时一致），避免把内部错误传到前端 500
+  let token: string;
+  try {
+    token = decrypt(agent.api_key_enc);
+  } catch (e) {
+    console.warn(`[greeting] decrypt failed for ${agentCode}:`, e instanceof Error ? e.message : e);
+    return NextResponse.json({ prologue: null });
+  }
   if (!token) {
     return NextResponse.json({ prologue: null });
   }

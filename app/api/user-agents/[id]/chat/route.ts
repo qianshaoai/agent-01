@@ -45,6 +45,19 @@ export const POST = withRequestLog(async (
     (clientPlatformConvId as string) || (agent.platform_conv_id as string) || null;
   const encoder = new TextEncoder();
 
+  // 5.14up Fix 3 · 在打开 SSE 流之前先解密 API key；失败时返回 JSON 错误，
+  // 避免错误信息冒到 SSE 流暴露 "decrypt failed: ..." 内部文案给前端
+  let resolvedApiKey: string;
+  try {
+    resolvedApiKey = decrypt(agent.api_key_enc ?? "");
+  } catch (e) {
+    console.error(`[user-agents chat] decrypt failed for agent ${id}:`, e instanceof Error ? e.message : e);
+    return NextResponse.json(
+      { error: "该智能体 API key 不可用，请联系管理员或重新配置" },
+      { status: 503 },
+    );
+  }
+
   const stream = new ReadableStream({
     async start(controller) {
       try {
@@ -52,7 +65,7 @@ export const POST = withRequestLog(async (
         const gen = streamChat(messages, {
           platform: agent.platform ?? "openai",
           apiEndpoint: agent.api_url ?? "",
-          apiKey: decrypt(agent.api_key_enc ?? ""),
+          apiKey: resolvedApiKey,
           modelParams: (agent.model_params ?? {}) as Record<string, unknown>,
           agentCode: agent.id,
           platformConvId,
