@@ -11,6 +11,8 @@ pipeline {
         SUPABASE_ANON_KEY         = credentials('agent01_SUPABASE_ANON_KEY')
         SUPABASE_SERVICE_ROLE_KEY = credentials('agent01_SUPABASE_SERVICE_ROLE_KEY')
         JWT_SECRET                = credentials('agent01_JWT_SECRET')
+        // 5.14up Fix 3 · AES 加密 key 与 JWT_SECRET 解耦
+        ENCRYPTION_KEY            = credentials('agent01_ENCRYPTION_KEY')
         VOLCENGINE_API_KEY        = credentials('agent01_VOLCENGINE_API_KEY')
         // 4.28up 体验版智能体（Coze）配置
         TRIAL_AGENT_001_BOT_ID    = credentials('agent01_TRIAL_AGENT_001_BOT_ID')
@@ -98,6 +100,7 @@ pipeline {
 NEXT_PUBLIC_SUPABASE_ANON_KEY=${env.SUPABASE_ANON_KEY}
 SUPABASE_SERVICE_ROLE_KEY=${env.SUPABASE_SERVICE_ROLE_KEY}
 JWT_SECRET=${env.JWT_SECRET}
+ENCRYPTION_KEY=${env.ENCRYPTION_KEY}
 VOLCENGINE_API_KEY=${env.VOLCENGINE_API_KEY}
 TRIAL_AGENT_001_BOT_ID=${env.TRIAL_AGENT_001_BOT_ID}
 TRIAL_AGENT_001_API_TOKEN=${env.TRIAL_AGENT_001_API_TOKEN}
