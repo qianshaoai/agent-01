@@ -133,20 +133,36 @@ export async function validateUserTokenFreshness(
   }
 }
 
-/** Admin token 新鲜度校验（同样机制，对应 admins.force_relogin_at） */
+/**
+ * Admin token 新鲜度校验
+ * - 原生管理员（admins 表）→ 比对 admins.force_relogin_at
+ * - 被提升为管理员的普通用户（users 表，token.adminId === users.id）→ 回退比对 users.force_relogin_at
+ *   这条路径是 change-password route 对 users 表管理员改密时写的字段，必须一并查
+ */
 export async function validateAdminTokenFreshness(
   payload: AdminPayload
 ): Promise<boolean> {
   if (!payload.iat) return true;
   try {
-    const { data } = await db
+    const { data: adminRow } = await db
       .from("admins")
       .select("force_relogin_at")
       .eq("id", payload.adminId)
       .single();
-    if (!data || !data.force_relogin_at) return true;
+
+    let forceAt: string | null = adminRow?.force_relogin_at ?? null;
+    if (!adminRow) {
+      const { data: userRow } = await db
+        .from("users")
+        .select("force_relogin_at")
+        .eq("id", payload.adminId)
+        .single();
+      forceAt = userRow?.force_relogin_at ?? null;
+    }
+
+    if (!forceAt) return true;
     const tokenIatMs = payload.iat * 1000;
-    const forceAtMs = new Date(data.force_relogin_at).getTime();
+    const forceAtMs = new Date(forceAt).getTime();
     return tokenIatMs >= forceAtMs;
   } catch {
     return true;
