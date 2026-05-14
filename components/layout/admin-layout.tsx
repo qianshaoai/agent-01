@@ -16,6 +16,7 @@ import {
   Settings,
   Users,
   ClipboardList,
+  Plug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +31,8 @@ type AdminRole = "super_admin" | "system_admin" | "org_admin";
 
 const ALL_ROLES: AdminRole[] = ["super_admin", "system_admin", "org_admin"];
 const SUPER_ONLY: AdminRole[] = ["super_admin"];
+// 5.14up PR-A · 模型接入：super_admin 全部操作；system_admin 仅查看 + 测试连通性
+const SS_ROLES: AdminRole[] = ["super_admin", "system_admin"];
 
 const navGroups: NavGroup[] = [
   {
@@ -49,9 +52,10 @@ const navGroups: NavGroup[] = [
   {
     label: "内容",
     items: [
-      { href: "/admin/agents",    label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES },
-      { href: "/admin/workflows", label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES },
-      { href: "/admin/notices",   label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES },
+      { href: "/admin/model-providers", label: "模型接入",   icon: Plug,      allowedRoles: SS_ROLES },
+      { href: "/admin/agents",          label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES },
+      { href: "/admin/workflows",       label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES },
+      { href: "/admin/notices",         label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES },
     ],
   },
   {
