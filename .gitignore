@@ -52,3 +52,7 @@ supabase/.temp/
 
 # Local node compile cache
 .tmp/
+
+# Python 临时（.docx 生成脚本会产生 __pycache__）
+__pycache__/
+*.pyc
