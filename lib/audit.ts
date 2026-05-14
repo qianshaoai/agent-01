@@ -9,7 +9,9 @@ export type AuditResourceType =
   | "department" | "team" | "user_group"
   | "settings" | "resource_permission"
   // 5.14up PR-A · 平台级模型供应商（model_providers 表，无组织归属）
-  | "model_provider";
+  | "model_provider"
+  // 5.14up PR-B · 智能体草稿（搭建器使用）
+  | "agent_draft";
 
 /**
  * 5.11up · 写时反查资源所属的组织 code
