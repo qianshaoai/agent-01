@@ -96,6 +96,7 @@ export default function AuditLogsPage() {
 
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- loading spinner intentionally re-fires when filter/page deps change
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     if (resourceType !== "all") params.set("resourceType", resourceType);
