@@ -341,7 +341,9 @@ export default function ModelProvidersPage() {
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">名称 / 编号</th>
                   <th className="px-4 py-3 text-left font-medium">平台</th>
-                  <th className="px-4 py-3 text-left font-medium">默认模型</th>
+                  {activeTab === "model" && (
+                    <th className="px-4 py-3 text-left font-medium">默认模型</th>
+                  )}
                   <th className="px-4 py-3 text-left font-medium">API Key</th>
                   <th className="px-4 py-3 text-left font-medium">状态</th>
                   <th className="px-4 py-3 text-left font-medium">操作</th>
@@ -359,9 +361,11 @@ export default function ModelProvidersPage() {
                       <td className="px-4 py-3 text-gray-700">
                         {PLATFORM_LABEL[p.platform]?.split("（")[0] ?? p.platform}
                       </td>
-                      <td className="px-4 py-3 text-gray-700 font-mono text-xs">
-                        {p.default_model || "—"}
-                      </td>
+                      {activeTab === "model" && (
+                        <td className="px-4 py-3 text-gray-700 font-mono text-xs">
+                          {p.default_model || "—"}
+                        </td>
+                      )}
                       <td className="px-4 py-3">
                         {p.has_api_key ? (
                           <span className="inline-flex items-center gap-1 text-green-600 text-xs">
@@ -542,27 +546,34 @@ export default function ModelProvidersPage() {
                 <p className="text-[11px] text-gray-400">加密存储；保存后不可再次查看明文</p>
               </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs text-gray-500">默认模型</label>
-                <input
-                  type="text"
-                  value={form.default_model}
-                  onChange={(e) => setForm({ ...form, default_model: e.target.value })}
-                  placeholder="gpt-4o-mini"
-                  className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
-                />
-              </div>
+              {/* 默认模型 / 默认参数仅对「大模型 API」有意义；
+                  「智能体 API」（Coze/Dify/元器/清言）模型与参数都在平台侧 bot 上配，
+                  这里只是一个平台凭证，不显示这两个字段 */}
+              {form.category === "model" && (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-gray-500">默认模型</label>
+                    <input
+                      type="text"
+                      value={form.default_model}
+                      onChange={(e) => setForm({ ...form, default_model: e.target.value })}
+                      placeholder="gpt-4o-mini"
+                      className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
+                    />
+                  </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs text-gray-500">默认参数（JSON）</label>
-                <textarea
-                  value={form.default_params_json}
-                  onChange={(e) => setForm({ ...form, default_params_json: e.target.value })}
-                  rows={4}
-                  placeholder='{"temperature": 0.7, "max_tokens": 2000}'
-                  className="px-3 py-2 border border-gray-200 rounded-[8px] text-xs focus:outline-none focus:border-[#002FA7] font-mono"
-                />
-              </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-gray-500">默认参数（JSON）</label>
+                    <textarea
+                      value={form.default_params_json}
+                      onChange={(e) => setForm({ ...form, default_params_json: e.target.value })}
+                      rows={4}
+                      placeholder='{"temperature": 0.7, "max_tokens": 2000}'
+                      className="px-3 py-2 border border-gray-200 rounded-[8px] text-xs focus:outline-none focus:border-[#002FA7] font-mono"
+                    />
+                  </div>
+                </>
+              )}
 
               <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                 <input
