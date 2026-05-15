@@ -10,11 +10,19 @@ import { writeAuditLog } from "@/lib/audit";
 
 const ALLOWED_PLATFORMS = ["openai", "coze", "dify", "yuanqi", "qingyan", "zhipu"];
 
+// 5.15up API 管理模块 · category ↔ platform 映射
+const CATEGORY_PLATFORMS: Record<string, string[]> = {
+  model: ["openai", "zhipu"],
+  agent: ["coze", "dify", "yuanqi", "qingyan"],
+};
+const CATEGORY_LABEL: Record<string, string> = { model: "大模型 API", agent: "智能体 API" };
+
 type ProviderRow = {
   id: string;
   provider_code: string;
   name: string;
   platform: string;
+  category: string;
   api_endpoint: string;
   api_key_enc: string;
   default_model: string;
@@ -81,6 +89,12 @@ export async function PATCH(
     }
     patch.platform = body.platform;
   }
+  if (typeof body.category === "string") {
+    if (body.category !== "model" && body.category !== "agent") {
+      return apiError("API 类型必须是 大模型 API / 智能体 API 之一", "VALIDATION_ERROR");
+    }
+    patch.category = body.category;
+  }
   if (typeof body.api_endpoint === "string") {
     const endpoint = body.api_endpoint.trim();
     if (!endpoint) return apiError("接口地址不能为空", "VALIDATION_ERROR");
@@ -106,6 +120,25 @@ export async function PATCH(
 
   if (Object.keys(patch).length === 0) {
     return apiError("没有可更新的字段", "VALIDATION_ERROR");
+  }
+
+  // platform / category 任一变更 → 校验二者匹配（避免出现 category=model 却 platform=coze）
+  if ("platform" in patch || "category" in patch) {
+    const { data: cur, error: curErr } = await db
+      .from("model_providers")
+      .select("platform, category")
+      .eq("id", id)
+      .maybeSingle();
+    if (curErr) {
+      console.error("[model-providers update] load current failed", curErr);
+      return apiError("更新失败，请重试", "INTERNAL_ERROR");
+    }
+    if (!cur) return apiError("供应商不存在", "NOT_FOUND");
+    const effPlatform = (patch.platform as string) ?? cur.platform;
+    const effCategory = (patch.category as string) ?? cur.category ?? "model";
+    if (!CATEGORY_PLATFORMS[effCategory].includes(effPlatform)) {
+      return apiError(`平台「${effPlatform}」不属于${CATEGORY_LABEL[effCategory]}`, "VALIDATION_ERROR");
+    }
   }
 
   patch.updated_at = new Date().toISOString();

@@ -12,11 +12,14 @@ import {
 // 功能：列表、新增、编辑、启停、删除、测试连通性
 // 权限：super_admin 全部操作；system_admin 仅看 + 测试
 
+type ApiCategory = "model" | "agent";
+
 type Provider = {
   id: string;
   provider_code: string;
   name: string;
   platform: string;
+  category: string;
   api_endpoint: string;
   default_model: string;
   default_params: Record<string, unknown>;
@@ -26,14 +29,22 @@ type Provider = {
   updated_at: string;
 };
 
-const PLATFORM_OPTIONS = [
-  { value: "openai", label: "OpenAI（兼容协议 / GPT 系列 / 第三方中转）" },
-  { value: "zhipu", label: "智谱 GLM" },
-  { value: "coze", label: "扣子 Coze" },
-  { value: "dify", label: "Dify" },
-  { value: "yuanqi", label: "腾讯元器" },
-  { value: "qingyan", label: "智谱清言" },
+// 5.15up API 管理模块 · 平台按 category 分两类
+const PLATFORM_OPTIONS: { value: string; label: string; category: ApiCategory }[] = [
+  { value: "openai", label: "OpenAI（兼容协议 / GPT 系列 / 第三方中转）", category: "model" },
+  { value: "zhipu", label: "智谱 GLM", category: "model" },
+  { value: "coze", label: "扣子 Coze", category: "agent" },
+  { value: "dify", label: "Dify", category: "agent" },
+  { value: "yuanqi", label: "腾讯元器", category: "agent" },
+  { value: "qingyan", label: "智谱清言", category: "agent" },
 ];
+
+const CATEGORY_LABEL: Record<ApiCategory, string> = { model: "大模型 API", agent: "智能体 API" };
+
+/** 行 / 旧数据兜底归类（理论上 migration_v37 后都已有 category） */
+function catOf(c: string | undefined): ApiCategory {
+  return c === "agent" ? "agent" : "model";
+}
 
 const PLATFORM_LABEL = Object.fromEntries(PLATFORM_OPTIONS.map((p) => [p.value, p.label]));
 
@@ -51,6 +62,7 @@ type FormState = {
   provider_code: string;
   name: string;
   platform: string;
+  category: ApiCategory;
   api_endpoint: string;
   api_key: string;
   default_model: string;
@@ -58,16 +70,22 @@ type FormState = {
   enabled: boolean;
 };
 
-const EMPTY_FORM: FormState = {
-  provider_code: "",
-  name: "",
-  platform: "openai",
-  api_endpoint: "https://api.openai.com/v1/chat/completions",
-  api_key: "",
-  default_model: "gpt-4o-mini",
-  default_params_json: "{}",
-  enabled: true,
-};
+// 按 category 造一份空表单：平台 / endpoint / model 取该类首个平台的默认值
+function emptyFormFor(category: ApiCategory): FormState {
+  const platform = category === "model" ? "openai" : "coze";
+  const d = PLATFORM_DEFAULTS[platform];
+  return {
+    provider_code: "",
+    name: "",
+    platform,
+    category,
+    api_endpoint: d?.endpoint ?? "",
+    api_key: "",
+    default_model: d?.model ?? "",
+    default_params_json: "{}",
+    enabled: true,
+  };
+}
 
 type TestResult = { success: boolean; latency_ms: number; sample_text?: string; error?: string };
 
@@ -75,10 +93,12 @@ export default function ModelProvidersPage() {
   const [list, setList] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  // 5.15up · 大模型 API / 智能体 API 两 tab
+  const [activeTab, setActiveTab] = useState<ApiCategory>("model");
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [form, setForm] = useState<FormState>(() => emptyFormFor("model"));
   const [saving, setSaving] = useState(false);
 
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -115,7 +135,7 @@ export default function ModelProvidersPage() {
 
   function openCreate() {
     setEditingId(null);
-    setForm(EMPTY_FORM);
+    setForm(emptyFormFor(activeTab));
     setEditorOpen(true);
   }
 
@@ -125,6 +145,7 @@ export default function ModelProvidersPage() {
       provider_code: p.provider_code,
       name: p.name,
       platform: p.platform,
+      category: catOf(p.category),
       api_endpoint: p.api_endpoint,
       api_key: "", // 留空 = 不修改
       default_model: p.default_model,
@@ -154,6 +175,7 @@ export default function ModelProvidersPage() {
       const payload: Record<string, unknown> = {
         name: form.name,
         platform: form.platform,
+        category: form.category,
         api_endpoint: form.api_endpoint,
         default_model: form.default_model,
         default_params: defaultParams,
@@ -259,19 +281,43 @@ export default function ModelProvidersPage() {
     }
   }
 
+  // 当前 tab 下可见的列表
+  const visible = list.filter((p) => catOf(p.category) === activeTab);
+
   return (
     <AdminLayout>
       <div className="max-w-6xl space-y-6">
         <PageHeader
           icon={<Plug size={20} />}
-          title="模型接入"
-          subtitle="集中管理各家大模型的接入地址、API Key、默认参数"
+          title="API 管理"
+          subtitle="集中管理大模型 / 智能体平台的接入地址、API Key、默认参数"
           actions={
             <Button onClick={openCreate} className="flex items-center gap-1.5">
-              <Plus size={16} /> 新增供应商
+              <Plus size={16} /> 新增{CATEGORY_LABEL[activeTab]}
             </Button>
           }
         />
+
+        {/* 5.15up · 大模型 API / 智能体 API 两 tab */}
+        <div className="flex gap-1 border-b border-gray-200">
+          {(["model", "agent"] as ApiCategory[]).map((c) => {
+            const count = list.filter((p) => catOf(p.category) === c).length;
+            return (
+              <button
+                key={c}
+                onClick={() => setActiveTab(c)}
+                className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  activeTab === c
+                    ? "border-[#002FA7] text-[#002FA7]"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {CATEGORY_LABEL[c]}
+                <span className="ml-1.5 text-xs text-gray-400">{count}</span>
+              </button>
+            );
+          })}
+        </div>
 
         {msg && (
           <div className={`flex items-center gap-2 px-4 py-3 rounded-[10px] text-sm ${msg.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
@@ -284,9 +330,9 @@ export default function ModelProvidersPage() {
           <div className="flex items-center justify-center py-20 text-gray-400">
             <Loader2 className="animate-spin mr-2" size={20} /> 加载中…
           </div>
-        ) : list.length === 0 ? (
+        ) : visible.length === 0 ? (
           <div className="card p-12 text-center text-gray-400">
-            还没有任何模型供应商，点右上角「新增供应商」开始配置
+            还没有任何{CATEGORY_LABEL[activeTab]}，点右上角「新增{CATEGORY_LABEL[activeTab]}」开始配置
           </div>
         ) : (
           <div className="card overflow-hidden">
@@ -302,7 +348,7 @@ export default function ModelProvidersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {list.map((p) => {
+                {visible.map((p) => {
                   const tr = testResults[p.id];
                   return (
                     <tr key={p.id} className={p.enabled ? "" : "opacity-50"}>
@@ -406,7 +452,7 @@ export default function ModelProvidersPage() {
           >
             <div className="px-6 py-4 border-b border-gray-100">
               <h3 className="text-lg font-semibold text-gray-900">
-                {editingId ? "编辑模型供应商" : "新增模型供应商"}
+                {(editingId ? "编辑" : "新增") + CATEGORY_LABEL[form.category]}
               </h3>
             </div>
             <div className="px-6 py-5 space-y-4">
@@ -464,7 +510,7 @@ export default function ModelProvidersPage() {
                   }}
                   className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
                 >
-                  {PLATFORM_OPTIONS.map((p) => (
+                  {PLATFORM_OPTIONS.filter((p) => p.category === form.category).map((p) => (
                     <option key={p.value} value={p.value}>{p.label}</option>
                   ))}
                 </select>

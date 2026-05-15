@@ -12,11 +12,20 @@ import { writeAuditLog } from "@/lib/audit";
 
 const ALLOWED_PLATFORMS = ["openai", "coze", "dify", "yuanqi", "qingyan", "zhipu"];
 
+// 5.15up API 管理模块 · category ↔ platform 映射
+//   model = 大模型 API，agent = 智能体 API
+const CATEGORY_PLATFORMS: Record<string, string[]> = {
+  model: ["openai", "zhipu"],
+  agent: ["coze", "dify", "yuanqi", "qingyan"],
+};
+const CATEGORY_LABEL: Record<string, string> = { model: "大模型 API", agent: "智能体 API" };
+
 type ProviderRow = {
   id: string;
   provider_code: string;
   name: string;
   platform: string;
+  category: string;
   api_endpoint: string;
   api_key_enc: string;
   default_model: string;
@@ -32,17 +41,24 @@ function sanitize(row: ProviderRow) {
   return { ...rest, has_api_key: Boolean(api_key_enc) };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
   if (admin.role === "org_admin") {
     return apiError("无权查看模型供应商", "FORBIDDEN");
   }
 
-  const { data, error } = await db
+  // ?category=model|agent → 只返回该类（API 管理两 tab 用）；不带则全返
+  const category = req.nextUrl.searchParams.get("category");
+  let query = db
     .from("model_providers")
     .select("*")
     .order("created_at", { ascending: false });
+  if (category === "model" || category === "agent") {
+    query = query.eq("category", category);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     console.error("[model-providers list]", error);
@@ -65,6 +81,7 @@ export async function POST(req: NextRequest) {
   const provider_code = String(body.provider_code ?? "").trim();
   const name = String(body.name ?? "").trim();
   const platform = String(body.platform ?? "").trim();
+  const category = String(body.category ?? "model").trim();
   const api_endpoint = String(body.api_endpoint ?? "").trim();
   const api_key = String(body.api_key ?? "");
   const default_model = String(body.default_model ?? "").trim();
@@ -78,8 +95,14 @@ export async function POST(req: NextRequest) {
     return apiError("供应商编号只允许英文字母、数字、下划线、短横线", "VALIDATION_ERROR");
   }
   if (!name) return apiError("供应商名称不能为空", "VALIDATION_ERROR");
+  if (category !== "model" && category !== "agent") {
+    return apiError("API 类型必须是 大模型 API / 智能体 API 之一", "VALIDATION_ERROR");
+  }
   if (!ALLOWED_PLATFORMS.includes(platform)) {
     return apiError(`平台类型必须是 ${ALLOWED_PLATFORMS.join(" / ")} 之一`, "VALIDATION_ERROR");
+  }
+  if (!CATEGORY_PLATFORMS[category].includes(platform)) {
+    return apiError(`平台「${platform}」不属于${CATEGORY_LABEL[category]}`, "VALIDATION_ERROR");
   }
   if (!api_endpoint) return apiError("接口地址不能为空", "VALIDATION_ERROR");
   if (!api_key) return apiError("API Key 不能为空", "VALIDATION_ERROR");
@@ -100,6 +123,7 @@ export async function POST(req: NextRequest) {
       provider_code,
       name,
       platform,
+      category,
       api_endpoint,
       api_key_enc: encrypt(api_key),
       default_model,
@@ -124,7 +148,7 @@ export async function POST(req: NextRequest) {
     resourceType: "model_provider",
     resourceId: data.id,
     resourceName: name,
-    detail: { provider_code, platform, default_model },
+    detail: { provider_code, platform, category, default_model },
   });
 
   return NextResponse.json(sanitize(data as ProviderRow));
