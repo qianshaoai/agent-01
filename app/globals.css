@@ -313,7 +313,15 @@ table td, table th { vertical-align: middle; }
   font-size: 13px;
   color: rgb(31 41 55);
 }
-.trial-md table { border-collapse: collapse; margin: 0.6em 0; font-size: 0.9em; }
+/* 宽表格在气泡内自己横向滚，不撑破气泡导致整页横向滚动条 */
+.trial-md table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 0.9em;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
 .trial-md th, .trial-md td {
   border: 1px solid rgb(229 231 235);
   padding: 0.4em 0.7em;

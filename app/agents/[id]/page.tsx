@@ -109,8 +109,8 @@ const ChatMessage = memo(function ChatMessage({
       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-[#002FA7] text-white" : "bg-gray-100 text-gray-600"}`}>
         {msg.role === "user" ? <User size={15} /> : <Bot size={15} />}
       </div>
-      <div className={`max-w-[75%] flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
-        <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
+      <div className={`max-w-[75%] min-w-0 flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
+        <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed min-w-0 break-words ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
           {/* 用户消息：先渲染图片缩略 + 文件 chip（如果有），再渲染正文 */}
           {/* 5.12up · 进度条参考 chip：保留在历史消息里，让回看时知道这条带了参考 */}
           {!isAssistant && msg.stepReference && (
@@ -1920,7 +1920,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
             </div>
           )}
 
-          <div ref={messageScrollRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-6 relative bg-[#f8f9fc]">
+          <div ref={messageScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-6 space-y-6 relative bg-[#f8f9fc]">
             {/* P1: 拖拽上传遮罩 — 仅覆盖消息滚动区，**不**遮挡下方输入区，
                 避免遮罩万一卡住时挡到 paperclip */}
             {dragOver && (
