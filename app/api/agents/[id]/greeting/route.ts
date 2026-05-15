@@ -30,13 +30,35 @@ export async function GET(
 
   const { data: agent } = await db
     .from("agents")
-    .select("agent_code, platform, api_key_enc, model_params, enabled")
+    .select("agent_code, platform, api_key_enc, model_params, builder_config, provider_id, enabled")
     .eq("agent_code", agentCode)
     .eq("enabled", true)
     .single();
 
-  // agent 不存在 / 已禁用 / 非 Coze → 静默返回 null（前端拿到就当没开场白处理）
-  if (!agent || agent.platform !== "coze") {
+  if (!agent) {
+    return NextResponse.json({ prologue: null });
+  }
+
+  // 5.14up PR-D · 优先返回 builder_config.opening_message（搭建器统一设置的开场白）
+  // 这是平台层面的开场白，不依赖具体厂商，PR-C 发布的 agent 直接用这条
+  const builderConfig = (agent.builder_config ?? {}) as Record<string, unknown>;
+  const opening = typeof builderConfig.opening_message === "string"
+    ? builderConfig.opening_message.trim()
+    : "";
+  const suggested = Array.isArray(builderConfig.suggested_questions)
+    ? (builderConfig.suggested_questions as unknown[]).filter(
+        (q): q is string => typeof q === "string" && q.trim().length > 0
+      )
+    : [];
+  if (opening) {
+    return NextResponse.json({
+      prologue: opening,
+      suggested_questions: suggested,
+    });
+  }
+
+  // 老路径：非 Coze 智能体直接返回 null
+  if (agent.platform !== "coze") {
     return NextResponse.json({ prologue: null });
   }
 

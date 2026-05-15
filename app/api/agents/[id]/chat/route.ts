@@ -217,15 +217,59 @@ export const POST = withRequestLog(async (
     // ── 6. 流式调用 AI ────────────────────────────────────────
     // 5.14up Fix 3 · 在打开 SSE 流之前先解密 API key；失败时返回 JSON 错误，
     // 避免进入 stream 后才抛错把"decrypt failed: ..."这种内部信息推到前端
+    // 5.14up PR-D · 配置解析优先级：
+    //   1) agent 自带 api_key_enc → 用 agent 的 platform/endpoint/key/params（旧路径，兼容所有历史 agent）
+    //   2) agent.provider_id 存在 → 用 model_providers（PR-C 发布的新 agent）
+    //   3) platform="openai" + 租户 openai_key_enc → 用租户 key（老兜底）
+    //   4) 都没有 → 503
+    let resolvedPlatform: string = agent.platform;
+    let resolvedEndpoint: string = agent.api_endpoint;
     let resolvedApiKey: string;
+    let resolvedModelParams: Record<string, unknown> = (agent.model_params ?? {}) as Record<string, unknown>;
+
     try {
-      resolvedApiKey = decrypt(agent.api_key_enc);
+      if (agent.api_key_enc) {
+        resolvedApiKey = decrypt(agent.api_key_enc);
+      } else if (agent.provider_id) {
+        const { data: provider, error: provErr } = await db
+          .from("model_providers")
+          .select("platform, api_endpoint, api_key_enc, default_params, enabled")
+          .eq("id", agent.provider_id)
+          .maybeSingle();
+        if (provErr) {
+          console.error(`[chat] load provider failed for ${agent.agent_code}:`, provErr.message);
+          return NextResponse.json({ error: "加载模型供应商失败，请稍后重试" }, { status: 503 });
+        }
+        if (!provider) return NextResponse.json({ error: "智能体绑定的模型供应商已删除" }, { status: 503 });
+        if (!provider.enabled) return NextResponse.json({ error: "智能体绑定的模型供应商已禁用" }, { status: 503 });
+        if (!provider.api_key_enc) return NextResponse.json({ error: "智能体绑定的模型供应商未配置 API Key" }, { status: 503 });
+        resolvedPlatform = provider.platform;
+        resolvedEndpoint = provider.api_endpoint;
+        resolvedApiKey = decrypt(provider.api_key_enc);
+        resolvedModelParams = {
+          ...((provider.default_params ?? {}) as Record<string, unknown>),
+          ...((agent.model_params ?? {}) as Record<string, unknown>),
+        };
+      } else if (agent.platform === "openai" && user.tenantCode) {
+        const { data: tCfg } = await db
+          .from("tenants")
+          .select("openai_key_enc")
+          .eq("code", user.tenantCode)
+          .single();
+        if (!tCfg?.openai_key_enc) {
+          return NextResponse.json({ error: "智能体未配置 API Key，请联系管理员" }, { status: 503 });
+        }
+        resolvedApiKey = decrypt(tCfg.openai_key_enc);
+      } else {
+        return NextResponse.json({ error: "智能体未配置模型 API，请联系管理员" }, { status: 503 });
+      }
     } catch (e) {
       console.error(`[chat] decrypt failed for ${agent.agent_code}:`, e instanceof Error ? e.message : e);
-      return NextResponse.json(
-        { error: "该智能体 API key 不可用，请联系管理员" },
-        { status: 503 },
-      );
+      return NextResponse.json({ error: "该智能体 API key 不可用，请联系管理员" }, { status: 503 });
+    }
+
+    if (!resolvedApiKey) {
+      return NextResponse.json({ error: "智能体 API Key 为空，请联系管理员" }, { status: 503 });
     }
 
     const encoder = new TextEncoder();
@@ -236,10 +280,10 @@ export const POST = withRequestLog(async (
       async start(controller) {
         try {
           const gen = streamChat(messages, {
-            platform: agent.platform,
-            apiEndpoint: agent.api_endpoint,
+            platform: resolvedPlatform,
+            apiEndpoint: resolvedEndpoint,
             apiKey: resolvedApiKey,
-            modelParams: (agent.model_params ?? {}) as Record<string, unknown>,
+            modelParams: resolvedModelParams,
             agentCode: agent.agent_code,
             platformConvId,
             onPlatformConvId: (id) => { newPlatformConvId = id; },
