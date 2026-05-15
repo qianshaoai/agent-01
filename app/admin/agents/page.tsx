@@ -349,7 +349,13 @@ export default function AgentsAdminPage() {
         : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
-      setShowAgentModal(false); load(); toast(editing ? "智能体已更新" : "智能体已创建");
+      setShowAgentModal(false); load();
+      // 平台变更导致原命名 API 绑定类型不符、被后端自动解绑 → 提示重新配置
+      if (data.providerUnbound) {
+        toast("智能体已更新；平台已变更，原 API 绑定类型不符已自动解除，请在「API 配置」里重新选择");
+      } else {
+        toast(editing ? "智能体已更新" : "智能体已创建");
+      }
     } finally { setSaving(false); }
   }
 

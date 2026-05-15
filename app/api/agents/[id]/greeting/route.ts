@@ -68,11 +68,26 @@ export async function GET(
     return NextResponse.json({ prologue: null });
   }
 
-  // 5.14up Fix 3 · decrypt 失败时不再返回密文穿透，而是抛错 → 这里要包 try-catch，
-  // 失败时静默走"无开场白"路径（跟 token 为空时一致），避免把内部错误传到前端 500
+  // 5.15up · 与 chat route 对齐的 key 解析：provider_id 非空时**严格**从 provider 取 key，
+  // provider 删除/禁用/无 key/解密失败 → 返回无开场白（warn 记录），**不 fallback 旧 key**。
+  // 否则集中禁用/更新 key 后，开场白这条链路仍会拿旧 key 绕过集中管理。
+  // Fix 3 · decrypt 失败抛错，用 try-catch 兜成"无开场白"，不把内部错误透到前端。
   let token: string;
   try {
-    token = decrypt(agent.api_key_enc);
+    if (agent.provider_id) {
+      const { data: provider, error: provErr } = await db
+        .from("model_providers")
+        .select("api_key_enc, enabled")
+        .eq("id", agent.provider_id)
+        .maybeSingle();
+      if (provErr || !provider || !provider.enabled || !provider.api_key_enc) {
+        console.warn(`[greeting] provider 不可用 for ${agentCode} (provider_id=${agent.provider_id})`);
+        return NextResponse.json({ prologue: null });
+      }
+      token = decrypt(provider.api_key_enc);
+    } else {
+      token = decrypt(agent.api_key_enc);
+    }
   } catch (e) {
     console.warn(`[greeting] decrypt failed for ${agentCode}:`, e instanceof Error ? e.message : e);
     return NextResponse.json({ prologue: null });

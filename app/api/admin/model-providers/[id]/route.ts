@@ -185,32 +185,37 @@ export async function DELETE(
 
   const { id } = await params;
 
-  // 引用扫描：被 agents.provider_id / agent_drafts.provider_id 引用时禁止硬删，
-  // 改建议禁用（前端 UI 给出友好提示）
-  const { data: refAgents } = await db
+  // 引用扫描：被 agents.provider_id / agent_drafts.provider_id 引用时禁止硬删。
+  // 注意：head:true 的查询，行数在响应的 `count` 字段上，**不在 data 里**；
+  // 之前误读 data.count（恒为 null）→ 引用检查失效，被引用的 provider 会被硬删，
+  // 外键 ON DELETE SET NULL 把 agent 静默解绑、回落旧 key，绕过集中管理。
+  const { count: agentRefCount, error: agentRefErr } = await db
     .from("agents")
     .select("id", { count: "exact", head: true })
     .eq("provider_id", id);
-  if ((refAgents as unknown as { count?: number } | null)?.count) {
+  if (agentRefErr) {
+    console.error("[model-providers delete] 引用检查(agents) 失败", agentRefErr);
+    return apiError("引用检查失败，请重试", "INTERNAL_ERROR");
+  }
+  if (agentRefCount && agentRefCount > 0) {
     return apiError(
-      `该供应商被 ${(refAgents as unknown as { count: number }).count} 个智能体引用，请先解除引用或改为禁用`,
+      `该供应商被 ${agentRefCount} 个智能体引用，请先解除引用或改为禁用`,
       "VALIDATION_ERROR"
     );
   }
-  // agent_drafts 表 PR-B 才有，这里先 try 一下，不存在 / 报错都跳过
-  try {
-    const { data: refDrafts } = await db
-      .from("agent_drafts")
-      .select("id", { count: "exact", head: true })
-      .eq("provider_id", id);
-    if ((refDrafts as unknown as { count?: number } | null)?.count) {
-      return apiError(
-        `该供应商被 ${(refDrafts as unknown as { count: number }).count} 个智能体草稿引用，请先解除引用或改为禁用`,
-        "VALIDATION_ERROR"
-      );
-    }
-  } catch {
-    // agent_drafts 表还没建（PR-B 之前），忽略
+  const { count: draftRefCount, error: draftRefErr } = await db
+    .from("agent_drafts")
+    .select("id", { count: "exact", head: true })
+    .eq("provider_id", id);
+  if (draftRefErr) {
+    console.error("[model-providers delete] 引用检查(agent_drafts) 失败", draftRefErr);
+    return apiError("引用检查失败，请重试", "INTERNAL_ERROR");
+  }
+  if (draftRefCount && draftRefCount > 0) {
+    return apiError(
+      `该供应商被 ${draftRefCount} 个智能体草稿引用，请先解除引用或改为禁用`,
+      "VALIDATION_ERROR"
+    );
   }
 
   // 取一份名字用于审计
