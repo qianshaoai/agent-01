@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon, GitBranch, Trash2, AlertTriangle } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight } from "lucide-react";
 
 type WorkflowRef = { id: string; name: string };
 type UsedByEntry = { id: string; name: string; stepCount: number };
@@ -297,6 +297,27 @@ export default function AgentsAdminPage() {
     }
   }
 
+  // 5.14up PR-D 配套 · 启用/禁用切换
+  // 后端 PATCH /api/admin/agents/[id] 已支持 enabled 字段 + 自动写审计
+  async function toggleAgentEnabled(agent: Agent) {
+    try {
+      const res = await fetch(`/api/admin/agents/${agent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !agent.enabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(data.error ?? "切换失败");
+        return;
+      }
+      toast(agent.enabled ? "已禁用" : "已启用");
+      load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "切换失败");
+    }
+  }
+
   async function handleSaveAgent() {
     setFormError("");
     if (!form.name || !form.platform) { setFormError("请填写名称和平台"); return; }
@@ -566,6 +587,14 @@ export default function AgentsAdminPage() {
                             <span className="text-xs text-gray-300">仅可查看</span>
                           ) : (
                           <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => toggleAgentEnabled(a)}
+                              className={`p-1.5 rounded-[8px] transition-colors ${a.enabled ? "text-green-600 hover:bg-green-50" : "text-gray-400 hover:bg-gray-100"}`}
+                              title={a.enabled ? "已启用，点击禁用" : "已禁用，点击启用"}
+                              aria-label={a.enabled ? "禁用" : "启用"}
+                            >
+                              {a.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                            </button>
                             <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
                             {a.agent_type !== "external" && (
                               <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置" aria-label="API 配置"><Key size={14} /></button>

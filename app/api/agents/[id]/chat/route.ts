@@ -47,13 +47,22 @@ export const POST = withRequestLog(async (
 
     // ── 2. 配额检查 ────────────────────────────────────────────
     if (!user.isPersonal) {
-      const { data: tenant } = await db
+      // 5.15up bugfix · 区分"DB 故障"和"组织不存在/禁用"
+      // 之前 `.single()` 在 ECONNRESET 时也返回 data:null，被误报为"组织账号已禁用"
+      const { data: tenant, error: tenantErr } = await db
         .from("tenants")
         .select("quota, quota_used, expires_at, enabled")
         .eq("code", user.tenantCode)
-        .single();
+        .maybeSingle();
 
-      if (!tenant || !tenant.enabled) {
+      if (tenantErr) {
+        console.error("[chat] load tenant failed:", tenantErr.message);
+        return NextResponse.json({ error: "加载组织信息失败，请稍后重试" }, { status: 503 });
+      }
+      if (!tenant) {
+        return NextResponse.json({ error: "组织不存在" }, { status: 403 });
+      }
+      if (!tenant.enabled) {
         return NextResponse.json({ error: "组织账号已禁用" }, { status: 403 });
       }
       if (new Date(tenant.expires_at) < new Date()) {
