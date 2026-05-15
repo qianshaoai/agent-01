@@ -812,7 +812,7 @@ export default function AgentsAdminPage() {
                   value={apiForm.providerId}
                   onChange={(e) => setApiForm({ ...apiForm, providerId: e.target.value })}
                 >
-                  <option value="">未绑定（使用下方历史配置兜底）</option>
+                  <option value="">未绑定</option>
                   {apiProviders.map((p) => (
                     <option key={p.id} value={p.id} disabled={!p.enabled}>
                       {p.name}（{p.platform}）{p.enabled ? "" : " · 已禁用"}
@@ -827,17 +827,9 @@ export default function AgentsAdminPage() {
                 >
                   去「API 管理」新建 / 更新 API →
                 </a>
-              </div>
-
-              {/* 历史配置：只读，仅未绑定命名 API 时兜底生效 */}
-              <div className="rounded-[12px] bg-gray-50 border border-gray-100 px-4 py-3 text-xs text-gray-500 space-y-1">
-                <div className="font-medium text-gray-600">历史配置（只读）</div>
-                <div>接口地址：{showApiModal.api_endpoint || "—"}</div>
-                <div>历史 Key：{showApiModal.api_key_masked || "未配置"}</div>
-                <div className="text-gray-400">
-                  绑定命名 API 后聊天走命名 API；历史 Key 仅在未绑定时兜底，且不可再在此覆盖。
-                  如需更新 Key，请在「API 管理」里改对应命名 API。
-                </div>
+                <p className="text-[11px] text-gray-400">
+                  API Key 统一在「API 管理」里命名维护，此处选择引用即可。
+                </p>
               </div>
 
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">模型参数（JSON）</label><textarea rows={4} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none" value={apiForm.modelParams} onChange={(e) => setApiForm({ ...apiForm, modelParams: e.target.value })} /></div>
