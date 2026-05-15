@@ -313,14 +313,29 @@ async function* openaiCompatibleStream(
     max_tokens: config.modelParams["max_tokens"] ?? 2000,
   };
 
-  const res = await fetch(config.apiEndpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  // 5.15up · dev 期网络抖动重试（仅在 fetch throw 时重试 2 次，HTTP 错误不重试）
+  // 跟 lib/db.ts 的 retryingFetch 同思路：fetch 已经 resolve 就不动 stream
+  let res: Response;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      res = await fetch(config.apiEndpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+    }
+  }
+  if (lastErr) throw lastErr;
+  res = res!;
 
   if (!res.ok) {
     throw new Error(`API error: ${res.status} ${await res.clone().text()}`);

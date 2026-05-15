@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { streamChat, ChatMessage } from "@/lib/adapters";
 import { decrypt } from "@/lib/crypto";
 import { withRequestLog } from "@/lib/request-logger";
+import { humanizeChatError } from "@/lib/chat-error";
 
 export const POST = withRequestLog(async (
   req: NextRequest,
@@ -86,7 +87,9 @@ export const POST = withRequestLog(async (
         // 把 conversation_id 返回给客户端，客户端内存中记住，下次请求带上
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, platformConvId: newPlatformConvId ?? platformConvId })}\n\n`));
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : "AI 调用失败";
+        // 5.15up · 错误信息中文化
+        const rawMsg = err instanceof Error ? err.message : "AI 调用失败";
+        const errMsg = humanizeChatError(rawMsg);
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errMsg })}\n\n`));
       } finally {
         controller.close();

@@ -6,6 +6,7 @@ import { decrypt } from "@/lib/crypto";
 import { withRequestLog } from "@/lib/request-logger";
 
 import { CHAT } from "@/lib/config";
+import { humanizeChatError } from "@/lib/chat-error";
 const MAX_CONTEXT_TURNS = CHAT.MAX_CONTEXT_TURNS;
 
 export const POST = withRequestLog(async (
@@ -347,7 +348,9 @@ export const POST = withRequestLog(async (
 
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, conversationId: convId })}\n\n`));
         } catch (err) {
-          const errMsg = err instanceof Error ? err.message : "AI 调用失败";
+          const rawMsg = err instanceof Error ? err.message : "AI 调用失败";
+          // 5.15up · 把英文/技术性错误翻译成员工能看懂的中文
+          const errMsg = humanizeChatError(rawMsg);
           // 4.30up：判断是否为 client abort——req.signal.aborted 为 true 即用户点了停止
           // abort 时入库已累积的 partial assistant + 把 user 也标 aborted=true，
           // 让"退出重进"后还能看到这条被中断的消息（带已停止徽章），同时下次 chat 历史
