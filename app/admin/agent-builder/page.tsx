@@ -45,16 +45,25 @@ export default function AgentBuilderListPage() {
 
   const loadList = useCallback(async () => {
     setLoading(true);
-    try {
-      const res = await fetch("/api/admin/agent-drafts", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "加载失败");
-      setList(data.data ?? []);
-    } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "加载失败");
-    } finally {
-      setLoading(false);
+    // 重试 3 次：Supabase 在国内代理下间歇 ECONNRESET，单次失败概率高
+    // 三次都失败才 flash err，避免每次刷新都误报"获取列表失败"
+    let lastErr: unknown = null;
+    for (let i = 0; i < 3; i++) {
+      try {
+        const res = await fetch("/api/admin/agent-drafts", { cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "加载失败");
+        setList(data.data ?? []);
+        setMsg(null);
+        setLoading(false);
+        return;
+      } catch (e: unknown) {
+        lastErr = e;
+        if (i < 2) await new Promise((r) => setTimeout(r, 300));
+      }
     }
+    flash("err", lastErr instanceof Error ? lastErr.message : "加载失败");
+    setLoading(false);
   }, []);
 
   useEffect(() => { loadList(); }, [loadList]);
@@ -103,6 +112,8 @@ export default function AgentBuilderListPage() {
       await loadList();
     } catch (e: unknown) {
       flash("err", e instanceof Error ? e.message : "删除失败");
+      // 失败也刷一下列表：可能是 stale 数据（DB 里草稿其实早不在了，前端没同步）
+      await loadList();
     }
   }
 

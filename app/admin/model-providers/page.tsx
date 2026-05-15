@@ -37,6 +37,16 @@ const PLATFORM_OPTIONS = [
 
 const PLATFORM_LABEL = Object.fromEntries(PLATFORM_OPTIONS.map((p) => [p.value, p.label]));
 
+// 各平台的默认 endpoint / model（切换平台时自动填）
+const PLATFORM_DEFAULTS: Record<string, { endpoint: string; model: string }> = {
+  openai:  { endpoint: "https://api.openai.com/v1/chat/completions",                 model: "gpt-4o-mini" },
+  zhipu:   { endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",       model: "glm-4-flash" },
+  coze:    { endpoint: "https://api.coze.cn/v3/chat",                                 model: "" },
+  dify:    { endpoint: "",                                                            model: "" },
+  yuanqi:  { endpoint: "https://yuanqi.tencent.com/openapi/v1/agent/chat/completions", model: "" },
+  qingyan: { endpoint: "",                                                            model: "" },
+};
+
 type FormState = {
   provider_code: string;
   name: string;
@@ -81,16 +91,24 @@ export default function ModelProvidersPage() {
 
   const loadList = useCallback(async () => {
     setLoading(true);
-    try {
-      const res = await fetch("/api/admin/model-providers", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "加载失败");
-      setList(data.data ?? []);
-    } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "加载失败");
-    } finally {
-      setLoading(false);
+    // 同样的 3 次重试逻辑（Supabase 间歇 ECONNRESET）
+    let lastErr: unknown = null;
+    for (let i = 0; i < 3; i++) {
+      try {
+        const res = await fetch("/api/admin/model-providers", { cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "加载失败");
+        setList(data.data ?? []);
+        setMsg(null);
+        setLoading(false);
+        return;
+      } catch (e: unknown) {
+        lastErr = e;
+        if (i < 2) await new Promise((r) => setTimeout(r, 300));
+      }
     }
+    flash("err", lastErr instanceof Error ? lastErr.message : "加载失败");
+    setLoading(false);
   }, []);
 
   useEffect(() => { loadList(); }, [loadList]);
@@ -398,7 +416,11 @@ export default function ModelProvidersPage() {
                   <input
                     type="text"
                     value={form.provider_code}
-                    onChange={(e) => setForm({ ...form, provider_code: e.target.value })}
+                    onChange={(e) => {
+                      // 实时过滤：只保留英文字母 / 数字 / 下划线 / 短横线（中文等非法字符直接吃掉）
+                      const cleaned = e.target.value.replace(/[^a-zA-Z0-9_-]/g, "");
+                      setForm({ ...form, provider_code: cleaned });
+                    }}
                     placeholder="如：openai-main"
                     disabled={!!editingId}
                     className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] disabled:bg-gray-50 disabled:text-gray-500 font-mono"
@@ -421,7 +443,25 @@ export default function ModelProvidersPage() {
                 <label className="text-xs text-gray-500">平台类型 *</label>
                 <select
                   value={form.platform}
-                  onChange={(e) => setForm({ ...form, platform: e.target.value })}
+                  onChange={(e) => {
+                    const newPlatform = e.target.value;
+                    const oldDefaults = PLATFORM_DEFAULTS[form.platform];
+                    const newDefaults = PLATFORM_DEFAULTS[newPlatform];
+                    // 仅当 endpoint/model 还是旧平台的默认值时，才覆盖为新平台的默认值
+                    // （用户手填过的内容不被覆盖）
+                    setForm({
+                      ...form,
+                      platform: newPlatform,
+                      api_endpoint:
+                        !form.api_endpoint || form.api_endpoint === oldDefaults?.endpoint
+                          ? newDefaults?.endpoint ?? ""
+                          : form.api_endpoint,
+                      default_model:
+                        !form.default_model || form.default_model === oldDefaults?.model
+                          ? newDefaults?.model ?? ""
+                          : form.default_model,
+                    });
+                  }}
                   className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
                 >
                   {PLATFORM_OPTIONS.map((p) => (

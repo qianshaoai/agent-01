@@ -121,11 +121,16 @@ export async function DELETE(
   const { id } = await params;
 
   // 取一份名字 + status 用于审计与判断
-  const { data: existing } = await db
+  // 5.15up bugfix · 加 error 检查；之前 fetch failed 也是 data=null，被误报为"草稿不存在"
+  const { data: existing, error: loadErr } = await db
     .from("agent_drafts")
     .select("name, status, published_agent_id")
     .eq("id", id)
     .maybeSingle();
+  if (loadErr) {
+    console.error("[agent-drafts delete load]", loadErr);
+    return apiError("加载草稿失败，请稍后重试", "INTERNAL_ERROR");
+  }
   if (!existing) return apiError("草稿不存在", "NOT_FOUND");
 
   // 已发布的草稿：软删（status → archived），保留 published_agent_id 反查关系
