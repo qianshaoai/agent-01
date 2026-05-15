@@ -109,7 +109,7 @@ const ChatMessage = memo(function ChatMessage({
       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-[#002FA7] text-white" : "bg-gray-100 text-gray-600"}`}>
         {msg.role === "user" ? <User size={15} /> : <Bot size={15} />}
       </div>
-      <div className={`max-w-[75%] w-full min-w-0 flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
+      <div className={`${isAssistant ? "max-w-[90%]" : "max-w-[75%]"} w-full min-w-0 flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
         {/* assistant 气泡固定撑满 75% 列（定宽），让内部 <pre>/表格的 overflow-x:auto
             真正生效——否则气泡按内容 shrink-to-fit，代码块 white-space:pre 的最小宽度
             会把内容顶出去。user 气泡保持 shrink-to-fit + 右对齐。 */}
