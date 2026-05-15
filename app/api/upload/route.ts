@@ -155,15 +155,31 @@ export const POST = withRequestLog(async (req: NextRequest) => {
         const parser = new PDFParse({ data: buffer });
         const result = await parser.getText();
         extractedText = result.text.trim().slice(0, 50000);
-      } catch {
-        extractedText = `[PDF 文件: ${file.name}，文本提取失败，请确认文件未加密]`;
+        // 提取成功但内容为空 —— 多半是扫描件 PDF（图片型，无文本层）
+        if (!extractedText) {
+          extractedText = `[PDF 文件: ${file.name}，未提取到文字（可能是扫描件 / 图片型 PDF，没有文本层）]`;
+        }
+      } catch (e) {
+        // 5.15up · 加日志 + 异常分类：之前 catch{} 吞掉真因，一律误报"未加密"
+        const errName = e instanceof Error ? e.constructor.name : "Unknown";
+        const errMsg = e instanceof Error ? e.message : String(e);
+        console.error(`[upload] PDF 提取失败 file=${file.name} size=${buffer.length} type=${errName}:`, errMsg);
+        if (errName === "PasswordException" || /password|encrypt/i.test(errMsg)) {
+          extractedText = `[PDF 文件: ${file.name}，文件已加密，请上传未加密版本]`;
+        } else if (errName === "InvalidPDFException" || /invalid pdf/i.test(errMsg)) {
+          extractedText = `[PDF 文件: ${file.name}，文件已损坏或不是有效 PDF]`;
+        } else {
+          // 诊断期：把真实异常带到前端，方便定位（定位完可收敛文案）
+          extractedText = `[PDF 文件: ${file.name}，文本提取失败 · ${errName}: ${errMsg.slice(0, 120)}]`;
+        }
       }
     } else if (fileType === "docx") {
       try {
         const mammoth = await import("mammoth");
         const result = await mammoth.extractRawText({ buffer });
         extractedText = result.value.trim().slice(0, 50000);
-      } catch {
+      } catch (e) {
+        console.error(`[upload] Word 提取失败 file=${file.name}:`, e instanceof Error ? e.message : e);
         extractedText = `[Word 文件: ${file.name}，文本提取失败]`;
       }
     } else if (fileType === "doc") {
@@ -177,7 +193,8 @@ export const POST = withRequestLog(async (req: NextRequest) => {
           return `[Sheet: ${name}]\n${csv}`;
         });
         extractedText = sheets.join("\n\n").slice(0, 50000);
-      } catch {
+      } catch (e) {
+        console.error(`[upload] Excel 提取失败 file=${file.name}:`, e instanceof Error ? e.message : e);
         extractedText = `[Excel 文件: ${file.name}，文本提取失败]`;
       }
     } else if (fileType === "pptx") {
@@ -215,7 +232,8 @@ export const POST = withRequestLog(async (req: NextRequest) => {
         if (!extractedText) {
           extractedText = `[PPT 文件: ${file.name}，未提取到文字（可能仅含图片或图形元素）]`;
         }
-      } catch {
+      } catch (e) {
+        console.error(`[upload] PPT 提取失败 file=${file.name}:`, e instanceof Error ? e.message : e);
         extractedText = `[PPT 文件: ${file.name}，文本提取失败]`;
       }
     } else {
