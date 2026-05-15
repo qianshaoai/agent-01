@@ -109,8 +109,11 @@ const ChatMessage = memo(function ChatMessage({
       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-[#002FA7] text-white" : "bg-gray-100 text-gray-600"}`}>
         {msg.role === "user" ? <User size={15} /> : <Bot size={15} />}
       </div>
-      <div className={`max-w-[75%] min-w-0 flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
-        <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed min-w-0 break-words ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
+      <div className={`max-w-[75%] w-full min-w-0 flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}>
+        {/* assistant 气泡固定撑满 75% 列（定宽），让内部 <pre>/表格的 overflow-x:auto
+            真正生效——否则气泡按内容 shrink-to-fit，代码块 white-space:pre 的最小宽度
+            会把内容顶出去。user 气泡保持 shrink-to-fit + 右对齐。 */}
+        <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed min-w-0 break-words ${isAssistant ? "w-full " : ""}${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
           {/* 用户消息：先渲染图片缩略 + 文件 chip（如果有），再渲染正文 */}
           {/* 5.12up · 进度条参考 chip：保留在历史消息里，让回看时知道这条带了参考 */}
           {!isAssistant && msg.stepReference && (
