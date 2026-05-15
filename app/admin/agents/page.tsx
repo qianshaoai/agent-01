@@ -27,6 +27,8 @@ type Agent = {
   api_key_masked?: string;
   api_endpoint?: string;
   model_params?: Record<string, unknown>;
+  provider_id?: string | null;
+  provider?: { name: string; category: string; platform: string; enabled: boolean } | null;
   categories?: { name: string; icon_url?: string | null };
   categoriesAll?: { id: string; name: string; icon_url: string | null }[];
   tenant_codes?: string[];
@@ -51,8 +53,10 @@ type CategoryDisplayConfig = {
 };
 
 const PLATFORMS = ["coze", "dify", "qingyan", "yuanqi", "openai", "other"];
+// 5.15up PR-2 · 智能体平台 → API category（决定 API 配置下拉拉哪类命名 API）
+const AGENT_PLATFORMS = ["coze", "dify", "yuanqi", "qingyan"];
 const EMPTY_AGENT = { id: "", name: "", description: "", categoryIds: [] as string[], platform: "coze", agentType: "chat", externalUrl: "" };
-const EMPTY_API = { endpoint: "", apiKey: "", modelParams: '{"temperature": 0.7, "max_tokens": 2000}' };
+const EMPTY_API = { modelParams: '{"temperature": 0.7, "max_tokens": 2000}', providerId: "" };
 
 export default function AgentsAdminPage() {
   const { toast } = useToast();
@@ -110,6 +114,8 @@ export default function AgentsAdminPage() {
   const [editing, setEditing] = useState<Agent | null>(null);
   const [form, setForm] = useState(EMPTY_AGENT);
   const [apiForm, setApiForm] = useState(EMPTY_API);
+  // 5.15up PR-2 · API 配置弹窗的「命名 API」下拉选项
+  const [apiProviders, setApiProviders] = useState<{ id: string; name: string; platform: string; enabled: boolean }[]>([]);
   const [saving, setSaving] = useState(false);
   const [agentTypeFilter, setAgentTypeFilter] = useState("");
   const [agentCategoryFilter, setAgentCategoryFilter] = useState("");
@@ -190,7 +196,21 @@ export default function AgentsAdminPage() {
 
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
-  function openApi(a: Agent) { setShowApiModal(a); setApiForm({ endpoint: a.api_endpoint ?? "", apiKey: "", modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}' }); }
+  async function openApi(a: Agent) {
+    setShowApiModal(a);
+    setApiForm({
+      providerId: a.provider_id ?? "",
+      modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}',
+    });
+    // 按 agent 平台拉对应类别的命名 API 作下拉选项
+    setApiProviders([]);
+    const cat = AGENT_PLATFORMS.includes(a.platform) ? "agent" : "model";
+    try {
+      const res = await fetch(`/api/admin/model-providers?category=${cat}`, { cache: "no-store" });
+      const data = await res.json();
+      if (res.ok) setApiProviders(data.data ?? []);
+    } catch { /* 下拉为空时弹窗仍可用，提示去 API 管理新建 */ }
+  }
 
   async function openPermModal(a: Agent) {
     setShowPermModal(a);
@@ -339,7 +359,18 @@ export default function AgentsAdminPage() {
     try {
       let params: Record<string, unknown> = {};
       try { params = JSON.parse(apiForm.modelParams); } catch {}
-      await fetch(`/api/admin/agents/${showApiModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiEndpoint: apiForm.endpoint, apiKey: apiForm.apiKey || undefined, modelParams: params }) });
+      // 5.15up PR-2 · 只提交 providerId（绑定/解绑命名 API）+ modelParams；
+      // 旧 apiEndpoint/apiKey 不再从此入口写入
+      const res = await fetch(`/api/admin/agents/${showApiModal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: apiForm.providerId, modelParams: params }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast(d.error ?? "保存失败");
+        return;
+      }
       setShowApiModal(null); load(); toast("API 配置已保存");
     } finally { setSaving(false); }
   }
@@ -773,11 +804,42 @@ export default function AgentsAdminPage() {
             <h2 className="font-semibold text-gray-900 mb-1">API 配置</h2>
             <p className="text-sm text-gray-500 mb-5">{showApiModal.agent_code} · {showApiModal.name} · {showApiModal.platform}</p>
             <div className="space-y-4">
-              <Input label="API Endpoint" placeholder="https://api.coze.cn/v3/chat" value={apiForm.endpoint} onChange={(e) => setApiForm({ ...apiForm, endpoint: e.target.value })} />
+              {/* 5.15up PR-2 · 主操作：选择命名 API（按平台类别过滤） */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-gray-700">API Key <span className="text-xs font-normal text-gray-400">（加密存储，当前已配置：{showApiModal.api_key_masked || "未配置"}）</span></label>
-                <input type="password" placeholder="输入新 Key 覆盖，留空保持不变" className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" value={apiForm.apiKey} onChange={(e) => setApiForm({ ...apiForm, apiKey: e.target.value })} />
+                <label className="text-sm font-medium text-gray-700">命名 API</label>
+                <select
+                  className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
+                  value={apiForm.providerId}
+                  onChange={(e) => setApiForm({ ...apiForm, providerId: e.target.value })}
+                >
+                  <option value="">未绑定（使用下方历史配置兜底）</option>
+                  {apiProviders.map((p) => (
+                    <option key={p.id} value={p.id} disabled={!p.enabled}>
+                      {p.name}（{p.platform}）{p.enabled ? "" : " · 已禁用"}
+                    </option>
+                  ))}
+                </select>
+                <a
+                  href="/admin/model-providers"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-[#002FA7] hover:underline w-fit"
+                >
+                  去「API 管理」新建 / 更新 API →
+                </a>
               </div>
+
+              {/* 历史配置：只读，仅未绑定命名 API 时兜底生效 */}
+              <div className="rounded-[12px] bg-gray-50 border border-gray-100 px-4 py-3 text-xs text-gray-500 space-y-1">
+                <div className="font-medium text-gray-600">历史配置（只读）</div>
+                <div>接口地址：{showApiModal.api_endpoint || "—"}</div>
+                <div>历史 Key：{showApiModal.api_key_masked || "未配置"}</div>
+                <div className="text-gray-400">
+                  绑定命名 API 后聊天走命名 API；历史 Key 仅在未绑定时兜底，且不可再在此覆盖。
+                  如需更新 Key，请在「API 管理」里改对应命名 API。
+                </div>
+              </div>
+
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">模型参数（JSON）</label><textarea rows={4} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none" value={apiForm.modelParams} onChange={(e) => setApiForm({ ...apiForm, modelParams: e.target.value })} /></div>
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowApiModal(null)}>取消</Button><Button onClick={handleSaveApi} loading={saving}>保存配置</Button></div>

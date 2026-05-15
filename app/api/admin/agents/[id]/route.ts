@@ -33,6 +33,40 @@ export async function PATCH(
   if (body.modelParams !== undefined) updates.model_params = body.modelParams;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
 
+  // 5.15up PR-2 · 绑定 / 解绑命名 API（provider_id）
+  //   providerId = ""/null → 解绑（回退旧 api_key_enc / 兜底链路）
+  //   providerId = <id>    → 校验 provider 存在 + 启用 + category 与 agent 平台匹配
+  if (body.providerId !== undefined) {
+    if (!body.providerId) {
+      updates.provider_id = null;
+    } else if (typeof body.providerId === "string") {
+      const { data: agentRow0 } = await db
+        .from("agents").select("platform").eq("id", id).maybeSingle();
+      if (!agentRow0) return apiError("智能体不存在", "NOT_FOUND");
+      const wantCategory =
+        ["coze", "dify", "yuanqi", "qingyan"].includes(agentRow0.platform) ? "agent" : "model";
+      const { data: prov, error: provErr } = await db
+        .from("model_providers")
+        .select("enabled, category")
+        .eq("id", body.providerId)
+        .maybeSingle();
+      if (provErr) return dbError(provErr);
+      if (!prov) return apiError("选择的命名 API 不存在", "VALIDATION_ERROR");
+      if (!prov.enabled) {
+        return apiError("选择的命名 API 已禁用，请先在 API 管理里启用", "VALIDATION_ERROR");
+      }
+      if (prov.category !== wantCategory) {
+        return apiError(
+          `该智能体应绑定${wantCategory === "agent" ? "智能体 API" : "大模型 API"}`,
+          "VALIDATION_ERROR"
+        );
+      }
+      updates.provider_id = body.providerId;
+    } else {
+      return apiError("providerId 格式错误", "VALIDATION_ERROR");
+    }
+  }
+
   // 多分类：全量替换 agent_categories 表中的关联
   if (body.categoryIds !== undefined || body.categoryId !== undefined) {
     const catIds: string[] = Array.isArray(body.categoryIds)

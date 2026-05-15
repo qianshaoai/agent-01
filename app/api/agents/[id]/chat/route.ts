@@ -236,10 +236,12 @@ export const POST = withRequestLog(async (
     // ── 6. 流式调用 AI ────────────────────────────────────────
     // 5.14up Fix 3 · 在打开 SSE 流之前先解密 API key；失败时返回 JSON 错误，
     // 避免进入 stream 后才抛错把"decrypt failed: ..."这种内部信息推到前端
-    // 5.14up PR-D · 配置解析优先级：
-    //   1) agent 自带 api_key_enc → 用 agent 的 platform/endpoint/key/params（旧路径，兼容所有历史 agent）
-    //   2) agent.provider_id 存在 → 用 model_providers（PR-C 发布的新 agent）
-    //   3) platform="openai" + 租户 openai_key_enc → 用租户 key（老兜底）
+    // 5.15up API 管理模块 PR-2 · 配置解析优先级（修正版，小B 评审）：
+    //   1) agent.provider_id 存在 → **强制**走 model_providers；provider 删除/禁用/无 key
+    //      /endpoint 空/解密失败一律阻断报错，**不** fallback 到旧 api_key_enc
+    //      —— 否则在 API 管理里更新 / 禁用 key 会被 agent 残留的旧 key 绕过。
+    //   2) provider_id 为空 + agent.api_key_enc 存在 → 用旧 agent 自带 key（未迁移的历史 agent）
+    //   3) 仍无 + platform=openai + 租户 openai_key_enc → 用租户 key（老兜底）
     //   4) 都没有 → 503
     let resolvedPlatform: string = agent.platform;
     let resolvedEndpoint: string = agent.api_endpoint;
@@ -247,9 +249,8 @@ export const POST = withRequestLog(async (
     let resolvedModelParams: Record<string, unknown> = (agent.model_params ?? {}) as Record<string, unknown>;
 
     try {
-      if (agent.api_key_enc) {
-        resolvedApiKey = decrypt(agent.api_key_enc);
-      } else if (agent.provider_id) {
+      if (agent.provider_id) {
+        // 已迁移到集中 API 管理 → 严格走 provider，任何异常都阻断、不回退旧 key
         const { data: provider, error: provErr } = await db
           .from("model_providers")
           .select("platform, api_endpoint, api_key_enc, default_params, enabled")
@@ -259,9 +260,10 @@ export const POST = withRequestLog(async (
           console.error(`[chat] load provider failed for ${agent.agent_code}:`, provErr.message);
           return NextResponse.json({ error: "加载模型供应商失败，请稍后重试" }, { status: 503 });
         }
-        if (!provider) return NextResponse.json({ error: "智能体绑定的模型供应商已删除" }, { status: 503 });
-        if (!provider.enabled) return NextResponse.json({ error: "智能体绑定的模型供应商已禁用" }, { status: 503 });
-        if (!provider.api_key_enc) return NextResponse.json({ error: "智能体绑定的模型供应商未配置 API Key" }, { status: 503 });
+        if (!provider) return NextResponse.json({ error: "智能体绑定的模型供应商已删除，请联系管理员" }, { status: 503 });
+        if (!provider.enabled) return NextResponse.json({ error: "智能体绑定的模型供应商已禁用，请联系管理员" }, { status: 503 });
+        if (!provider.api_key_enc) return NextResponse.json({ error: "智能体绑定的模型供应商未配置 API Key，请联系管理员" }, { status: 503 });
+        if (!provider.api_endpoint) return NextResponse.json({ error: "智能体绑定的模型供应商未配置接口地址，请联系管理员" }, { status: 503 });
         resolvedPlatform = provider.platform;
         resolvedEndpoint = provider.api_endpoint;
         resolvedApiKey = decrypt(provider.api_key_enc);
@@ -269,6 +271,9 @@ export const POST = withRequestLog(async (
           ...((provider.default_params ?? {}) as Record<string, unknown>),
           ...((agent.model_params ?? {}) as Record<string, unknown>),
         };
+      } else if (agent.api_key_enc) {
+        // 未迁移的历史 agent → 仍用自带 key
+        resolvedApiKey = decrypt(agent.api_key_enc);
       } else if (agent.platform === "openai" && user.tenantCode) {
         const { data: tCfg } = await db
           .from("tenants")
