@@ -395,17 +395,22 @@ export default function ModelProvidersPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => testConnect(p)}
-                            disabled={!p.enabled || !p.has_api_key || testingId === p.id}
-                            className="text-xs text-[#002FA7] hover:underline disabled:text-gray-300 disabled:no-underline disabled:cursor-not-allowed inline-flex items-center gap-1"
-                            title="测试连通性"
-                          >
-                            {testingId === p.id
-                              ? <Loader2 size={12} className="animate-spin" />
-                              : <Activity size={12} />}
-                            测试
-                          </button>
+                          {/* 「测试」是发一条真实对话验证连通，只对大模型 API 有意义；
+                              智能体 API（Coze 等）需 bot_id 才能对话，bot_id 在智能体上、
+                              不在凭证里，无法在此层测试 —— 故仅大模型 API 显示「测试」 */}
+                          {activeTab === "model" && (
+                            <button
+                              onClick={() => testConnect(p)}
+                              disabled={!p.enabled || !p.has_api_key || testingId === p.id}
+                              className="text-xs text-[#002FA7] hover:underline disabled:text-gray-300 disabled:no-underline disabled:cursor-not-allowed inline-flex items-center gap-1"
+                              title="测试连通性"
+                            >
+                              {testingId === p.id
+                                ? <Loader2 size={12} className="animate-spin" />
+                                : <Activity size={12} />}
+                              测试
+                            </button>
+                          )}
                           <button
                             onClick={() => openEdit(p)}
                             className="text-xs text-gray-600 hover:text-[#002FA7] inline-flex items-center gap-1"

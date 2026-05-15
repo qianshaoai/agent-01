@@ -57,10 +57,18 @@ export async function POST(
     console.error("[model-providers test load]", loadError);
     return apiError("加载供应商失败", "INTERNAL_ERROR");
   }
-  const provider = row as ProviderRow | null;
+  const provider = row as (ProviderRow & { category?: string }) | null;
   if (!provider) return apiError("供应商不存在", "NOT_FOUND");
   if (!provider.enabled) return apiError("供应商已禁用，无法测试", "VALIDATION_ERROR");
   if (!provider.api_key_enc) return apiError("供应商未配置 API Key", "VALIDATION_ERROR");
+  // 5.15up · 智能体 API 是平台凭证，对话需 bot_id（在智能体上、不在凭证里），
+  // 无法在凭证层做连通测试 —— 直接拒绝，避免发出无效请求误报"上游返回空响应"
+  if (provider.category === "agent") {
+    return apiError(
+      "智能体 API 为平台凭证，无法做对话连通测试；请在绑定该 API 的智能体里发消息验证",
+      "VALIDATION_ERROR"
+    );
+  }
 
   let apiKey: string;
   try {
