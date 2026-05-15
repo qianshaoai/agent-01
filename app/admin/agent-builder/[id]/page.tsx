@@ -64,6 +64,28 @@ type Draft = {
   suggested_questions_string?: string;
 };
 
+// 5.15up · 各平台预设模型列表（按免费 → 性价比 → 旗舰排序）
+// 没列在这里的模型可在下方选"自定义模型名"手填
+const PLATFORM_MODELS: Record<string, { value: string; label: string }[]> = {
+  zhipu: [
+    { value: "glm-4-flash", label: "GLM-4-Flash（免费 · 推荐）" },
+    { value: "glm-4-air", label: "GLM-4-Air（性价比）" },
+    { value: "glm-4-plus", label: "GLM-4-Plus（旗舰）" },
+    { value: "glm-4", label: "GLM-4（旗舰）" },
+  ],
+  openai: [
+    { value: "gpt-4o-mini", label: "GPT-4o-mini（便宜快速）" },
+    { value: "gpt-4o", label: "GPT-4o（旗舰）" },
+    { value: "gpt-3.5-turbo", label: "GPT-3.5-turbo（经典）" },
+    { value: "gpt-4-turbo", label: "GPT-4-turbo" },
+  ],
+  // 扣子 / Dify / 元器 / 清言 走 bot_id / assistant_id，不通过 model 字段选型
+  coze: [],
+  dify: [],
+  yuanqi: [],
+  qingyan: [],
+};
+
 function defaultBuilderConfig(): BuilderConfig {
   return {
     system_prompt: "",
@@ -406,6 +428,15 @@ export default function AgentBuilderEditPage({
             <section className="card p-5">
               <SectionTitle icon={<Bot size={16} />} title="1. 基础信息" />
               <div className="space-y-3 mt-3">
+                <Field label="智能体名称 *" hint="员工在前台看到的名字，建议简短易记">
+                  <input
+                    type="text"
+                    value={draft.name}
+                    onChange={(e) => patchDraft((d) => ({ ...d, name: e.target.value }))}
+                    placeholder="例如：客服小助手、合同审阅助手"
+                    className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
+                  />
+                </Field>
                 <Field label="简介">
                   <textarea
                     value={draft.description}
@@ -415,33 +446,8 @@ export default function AgentBuilderEditPage({
                     className="w-full px-3 py-2 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
                   />
                 </Field>
-                <Field label="智能体类型">
-                  <div className="flex gap-3">
-                    <RadioOption
-                      checked={draft.agent_type === "chat"}
-                      onClick={() => patchDraft((d) => ({ ...d, agent_type: "chat" }))}
-                      label="对话型"
-                      hint="员工与智能体聊天"
-                    />
-                    <RadioOption
-                      checked={draft.agent_type === "external"}
-                      onClick={() => patchDraft((d) => ({ ...d, agent_type: "external" }))}
-                      label="外链跳转型"
-                      hint="点击卡片跳转到外部 URL"
-                    />
-                  </div>
-                </Field>
-                {draft.agent_type === "external" && (
-                  <Field label="外部跳转 URL *">
-                    <input
-                      type="url"
-                      value={draft.external_url}
-                      onChange={(e) => patchDraft((d) => ({ ...d, external_url: e.target.value }))}
-                      placeholder="https://..."
-                      className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono text-xs"
-                    />
-                  </Field>
-                )}
+                {/* 5.15up · 智能体类型选择已删除 —— 搭建器只生产对话型（chat）智能体
+                    外链跳转型由旧 agents 表保留数据，不通过搭建器创建 */}
               </div>
             </section>
 
@@ -477,17 +483,55 @@ export default function AgentBuilderEditPage({
                     )}
                   </Field>
 
-                  <Field label="模型名称（留空则用供应商默认）">
-                    <input
-                      type="text"
-                      value={(draft.model_params.model as string) ?? ""}
-                      onChange={(e) => patchDraft((d) => ({
-                        ...d,
-                        model_params: { ...d.model_params, model: e.target.value || undefined },
-                      }))}
-                      placeholder={selectedProvider?.default_model || "gpt-4o-mini"}
-                      className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
-                    />
+                  <Field label="模型名称（不选用供应商默认）">
+                    {(() => {
+                      const presets = PLATFORM_MODELS[selectedProvider?.platform ?? ""] ?? [];
+                      const currentModel = (draft.model_params.model as string) ?? "";
+                      const isCustom = currentModel && !presets.find((p) => p.value === currentModel);
+                      const selectValue = !currentModel ? "" : isCustom ? "__custom__" : currentModel;
+                      return (
+                        <>
+                          {presets.length > 0 ? (
+                            <select
+                              value={selectValue}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === "__custom__") return; // 切到自定义时不动 model，让下方 input 接管
+                                patchDraft((d) => ({
+                                  ...d,
+                                  model_params: { ...d.model_params, model: v || undefined },
+                                }));
+                              }}
+                              className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
+                            >
+                              <option value="">使用供应商默认（{selectedProvider?.default_model || "未设置"}）</option>
+                              {presets.map((m) => (
+                                <option key={m.value} value={m.value}>
+                                  {m.label}
+                                </option>
+                              ))}
+                              <option value="__custom__">自定义模型名（手填）</option>
+                            </select>
+                          ) : (
+                            <p className="text-[11px] text-gray-400 mb-1">
+                              {selectedProvider ? `${selectedProvider.platform} 平台不通过 model 字段选择模型（如扣子用 bot_id），下方可手填覆盖参数。` : "请先选择供应商"}
+                            </p>
+                          )}
+                          {(isCustom || selectValue === "__custom__" || presets.length === 0) && (
+                            <input
+                              type="text"
+                              value={currentModel}
+                              onChange={(e) => patchDraft((d) => ({
+                                ...d,
+                                model_params: { ...d.model_params, model: e.target.value || undefined },
+                              }))}
+                              placeholder={selectedProvider?.default_model || "自定义模型名，如 gpt-4o-mini"}
+                              className="w-full h-9 px-3 mt-2 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
+                            />
+                          )}
+                        </>
+                      );
+                    })()}
                   </Field>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -505,12 +549,12 @@ export default function AgentBuilderEditPage({
                         className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
                       />
                     </Field>
-                    <Field label="最大输出 tokens">
+                    <Field label="最大输出 tokens" hint="建议 4096-16384，模型上限请参考供应商文档">
                       <input
                         type="number"
-                        step="100"
+                        step="512"
                         min="100"
-                        value={(draft.model_params.max_tokens as number) ?? 2000}
+                        value={(draft.model_params.max_tokens as number) ?? 4096}
                         onChange={(e) => patchDraft((d) => ({
                           ...d,
                           model_params: { ...d.model_params, max_tokens: Number(e.target.value) },
@@ -841,29 +885,6 @@ function Field({
   );
 }
 
-function RadioOption({
-  checked, onClick, label, hint,
-}: {
-  checked: boolean;
-  onClick: () => void;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex-1 text-left px-3 py-2 rounded-[8px] border text-sm transition-colors ${
-        checked
-          ? "border-[#002FA7] bg-[#002FA7]/5 text-[#002FA7]"
-          : "border-gray-200 hover:border-gray-300 text-gray-700"
-      }`}
-    >
-      <div className="font-medium">{label}</div>
-      <div className="text-[11px] text-gray-400 mt-0.5">{hint}</div>
-    </button>
-  );
-}
 
 function CheckboxOption({
   checked, onChange, label,

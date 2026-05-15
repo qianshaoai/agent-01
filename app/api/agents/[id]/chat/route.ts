@@ -30,15 +30,24 @@ export const POST = withRequestLog(async (
 
   try {
     // ── 1. 查询智能体（含 API 配置）────────────────────────────
-    const { data: agent } = await db
+    // 5.15up bugfix · 同 tenant 那个 bug：.single() 在 fetch failed 时也返回 data:null，
+    // 被误报为"智能体不存在或已禁用"。改 maybeSingle + 加 error 检查，
+    // 并把 enabled 过滤从 SQL 移到代码层，区分"agent 不存在"和"agent 被禁用"两种情况
+    const { data: agent, error: agentErr } = await db
       .from("agents")
       .select("*")
       .eq("agent_code", agentCode)
-      .eq("enabled", true)
-      .single();
+      .maybeSingle();
 
+    if (agentErr) {
+      console.error(`[chat] load agent failed for ${agentCode}:`, agentErr.message);
+      return NextResponse.json({ error: "加载智能体失败，请稍后重试" }, { status: 503 });
+    }
     if (!agent) {
-      return NextResponse.json({ error: "智能体不存在或已禁用" }, { status: 404 });
+      return NextResponse.json({ error: "智能体不存在" }, { status: 404 });
+    }
+    if (!agent.enabled) {
+      return NextResponse.json({ error: "该智能体已被管理员禁用" }, { status: 403 });
     }
 
     // 外链型智能体不支持站内对话
