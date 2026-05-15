@@ -114,8 +114,8 @@ const ChatMessage = memo(function ChatMessage({
             气泡本身 shrink-to-fit：短消息=小气泡，长内容/代码块涨到 max-w 上限封顶。
             max-w 给在气泡上（不是列上），配合 min-w-0 让 max-w 能压过 <pre> 的
             min-content —— 这样 <pre>/表格才会在气泡内部 overflow-x 滚动而非顶出。
-            assistant 上限 95%，user 上限 75% 且右对齐。 */}
-        <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed min-w-0 break-words ${isAssistant ? "max-w-[95%]" : "max-w-[75%]"} ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
+            assistant 上限 100%（占满列），user 上限 75% 且右对齐。 */}
+        <div className={`rounded-[16px] px-4 py-3 text-sm leading-relaxed min-w-0 break-words ${isAssistant ? "max-w-full" : "max-w-[75%]"} ${msg.role === "user" ? "bg-[#002FA7] text-white rounded-tr-[4px]" : "bg-white text-gray-800 shadow-[0_1px_4px_rgba(0,0,0,0.06)] rounded-tl-[4px]"}`}>
           {/* 用户消息：先渲染图片缩略 + 文件 chip（如果有），再渲染正文 */}
           {/* 5.12up · 进度条参考 chip：保留在历史消息里，让回看时知道这条带了参考 */}
           {!isAssistant && msg.stepReference && (
