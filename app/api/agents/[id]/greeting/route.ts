@@ -30,13 +30,43 @@ export async function GET(
 
   const { data: agent } = await db
     .from("agents")
-    .select("agent_code, platform, api_key_enc, model_params, enabled")
+    .select("agent_code, platform, api_key_enc, model_params, builder_config, enabled")
     .eq("agent_code", agentCode)
     .eq("enabled", true)
     .single();
 
-  // agent 不存在 / 已禁用 / 非 Coze → 静默返回 null（前端拿到就当没开场白处理）
-  if (!agent || agent.platform !== "coze") {
+  // agent 不存在 / 已禁用 → 静默返回 null（前端拿到就当没开场白处理）
+  if (!agent) {
+    return NextResponse.json({ prologue: null });
+  }
+
+  // 1) 平台无关 · 优先用平台侧自己存的开场白
+  //    清言 / 元器 / Dify / OpenAI 等平台没有"读取开场白"的 API，无法自动拉取；
+  //    管理员在智能体「模型参数 JSON」里填 opening_message（可选 suggested_questions）
+  //    即可让任意平台的智能体显示开场白。
+  //    builder_config.opening_message（搭建器发布的 agent）优先级高于 model_params。
+  {
+    const bc = (agent.builder_config ?? {}) as Record<string, unknown>;
+    const mp = (agent.model_params ?? {}) as Record<string, unknown>;
+    const stored =
+      (typeof bc.opening_message === "string" && bc.opening_message.trim()) ||
+      (typeof mp.opening_message === "string" && mp.opening_message.trim()) ||
+      "";
+    if (stored) {
+      const rawSq = Array.isArray(bc.suggested_questions)
+        ? bc.suggested_questions
+        : Array.isArray(mp.suggested_questions)
+        ? mp.suggested_questions
+        : [];
+      const suggested = rawSq.filter(
+        (q): q is string => typeof q === "string" && q.trim().length > 0
+      );
+      return NextResponse.json({ prologue: stored, suggested_questions: suggested });
+    }
+  }
+
+  // 2) 没有平台侧开场白 → 仅 Coze 走原平台后台 prologue 自动拉取兜底
+  if (agent.platform !== "coze") {
     return NextResponse.json({ prologue: null });
   }
 
