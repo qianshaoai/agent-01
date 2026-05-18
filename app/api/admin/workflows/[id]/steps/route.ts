@@ -63,6 +63,9 @@ export async function POST(
   if (!canActOnRole(actorRole, creatorRole)) {
     return apiError(noWritePermissionMessage(creatorRole), "FORBIDDEN");
   }
+  // org_admin 归属校验：与 PUT / workflows/[id] 的写操作边界保持一致
+  const orgGuard = await ensureOrgAdminCanTouch(admin, workflowId);
+  if (orgGuard) return orgGuard;
 
   const { stepOrder, title, description, execType, agentId, buttonText, enabled } = await req.json();
 
