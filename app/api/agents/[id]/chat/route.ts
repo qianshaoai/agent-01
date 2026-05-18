@@ -129,11 +129,17 @@ export const POST = withRequestLog(async (
     //   同一个 weight 给「带权重配额预检查」和「扣费」复用。
     let weight = 1;
     if (modelUsed) {
-      const { data: w } = await db
+      const { data: w, error: wErr } = await db
         .from("model_quota_weights")
         .select("weight_per_call, enabled")
         .eq("model_id", modelUsed)
         .maybeSingle();
+      // P3（小B PR-2 评审）：查询出错不能静默当 weight=1 —— 贵模型会被少扣。
+      // 与"配额检查 DB 故障即 503"同口径，阻断报错。
+      if (wErr) {
+        console.error(`[chat] 加载模型权重失败 model=${modelUsed} agent=${agent.agent_code}:`, wErr.message);
+        return NextResponse.json({ error: "加载配额配置失败，请稍后重试" }, { status: 503 });
+      }
       if (w && w.enabled && typeof w.weight_per_call === "number" && w.weight_per_call > 0) {
         weight = w.weight_per_call;
       }
@@ -378,10 +384,12 @@ export const POST = withRequestLog(async (
               weight > 1
                 ? await db.rpc("increment_quota_used_weighted", { p_code: user.tenantCode, p_weight: weight })
                 : await db.rpc("increment_quota_used", { p_code: user.tenantCode });
+            // P2（小B PR-2 评审）：data===false 对两种 RPC 都查 —— 并发下
+            // weight=1 的 increment_quota_used 也可能返回 false（没扣成），不能静默放过。
             if (ded.error) {
               console.error(`[chat] 扣配额失败 tenant=${user.tenantCode} weight=${weight} agent=${agent.agent_code}:`, ded.error.message);
-            } else if (weight > 1 && ded.data === false) {
-              console.error(`[chat] 加权扣配额未生效 tenant=${user.tenantCode} weight=${weight} agent=${agent.agent_code} —— 余额不足或并发抢额度`);
+            } else if (ded.data === false) {
+              console.error(`[chat] 扣配额未生效 tenant=${user.tenantCode} weight=${weight} agent=${agent.agent_code} —— 余额不足或并发抢额度`);
             }
           }
 
