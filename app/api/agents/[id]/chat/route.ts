@@ -423,7 +423,8 @@ export const POST = withRequestLog(async (
             }),
           ]);
 
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, conversationId: convId })}\n\n`));
+          // W2 补丁：done 带回本次 weight，供前端「剩余次数」计数器按权重递减（gpt-4o 扣 5 等）
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, conversationId: convId, weight })}\n\n`));
         } catch (err) {
           const rawMsg = err instanceof Error ? err.message : "AI 调用失败";
           // 5.15up · 把英文/技术性错误翻译成员工能看懂的中文
