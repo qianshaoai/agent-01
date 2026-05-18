@@ -4,6 +4,10 @@
  * 把现存正式智能体（agents 表）自带的 api_key_enc 归拢成命名 API（model_providers），
  * 并回填 agents.provider_id。
  *
+ * ⚠ 5.16up Fix 3 收口注记：本脚本是一次性迁移，已执行完毕、不挂部署流水线，
+ *   不会反向污染 rekey。decrypt() 已补「新 key 优先、回退旧 key」，rekey 前后都能解；
+ *   但仍不建议 rekey 之后再跑 —— 它只复用既有密文、不重新 encrypt，重跑无收益。
+ *
  * 用法：
  *   node scripts/migrate-agent-keys-to-providers.mjs            # dry-run（默认，只预览不写）
  *   node scripts/migrate-agent-keys-to-providers.mjs --apply    # 正式执行
@@ -43,15 +47,28 @@ if (!SUPABASE_URL || !SERVICE_KEY || !JWT_SECRET) {
 // fingerprint 用的 secret：固定值即可（同环境多次运行须一致），默认从 JWT_SECRET 派生
 const FP_SECRET = process.env.MIGRATION_FINGERPRINT_SECRET || "mig-fp:" + JWT_SECRET;
 
-// ── 与 lib/crypto.ts 一致的解密（AES-256-GCM，key = sha256(JWT_SECRET)）──
+// ── 解密（5.16up Fix 3 收口：新 key 优先、回退旧 key，与 lib/crypto.ts 路径 A 一致）──
+//   ENCRYPTION_KEY 未配时退化为「仅旧 key」，兼容 rekey 之前的历史跑法。
+const DEC_NEW_KEY = (() => {
+  const raw = process.env.ENCRYPTION_KEY;
+  if (!raw) return null;
+  const k = Buffer.from(raw, "base64");
+  return k.length === 32 ? k : null;
+})();
+const DEC_OLD_KEY = crypto.createHash("sha256").update(JWT_SECRET).digest();
+function decryptWithKey(key, p) {
+  const d = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(p[0], "hex"));
+  d.setAuthTag(Buffer.from(p[1], "hex"));
+  return Buffer.concat([d.update(Buffer.from(p[2], "hex")), d.final()]).toString("utf8");
+}
 function decrypt(ct) {
   if (!ct) return "";
   const p = ct.split(":");
   if (p.length !== 3) return ct; // 旧明文数据，原样返回
-  const key = crypto.createHash("sha256").update(JWT_SECRET).digest();
-  const d = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(p[0], "hex"));
-  d.setAuthTag(Buffer.from(p[1], "hex"));
-  return Buffer.concat([d.update(Buffer.from(p[2], "hex")), d.final()]).toString("utf8");
+  if (DEC_NEW_KEY) {
+    try { return decryptWithKey(DEC_NEW_KEY, p); } catch { /* 试旧 key */ }
+  }
+  return decryptWithKey(DEC_OLD_KEY, p);
 }
 const fingerprint = (plain) => crypto.createHmac("sha256", FP_SECRET).update(plain).digest("hex");
 

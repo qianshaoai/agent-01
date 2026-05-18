@@ -15,8 +15,12 @@ const AES_KEY_BYTES = 32;
 // 历史脏数据兼容：早期某些字段可能存的是无密文格式的"明文" → decrypt() 收到
 // 三段格式不对时，保留原样返回 + dev 环境 warn。
 //
-// dev 友好：未配置 ENCRYPTION_KEY 时 fallback 到 JWT_SECRET 派生 + console.warn；
-// production 不允许这种 fallback，进程启动期直接抛错。
+// dev/test 友好：未配置 ENCRYPTION_KEY 时 getNewKey() fallback 到 JWT_SECRET 派生
+// + console.warn。
+// production 未配 ENCRYPTION_KEY 时 getNewKey() 抛错 —— 但注意没有「进程启动期校验」：
+// 只有 encrypt() 会让这个错冒出来；decrypt() 的首次尝试失败会被 catch 吞掉、回退旧 key。
+// 真正的部署门禁是 Jenkinsfile 用 credentials('agent01_ENCRYPTION_KEY') 注入 ——
+// 凭据不存在则构建直接失败，prod 不会带着空 key 上线。
 
 function isProduction(): boolean {
   return process.env.NODE_ENV === "production";

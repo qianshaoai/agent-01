@@ -7,7 +7,7 @@
  * 必需环境变量：
  *   NEXT_PUBLIC_SUPABASE_URL
  *   SUPABASE_SERVICE_ROLE_KEY
- *   JWT_SECRET                     # 用于 AES-256-GCM 加密 api_key
+ *   ENCRYPTION_KEY                 # AES-256-GCM 加密 api_key 的新 key（base64 32 字节）
  *   TRIAL_AGENT_001_BOT_ID         # Coze 测试对话智能体 bot id
  *   TRIAL_AGENT_001_API_TOKEN      # Coze 测试对话智能体 token
  *   TRIAL_AGENT_002_BOT_ID         # Coze 前哨知识库 bot id
@@ -23,15 +23,20 @@
  *      不动 agent_type / external_url / enabled / category_id
  */
 
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
-// ── 内联 lib/crypto.ts 的 encrypt（避免依赖 TS 运行时） ──────────────────
+// ── 内联 lib/crypto.ts 的 encrypt（避免依赖 TS 运行时）──────────────────
+// 5.16up · Fix 3 收口：改用 ENCRYPTION_KEY 新 key（与 crypto.ts getNewKey() 一致：
+// base64 解码 32 字节、不 sha256）。原先用 sha256(JWT_SECRET) 是旧 key —— 本脚本每次
+// 部署都会跑，若仍用旧 key 会把 3 个 trial agent 反向写回旧密文、打开 rekey 收口。
 const ALG = "aes-256-gcm";
 function getKey() {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error("JWT_SECRET 未设置");
-  return createHash("sha256").update(secret).digest();
+  const raw = process.env.ENCRYPTION_KEY;
+  if (!raw) throw new Error("ENCRYPTION_KEY 未设置");
+  const key = Buffer.from(raw, "base64");
+  if (key.length !== 32) throw new Error(`ENCRYPTION_KEY base64 解码必须是 32 字节，实际 ${key.length}`);
+  return key;
 }
 function encrypt(plaintext) {
   if (!plaintext) return "";
@@ -47,7 +52,7 @@ function encrypt(plaintext) {
 const REQUIRED_ENVS = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
-  "JWT_SECRET",
+  "ENCRYPTION_KEY",
   "TRIAL_AGENT_001_BOT_ID",
   "TRIAL_AGENT_001_API_TOKEN",
   "TRIAL_AGENT_002_BOT_ID",

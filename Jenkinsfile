@@ -66,8 +66,8 @@ pipeline {
         }
 
         stage('Migrate trial agents into agents table') {
-            // 用线上 JWT_SECRET 把 trial 的 3 个 agent (AGT-COZE-001/002 + AGT-YUANQI-001)
-            // 重新加密 api_key_enc 写入 supabase.agents。
+            // 5.16up Fix 3 收口：用线上 ENCRYPTION_KEY（新 key）把 trial 的 3 个 agent
+            // (AGT-COZE-001/002 + AGT-YUANQI-001) 重新加密 api_key_enc 写入 supabase.agents。
             // 幂等：已存在按 agent_code UPDATE 6 列，agent_type/external_url/enabled/category_id
             // 保留原值不动。
             steps {

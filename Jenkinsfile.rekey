@@ -1,0 +1,86 @@
+// 5.16up · Fix 3 收口 · 加密 key 存量 rekey —— 手动触发的一次性 job
+// ─────────────────────────────────────────────────────────────────────────
+// 为什么单独一个 job：部署目录 /www/wwwroot/o.qianshao.ai 只有 standalone 产物，
+//   不含 scripts/ —— 无法在部署目录跑 rekey。本 job 在 Jenkins workspace 完整
+//   checkout 仓库 + 装依赖 + 用 Jenkins 凭据注入 key，跑 scripts/rekey-encryption.mjs。
+//   凭据走 Jenkins、不落盘明文，有构建日志可追溯。
+//
+// 怎么配：Jenkins → New Item → Pipeline → Pipeline script from SCM →
+//   指向本仓库、Script Path 填 Jenkinsfile.rekey。用「Build with Parameters」触发。
+//
+// 时序：必须在主部署完成（prod 已配好 ENCRYPTION_KEY）之后再跑。
+//   先不勾 APPLY 跑一次 dry-run，确认无问题行，再勾 APPLY 实写。
+pipeline {
+    agent any
+
+    parameters {
+        booleanParam(
+            name: 'APPLY',
+            defaultValue: false,
+            description: '不勾 = dry-run（只预览不写库）；勾上 = --apply 实写。务必先 dry-run。'
+        )
+    }
+
+    environment {
+        // 凭据 ID 与主 Jenkinsfile 一致
+        SUPABASE_URL              = credentials('agent01_SUPABASE_URL')
+        SUPABASE_SERVICE_ROLE_KEY = credentials('agent01_SUPABASE_SERVICE_ROLE_KEY')
+        JWT_SECRET                = credentials('agent01_JWT_SECRET')
+        ENCRYPTION_KEY            = credentials('agent01_ENCRYPTION_KEY')
+    }
+
+    tools {
+        nodejs 'node'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 15, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo "==> 拉取代码 from GitHub"
+                checkout scm
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                echo "==> 安装依赖"
+                sh 'npm ci --include=dev'
+            }
+        }
+
+        stage('Rekey') {
+            // params.APPLY 经 stage environment 转成字符串，由 shell 判断 ——
+            // sh 用单引号 + $VAR 引用，让 Jenkins 自动 mask secret
+            environment {
+                REKEY_APPLY = "${params.APPLY}"
+            }
+            steps {
+                echo(params.APPLY ? "==> rekey 实写（--apply）" : "==> rekey dry-run（不写库）")
+                sh '''
+                    ARGS=""
+                    if [ "$REKEY_APPLY" = "true" ]; then ARGS="--apply"; fi
+                    NEXT_PUBLIC_SUPABASE_URL="$SUPABASE_URL" \
+                    node scripts/rekey-encryption.mjs $ARGS
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ rekey job 完成 — ${env.BUILD_URL}"
+        }
+        failure {
+            echo "❌ rekey job 失败（有问题行或报错），请查看日志：${env.BUILD_URL}console"
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
