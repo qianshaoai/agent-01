@@ -62,12 +62,9 @@ export default function AgentsAdminPage() {
   const { toast } = useToast();
   const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
-  // 4.29up：?focus=<agentId>&pageSize=100 跨页定位
-  // 关键：客户端 hydrate 后才能读到 window.location.search（"use client" 页也走 SSR，
-  //       lazy state 首次在服务端执行 window 不存在，初值会被钉成 null），用 urlReady
-  //       防止 load() 在 URL 解析前抢跑
+  // 4.29up：?focus=<agentId> 跨页定位 / 5.16up R4：列表已全量加载，pageSize 参数不再需要
+  // urlReady：客户端 hydrate 后才能读到 window.location.search，防 load() 在 URL 解析前抢跑
   const [focusAgentId, setFocusAgentId] = useState<string | null>(null);
-  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
   const [urlReady, setUrlReady] = useState(false);
   const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
   // 工作流引用列表"+N 更多"popover
@@ -77,13 +74,7 @@ export default function AgentsAdminPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sp = new URLSearchParams(window.location.search);
-    const f = sp.get("focus");
-    const ps = sp.get("pageSize");
-    setFocusAgentId(f);
-    if (ps) {
-      const n = parseInt(ps);
-      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
-    }
+    setFocusAgentId(sp.get("focus"));
     setUrlReady(true);
   }, []);
   // 删除流程
@@ -139,17 +130,29 @@ export default function AgentsAdminPage() {
   const [showCatAssignModal, setShowCatAssignModal] = useState<Category | null>(null);
   const [selectedCatTenants, setSelectedCatTenants] = useState<string[]>([]);
 
+  // 5.16up R4 · 完整展示：分页循环拉完所有智能体（parsePagination MAX_PAGE_SIZE=100）
+  async function fetchAllAgents(): Promise<Agent[]> {
+    const PS = 100;
+    const all: Agent[] = [];
+    for (let page = 1; ; page++) {
+      const res = await fetch(`/api/admin/agents?page=${page}&pageSize=${PS}`).then((r) => r.json());
+      const batch: Agent[] = Array.isArray(res?.data) ? res.data : [];
+      all.push(...batch);
+      const total: number = res?.pagination?.total ?? all.length;
+      if (batch.length < PS || all.length >= total) break;
+    }
+    return all;
+  }
+
   async function load() {
     setLoading(true);
     try {
-      // 4.29up：尊重 URL 上的 pageSize（跨页 focus 用），否则走后端默认 50
-      const ps = urlPageSize && urlPageSize > 0 ? `?pageSize=${urlPageSize}` : "";
       const [ar, cr, tr] = await Promise.all([
-        fetch(`/api/admin/agents${ps}`).then((r) => r.json()).then(d => d.data ?? d),
+        fetchAllAgents(),
         fetch("/api/admin/categories").then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
       ]);
-      setAgents(Array.isArray(ar) ? ar : []);
+      setAgents(ar);
       setCategories(Array.isArray(cr) ? cr : []);
       setTenants(Array.isArray(tr) ? tr : []);
     } catch {
@@ -442,12 +445,34 @@ export default function AgentsAdminPage() {
 
   const filteredAgents = useMemo(() => agents.filter(a => {
     if (agentTypeFilter && a.agent_type !== agentTypeFilter) return false;
-    if (agentCategoryFilter && a.category_id !== agentCategoryFilter) return false;
+    // 5.16up R4 · 修筛选漏项：用多分类 categoryIds，不再用遗留单列 category_id
+    if (agentCategoryFilter && !(a.categoryIds ?? []).includes(agentCategoryFilter)) return false;
     if (agentStatusFilter === "enabled" && !a.enabled) return false;
     if (agentStatusFilter === "disabled" && a.enabled) return false;
     return true;
   }), [agents, agentTypeFilter, agentCategoryFilter, agentStatusFilter]);
   const hasAgentFilter = agentTypeFilter || agentCategoryFilter || agentStatusFilter;
+
+  // 5.16up R4 · 完整展示按分类分组：多分类智能体在每个所属分类下都出现（D4-1）；
+  // 未分类兜底分区；分区顺序按 categories（接口已按 sort_order 排）。
+  const groupedSections = useMemo(() => {
+    const cats = agentCategoryFilter
+      ? categories.filter((c) => c.id === agentCategoryFilter)
+      : categories;
+    const sections = cats.map((c) => ({
+      id: c.id,
+      name: c.name,
+      icon_url: c.icon_url ?? null,
+      agents: filteredAgents.filter((a) => (a.categoryIds ?? []).includes(c.id)),
+    }));
+    if (!agentCategoryFilter) {
+      const uncategorized = filteredAgents.filter((a) => (a.categoryIds ?? []).length === 0);
+      if (uncategorized.length > 0) {
+        sections.push({ id: "__uncategorized__", name: "未分类", icon_url: null, agents: uncategorized });
+      }
+    }
+    return sections.filter((s) => s.agents.length > 0);
+  }, [categories, filteredAgents, agentCategoryFilter]);
 
   return (
     <AdminLayout>
@@ -501,7 +526,7 @@ export default function AgentsAdminPage() {
           <Card padding="none" className="overflow-hidden">
             {loading ? (
               <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
-            ) : filteredAgents.length === 0 ? (
+            ) : groupedSections.length === 0 ? (
               <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体，点击右上角新增" : "没有符合筛选条件的智能体"}</p></div>
             ) : (
               <div className="overflow-x-auto">
@@ -511,8 +536,24 @@ export default function AgentsAdminPage() {
                       {["编号/名称", "分类", "类型/平台", "引用工作流", "操作"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {filteredAgents.map((a) => (
+                  {/* 5.16up R4 · 按分类分组展示；多分类智能体在每个所属分类下各出现一次 */}
+                  {groupedSections.map((section) => (
+                  <tbody key={section.id} className="divide-y divide-gray-50">
+                    <tr className="bg-gray-50/80 border-t border-gray-100">
+                      <td colSpan={5} className="px-5 py-2.5">
+                        <div className="flex items-center gap-2">
+                          {section.icon_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={section.icon_url} alt={section.name} className="w-4 h-4 rounded-[3px] object-contain" />
+                          ) : (
+                            <Tag size={13} className="text-[#002FA7]" />
+                          )}
+                          <span className="text-[13px] font-semibold text-gray-700">{section.name}</span>
+                          <span className="text-[11px] text-gray-400">{section.agents.length} 个</span>
+                        </div>
+                      </td>
+                    </tr>
+                    {section.agents.map((a) => (
                       <tr
                         key={a.id}
                         data-agent-row={a.id}
@@ -580,14 +621,16 @@ export default function AgentsAdminPage() {
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setOpenMoreFor(openMoreFor === a.id ? null : a.id);
+                                    // 5.16up R4 · 多分类智能体在多分区有重复行，弹层 key 须含 section.id 区分
+                                    const k = `${section.id}:${a.id}`;
+                                    setOpenMoreFor(openMoreFor === k ? null : k);
                                   }}
                                   className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 transition-colors"
                                 >
                                   +{a.workflows!.length - 2} 更多
                                 </button>
                               )}
-                              {openMoreFor === a.id && (
+                              {openMoreFor === `${section.id}:${a.id}` && (
                                 <>
                                   {/* 点击空白关闭 popover */}
                                   <div
@@ -645,6 +688,7 @@ export default function AgentsAdminPage() {
                       </tr>
                     ))}
                   </tbody>
+                  ))}
                 </table>
               </div>
             )}
