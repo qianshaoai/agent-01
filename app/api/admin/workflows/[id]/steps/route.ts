@@ -5,6 +5,43 @@ import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { canActOnRole, noWritePermissionMessage, type AdminRole } from "@/lib/admin-permissions";
 
+// 5.16up · R5 收口（小B 验收）：org_admin 归属校验 —— 与 workflows/[id] 的 PATCH/DELETE
+// 的 ensureOrgAdminCanTouch 同口径。归属判定：该工作流的 resource_permissions 里有
+// scope=本组织 / 本组织部门 / 本组织小组。非 org_admin 直接放行。
+// （沿用本仓库既有写法：org_admin 校验工具按 route 文件各自内联，不跨文件共享）
+async function ensureOrgAdminCanTouch(
+  admin: { role: string; tenantCode?: string | null },
+  workflowId: string
+): Promise<Response | null> {
+  if (admin.role !== "org_admin") return null;
+  if (!admin.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
+  const tenantCode = admin.tenantCode;
+
+  const [{ data: depts }, { data: teams }] = await Promise.all([
+    db.from("departments").select("id").eq("tenant_code", tenantCode),
+    db.from("teams").select("id").eq("tenant_code", tenantCode),
+  ]);
+  const deptIds = (depts ?? []).map((d: { id: string }) => d.id);
+  const teamIds = (teams ?? []).map((t: { id: string }) => t.id);
+
+  const orFilters: string[] = [`and(scope_type.eq.org,scope_id.eq.${tenantCode})`];
+  if (deptIds.length > 0) orFilters.push(`and(scope_type.eq.dept,scope_id.in.(${deptIds.join(",")}))`);
+  if (teamIds.length > 0) orFilters.push(`and(scope_type.eq.team,scope_id.in.(${teamIds.join(",")}))`);
+
+  const { data: hits } = await db
+    .from("resource_permissions")
+    .select("resource_id")
+    .eq("resource_type", "workflow")
+    .eq("resource_id", workflowId)
+    .or(orFilters.join(","))
+    .limit(1);
+
+  if (!hits || hits.length === 0) {
+    return apiError("无权操作该工作流", "FORBIDDEN");
+  }
+  return null;
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -80,6 +117,9 @@ export async function PUT(
   if (!canActOnRole(actorRole, creatorRole)) {
     return apiError(noWritePermissionMessage(creatorRole), "FORBIDDEN");
   }
+  // org_admin 归属校验：防越权重排别组织工作流的步骤（小B 验收收口）
+  const orgGuard = await ensureOrgAdminCanTouch(admin, workflowId);
+  if (orgGuard) return orgGuard;
 
   const body = await req.json().catch(() => ({}));
   const stepIds: unknown = body?.stepIds;
