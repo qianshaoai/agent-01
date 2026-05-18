@@ -563,6 +563,46 @@ export default function WorkflowsAdminPage() {
     setMoving(null);
   }
 
+  // 5.16up · R5 步骤列表视图拖拽改顺序：拖 GripVertical 抓手、落到目标步骤即重排。
+  // 后端 PUT 走原子重排 RPC，失败强制 load() 重拉真实顺序、不保留错误乐观序。
+  const [dragStepId, setDragStepId] = useState<string | null>(null);
+  const [dragOverStepId, setDragOverStepId] = useState<string | null>(null);
+
+  async function reorderStepsByDrag(wf: Workflow, draggedId: string, targetId: string) {
+    if (draggedId === targetId) return;
+    const sorted = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
+    const fromIdx = sorted.findIndex((s) => s.id === draggedId);
+    const toIdx = sorted.findIndex((s) => s.id === targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const reordered = [...sorted];
+    const [moved] = reordered.splice(fromIdx, 1);
+    reordered.splice(toIdx, 0, moved);
+    const orderedIds = reordered.map((s) => s.id);
+    // 乐观更新：按新序重设 step_order
+    setWorkflows((prev) => prev.map((w) =>
+      w.id === wf.id
+        ? { ...w, workflow_steps: reordered.map((s, i) => ({ ...s, step_order: i + 1 })) }
+        : w
+    ));
+    let ok = false;
+    try {
+      const res = await fetch(`/api/admin/workflows/${wf.id}/steps`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stepIds: orderedIds }),
+      });
+      ok = res.ok;
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast(d.error ?? "排序未保存，请重试");
+      }
+    } catch {
+      toast("排序未保存，请重试");
+    }
+    // 失败 → 强制重拉真实顺序，不保留错误乐观序（成功时乐观序与 RPC 结果一致，无需重拉）
+    if (!ok) await load();
+  }
+
   // 4.27up 阶段二：节点内快捷绑定智能体
   // 必须同时传 execType 和 agentId（见接口逻辑：只传 agentId 时 exec_type 为 undefined，会被改写成 null）
   async function bindAgentToStep(step: WorkflowStep, agentId: string) {
@@ -726,14 +766,49 @@ export default function WorkflowsAdminPage() {
             }
             return true;
           });
+          // 5.16up R6 方案乙 · 按工作流分类分区分组（多分类工作流在每个所属分类各出现一次，
+          // 与 R4 后台分组口径一致；空分类归"未分类"兜底区；不改 DB、区内仍用全局 sort_order）
+          const groupedWfSections = (() => {
+            const cats = wfCatFilter ? categories.filter((c) => c.id === wfCatFilter) : categories;
+            const sections = cats.map((c) => ({
+              id: c.id,
+              name: c.name,
+              icon_url: c.icon_url ?? null,
+              workflows: filteredWorkflows.filter((wf) => (wf.categoryIds ?? []).includes(c.id)),
+            }));
+            if (!wfCatFilter) {
+              const uncat = filteredWorkflows.filter((wf) => (wf.categoryIds ?? []).length === 0);
+              if (uncat.length > 0) {
+                sections.push({ id: "__uncategorized__", name: "未分类", icon_url: null, workflows: uncat });
+              }
+            }
+            return sections.filter((s) => s.workflows.length > 0);
+          })();
           return filteredWorkflows.length === 0 ? (
           <Card padding="lg" className="py-16 text-center text-gray-400">
             <GitBranch size={36} className="mx-auto mb-3 text-gray-200" />
             <p className="text-sm">{workflows.length === 0 ? "暂无工作流，点击右上角新增" : "没有符合筛选条件的工作流"}</p>
           </Card>
         ) : (
-          <div className="space-y-3">
-            {filteredWorkflows.map((wf) => {
+          <div className="space-y-6">
+            {/* 5.16up R6 方案乙 · 按工作流分类分区展示（不改 DB，非真隔离） */}
+            <p className="text-[12px] text-gray-400 px-1">
+              按分类分区展示；区内仍按全局顺序排列 —— 分区视图，非各分类独立排序。
+            </p>
+            {groupedWfSections.map((section) => (
+            <div key={section.id}>
+              <div className="flex items-center gap-2 px-1 mb-2">
+                {section.icon_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={section.icon_url} alt={section.name} className="w-4 h-4 rounded-[3px] object-contain" />
+                ) : (
+                  <Tag size={13} className="text-[#002FA7]" />
+                )}
+                <span className="text-[13px] font-semibold text-gray-700">{section.name}</span>
+                <span className="text-[11px] text-gray-400">{section.workflows.length} 个</span>
+              </div>
+              <div className="space-y-3">
+            {section.workflows.map((wf) => {
               const isExpanded = expandedId === wf.id;
               const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
               return (
@@ -894,8 +969,26 @@ export default function WorkflowsAdminPage() {
                                   <div className="flex-1 h-px bg-gray-100 group-hover:bg-[#002FA7]/20" />
                                 </button>
                               )}
-                            <div className={`flex items-start gap-3 p-3 rounded-[12px] transition-all ${step.enabled ? "bg-gray-50" : "bg-gray-50/50 opacity-60"} ${highlightedStepAgentId && step.agent_id === highlightedStepAgentId ? "ring-2 ring-[#002FA7] bg-[#002FA7]/5" : ""}`}>
-                              <GripVertical size={14} className="text-gray-300 mt-0.5 shrink-0" />
+                            <div
+                              onDragOver={(e) => { if (dragStepId && dragStepId !== step.id) { e.preventDefault(); setDragOverStepId(step.id); } }}
+                              onDragLeave={() => setDragOverStepId((cur) => (cur === step.id ? null : cur))}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                const dragged = dragStepId;
+                                setDragStepId(null); setDragOverStepId(null);
+                                if (dragged) reorderStepsByDrag(wf, dragged, step.id);
+                              }}
+                              className={`flex items-start gap-3 p-3 rounded-[12px] transition-all ${step.enabled ? "bg-gray-50" : "bg-gray-50/50 opacity-60"} ${highlightedStepAgentId && step.agent_id === highlightedStepAgentId ? "ring-2 ring-[#002FA7] bg-[#002FA7]/5" : ""} ${dragStepId === step.id ? "opacity-40" : ""} ${dragOverStepId === step.id && dragStepId !== step.id ? "ring-2 ring-dashed ring-[#002FA7]/50" : ""}`}
+                            >
+                              <span
+                                draggable={canTouchWf(wf)}
+                                onDragStart={(e) => { setDragStepId(step.id); e.dataTransfer.effectAllowed = "move"; }}
+                                onDragEnd={() => { setDragStepId(null); setDragOverStepId(null); }}
+                                className={`mt-0.5 shrink-0 ${canTouchWf(wf) ? "cursor-grab active:cursor-grabbing text-gray-400 hover:text-[#002FA7]" : "cursor-not-allowed text-gray-200"}`}
+                                title={canTouchWf(wf) ? "拖动调整步骤顺序" : noTouchReason(wf)}
+                              >
+                                <GripVertical size={14} />
+                              </span>
                               <div className="w-6 h-6 rounded-full bg-[#002FA7]/10 text-[#002FA7] text-xs font-bold flex items-center justify-center shrink-0">{idx + 1}</div>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2">
@@ -943,6 +1036,9 @@ export default function WorkflowsAdminPage() {
                                   const okStep = canTouchWf(wf);
                                   const reasonStep = okStep ? "" : noTouchReason(wf);
                                   return <>
+                                    {/* 5.16up R5 · 上 / 下移：拖拽的窄屏 / 无障碍 fallback */}
+                                    <button onClick={() => okStep && moveStep(step, "up")} disabled={!okStep || moving !== null || idx === 0} className={`p-1 rounded-[6px] transition-colors ${(!okStep || idx === 0) ? "text-gray-200 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "上移" : reasonStep} aria-label="上移"><ArrowUp size={12} /></button>
+                                    <button onClick={() => okStep && moveStep(step, "down")} disabled={!okStep || moving !== null || idx === steps.length - 1} className={`p-1 rounded-[6px] transition-colors ${(!okStep || idx === steps.length - 1) ? "text-gray-200 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "下移" : reasonStep} aria-label="下移"><ArrowDown size={12} /></button>
                                     <button onClick={() => okStep && toggleStepEnabled(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors text-xs ${!okStep ? "text-gray-300 cursor-not-allowed" : step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={okStep ? (step.enabled ? "停用" : "启用") : reasonStep}>
                                       {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
                                     </button>
@@ -973,6 +1069,9 @@ export default function WorkflowsAdminPage() {
                 </div>
               );
             })}
+              </div>
+            </div>
+            ))}
           </div>
         );
         })()}
