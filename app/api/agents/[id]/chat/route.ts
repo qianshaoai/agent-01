@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { streamChat, ChatMessage } from "@/lib/adapters";
+import { streamChat, ChatMessage, TokenUsage } from "@/lib/adapters";
 import { decrypt } from "@/lib/crypto";
 import { withRequestLog } from "@/lib/request-logger";
 
@@ -55,7 +55,91 @@ export const POST = withRequestLog(async (
       return NextResponse.json({ error: "此智能体为外链跳转型，请通过首页卡片访问" }, { status: 400 });
     }
 
-    // ── 2. 配额检查 ────────────────────────────────────────────
+    // ── 2. 解析模型配置 + API key + 算 weight ──────────────────
+    // W2：提到配额检查之前 —— 加权配额检查需要 weight。
+    // 配置解析优先级（5.15up PR-2 · 小B 评审）：
+    //   1) agent.provider_id 存在 → 强制走 model_providers；provider 删除/禁用/无 key
+    //      /endpoint 空/解密失败一律阻断，不 fallback 旧 api_key_enc
+    //   2) provider_id 空 + agent.api_key_enc → 用旧 agent 自带 key
+    //   3) 仍无 + platform=openai + 租户 openai_key_enc → 租户 key 兜底
+    //   4) 都没有 → 503
+    let resolvedPlatform: string = agent.platform;
+    let resolvedEndpoint: string = agent.api_endpoint;
+    let resolvedApiKey: string;
+    let resolvedModelParams: Record<string, unknown> = (agent.model_params ?? {}) as Record<string, unknown>;
+    let providerDefaultModel = "";
+
+    try {
+      if (agent.provider_id) {
+        const { data: provider, error: provErr } = await db
+          .from("model_providers")
+          .select("platform, api_endpoint, api_key_enc, default_model, default_params, enabled")
+          .eq("id", agent.provider_id)
+          .maybeSingle();
+        if (provErr) {
+          console.error(`[chat] load provider failed for ${agent.agent_code}:`, provErr.message);
+          return NextResponse.json({ error: "加载模型供应商失败，请稍后重试" }, { status: 503 });
+        }
+        if (!provider) return NextResponse.json({ error: "智能体绑定的模型供应商已删除，请联系管理员" }, { status: 503 });
+        if (!provider.enabled) return NextResponse.json({ error: "智能体绑定的模型供应商已禁用，请联系管理员" }, { status: 503 });
+        if (!provider.api_key_enc) return NextResponse.json({ error: "智能体绑定的模型供应商未配置 API Key，请联系管理员" }, { status: 503 });
+        if (!provider.api_endpoint) return NextResponse.json({ error: "智能体绑定的模型供应商未配置接口地址，请联系管理员" }, { status: 503 });
+        resolvedPlatform = provider.platform;
+        resolvedEndpoint = provider.api_endpoint;
+        resolvedApiKey = decrypt(provider.api_key_enc);
+        providerDefaultModel = typeof provider.default_model === "string" ? provider.default_model : "";
+        resolvedModelParams = {
+          ...((provider.default_params ?? {}) as Record<string, unknown>),
+          ...((agent.model_params ?? {}) as Record<string, unknown>),
+        };
+      } else if (agent.api_key_enc) {
+        resolvedApiKey = decrypt(agent.api_key_enc);
+      } else if (agent.platform === "openai" && user.tenantCode) {
+        const { data: tCfg } = await db
+          .from("tenants")
+          .select("openai_key_enc")
+          .eq("code", user.tenantCode)
+          .single();
+        if (!tCfg?.openai_key_enc) {
+          return NextResponse.json({ error: "智能体未配置 API Key，请联系管理员" }, { status: 503 });
+        }
+        resolvedApiKey = decrypt(tCfg.openai_key_enc);
+      } else {
+        return NextResponse.json({ error: "智能体未配置模型 API，请联系管理员" }, { status: 503 });
+      }
+    } catch (e) {
+      console.error(`[chat] decrypt failed for ${agent.agent_code}:`, e instanceof Error ? e.message : e);
+      return NextResponse.json({ error: "该智能体 API key 不可用，请联系管理员" }, { status: 503 });
+    }
+    if (!resolvedApiKey) {
+      return NextResponse.json({ error: "智能体 API Key 为空，请联系管理员" }, { status: 503 });
+    }
+
+    // W2 · 当前模型：agent.model_params.model → provider.default_model →
+    //   （仅 openai 平台）"gpt-4o-mini"，与 openai 适配器内部兜底对齐，
+    //   保证 日志模型 / 扣费模型 / 真实调用模型 一致。
+    const agentMp = (agent.model_params ?? {}) as Record<string, unknown>;
+    let modelUsed: string =
+      (typeof agentMp.model === "string" && agentMp.model) || providerDefaultModel || "";
+    if (!modelUsed && resolvedPlatform === "openai") modelUsed = "gpt-4o-mini";
+    if (modelUsed) resolvedModelParams = { ...resolvedModelParams, model: modelUsed };
+
+    // W2 · 算 weight（决策 3/4：模型在 model_quota_weights 里 enabled 才加权；
+    //   查不到 / 未 enabled → weight=1 软放过；不依赖是否拿到 usage）。
+    //   同一个 weight 给「带权重配额预检查」和「扣费」复用。
+    let weight = 1;
+    if (modelUsed) {
+      const { data: w } = await db
+        .from("model_quota_weights")
+        .select("weight_per_call, enabled")
+        .eq("model_id", modelUsed)
+        .maybeSingle();
+      if (w && w.enabled && typeof w.weight_per_call === "number" && w.weight_per_call > 0) {
+        weight = w.weight_per_call;
+      }
+    }
+
+    // ── 3. 配额检查（带权重）────────────────────────────────────
     if (!user.isPersonal) {
       // 5.15up bugfix · 区分"DB 故障"和"组织不存在/禁用"
       // 之前 `.single()` 在 ECONNRESET 时也返回 data:null，被误报为"组织账号已禁用"
@@ -78,8 +162,17 @@ export const POST = withRequestLog(async (
       if (new Date(tenant.expires_at) < new Date()) {
         return NextResponse.json({ error: "组织配额已到期，请联系管理员续期" }, { status: 403 });
       }
-      if (tenant.quota_used >= tenant.quota) {
-        return NextResponse.json({ error: "使用次数已耗尽，请联系管理员充值" }, { status: 403 });
+      // W2 · 带权重预检查（小B finding 1，方案甲）：与 increment_quota_used_weighted
+      //   内部守卫 `quota_used + weight <= quota` 口径一致，不漏扣、不超扣。
+      if (tenant.quota_used + weight > tenant.quota) {
+        return NextResponse.json(
+          {
+            error: weight > 1
+              ? `使用次数不足：本次（${modelUsed}）每次需 ${weight} 次额度，剩余不够，请联系管理员充值`
+              : "使用次数已耗尽，请联系管理员充值",
+          },
+          { status: 403 }
+        );
       }
     }
 
@@ -234,71 +327,13 @@ export const POST = withRequestLog(async (
     });
 
     // ── 6. 流式调用 AI ────────────────────────────────────────
-    // 5.14up Fix 3 · 在打开 SSE 流之前先解密 API key；失败时返回 JSON 错误，
-    // 避免进入 stream 后才抛错把"decrypt failed: ..."这种内部信息推到前端
-    // 5.15up API 管理模块 PR-2 · 配置解析优先级（修正版，小B 评审）：
-    //   1) agent.provider_id 存在 → **强制**走 model_providers；provider 删除/禁用/无 key
-    //      /endpoint 空/解密失败一律阻断报错，**不** fallback 到旧 api_key_enc
-    //      —— 否则在 API 管理里更新 / 禁用 key 会被 agent 残留的旧 key 绕过。
-    //   2) provider_id 为空 + agent.api_key_enc 存在 → 用旧 agent 自带 key（未迁移的历史 agent）
-    //   3) 仍无 + platform=openai + 租户 openai_key_enc → 用租户 key（老兜底）
-    //   4) 都没有 → 503
-    let resolvedPlatform: string = agent.platform;
-    let resolvedEndpoint: string = agent.api_endpoint;
-    let resolvedApiKey: string;
-    let resolvedModelParams: Record<string, unknown> = (agent.model_params ?? {}) as Record<string, unknown>;
-
-    try {
-      if (agent.provider_id) {
-        // 已迁移到集中 API 管理 → 严格走 provider，任何异常都阻断、不回退旧 key
-        const { data: provider, error: provErr } = await db
-          .from("model_providers")
-          .select("platform, api_endpoint, api_key_enc, default_params, enabled")
-          .eq("id", agent.provider_id)
-          .maybeSingle();
-        if (provErr) {
-          console.error(`[chat] load provider failed for ${agent.agent_code}:`, provErr.message);
-          return NextResponse.json({ error: "加载模型供应商失败，请稍后重试" }, { status: 503 });
-        }
-        if (!provider) return NextResponse.json({ error: "智能体绑定的模型供应商已删除，请联系管理员" }, { status: 503 });
-        if (!provider.enabled) return NextResponse.json({ error: "智能体绑定的模型供应商已禁用，请联系管理员" }, { status: 503 });
-        if (!provider.api_key_enc) return NextResponse.json({ error: "智能体绑定的模型供应商未配置 API Key，请联系管理员" }, { status: 503 });
-        if (!provider.api_endpoint) return NextResponse.json({ error: "智能体绑定的模型供应商未配置接口地址，请联系管理员" }, { status: 503 });
-        resolvedPlatform = provider.platform;
-        resolvedEndpoint = provider.api_endpoint;
-        resolvedApiKey = decrypt(provider.api_key_enc);
-        resolvedModelParams = {
-          ...((provider.default_params ?? {}) as Record<string, unknown>),
-          ...((agent.model_params ?? {}) as Record<string, unknown>),
-        };
-      } else if (agent.api_key_enc) {
-        // 未迁移的历史 agent → 仍用自带 key
-        resolvedApiKey = decrypt(agent.api_key_enc);
-      } else if (agent.platform === "openai" && user.tenantCode) {
-        const { data: tCfg } = await db
-          .from("tenants")
-          .select("openai_key_enc")
-          .eq("code", user.tenantCode)
-          .single();
-        if (!tCfg?.openai_key_enc) {
-          return NextResponse.json({ error: "智能体未配置 API Key，请联系管理员" }, { status: 503 });
-        }
-        resolvedApiKey = decrypt(tCfg.openai_key_enc);
-      } else {
-        return NextResponse.json({ error: "智能体未配置模型 API，请联系管理员" }, { status: 503 });
-      }
-    } catch (e) {
-      console.error(`[chat] decrypt failed for ${agent.agent_code}:`, e instanceof Error ? e.message : e);
-      return NextResponse.json({ error: "该智能体 API key 不可用，请联系管理员" }, { status: 503 });
-    }
-
-    if (!resolvedApiKey) {
-      return NextResponse.json({ error: "智能体 API Key 为空，请联系管理员" }, { status: 503 });
-    }
-
+    // 配置解析（resolvedPlatform/Endpoint/ApiKey/ModelParams）+ 模型 + weight
+    // 已在上面「步骤 2」完成 —— W2 要求把它提到配额检查之前。
     const encoder = new TextEncoder();
     let fullResponse = "";
     let newPlatformConvId: string | null = null;
+    // W1 · token 用量（仅 openai 平台会回调；其它平台保持 null）
+    let capturedUsage: TokenUsage | null = null;
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -311,6 +346,7 @@ export const POST = withRequestLog(async (
             agentCode: agent.agent_code,
             platformConvId,
             onPlatformConvId: (id) => { newPlatformConvId = id; },
+            onUsage: (u) => { capturedUsage = u; },
           });
 
           for await (const chunk of gen) {
@@ -335,7 +371,21 @@ export const POST = withRequestLog(async (
             return;
           }
 
-          // 流结束：保存 AI 回复 & 扣配额 & 写日志
+          // W2 · 扣配额 —— 不再塞进 Promise.all 静默跑（小B 复评）：
+          //   weight>1 走加权 RPC，否则走原按次 RPC；都检查结果，失败/没扣成要告警。
+          if (!user.isPersonal) {
+            const ded =
+              weight > 1
+                ? await db.rpc("increment_quota_used_weighted", { p_code: user.tenantCode, p_weight: weight })
+                : await db.rpc("increment_quota_used", { p_code: user.tenantCode });
+            if (ded.error) {
+              console.error(`[chat] 扣配额失败 tenant=${user.tenantCode} weight=${weight} agent=${agent.agent_code}:`, ded.error.message);
+            } else if (weight > 1 && ded.data === false) {
+              console.error(`[chat] 加权扣配额未生效 tenant=${user.tenantCode} weight=${weight} agent=${agent.agent_code} —— 余额不足或并发抢额度`);
+            }
+          }
+
+          // 流结束：保存 AI 回复 & 写日志
           await Promise.all([
             db.from("messages").insert({
               conversation_id: convId,
@@ -346,9 +396,6 @@ export const POST = withRequestLog(async (
             newPlatformConvId
               ? db.from("conversations").update({ platform_conv_id: newPlatformConvId }).eq("id", convId)
               : Promise.resolve(),
-            user.isPersonal
-              ? Promise.resolve()
-              : db.rpc("increment_quota_used", { p_code: user.tenantCode }),
             db.from("logs").insert({
               user_phone: user.phone,
               tenant_code: user.tenantCode,
@@ -357,6 +404,14 @@ export const POST = withRequestLog(async (
               action: "chat",
               status: "success",
               duration_ms: Date.now() - startTime,
+              // W1 · token 用量统计（仅 openai 平台有 capturedUsage；modelUsed 知道就记）
+              ...(modelUsed ? { model_used: modelUsed } : {}),
+              ...(capturedUsage
+                ? {
+                    prompt_tokens: capturedUsage.prompt_tokens,
+                    completion_tokens: capturedUsage.completion_tokens,
+                  }
+                : {}),
             }),
           ]);
 
