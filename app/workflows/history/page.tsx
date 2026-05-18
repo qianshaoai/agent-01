@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, History, Search, Trash2, ChevronRight, Loader2 } from "lucide-react";
+import { ArrowLeft, History, Search, Trash2, ChevronRight, Loader2, RotateCcw } from "lucide-react";
 
 type StatusFilter = "all" | "completed" | "abandoned";
 
@@ -28,6 +28,7 @@ export default function WorkflowHistoryPage() {
   const [keyword, setKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +61,28 @@ export default function WorkflowHistoryPage() {
       return true;
     });
   }, [sessions, keyword, statusFilter]);
+
+  // 5.16up R3 · 恢复已放弃的工作流：状态改回 in_progress，保留 current_step_idx
+  async function restoreSession(s: SessionItem) {
+    setRestoringId(s.id);
+    try {
+      const res = await fetch(`/api/workflow-sessions/${encodeURIComponent(s.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "in_progress" }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error ?? "恢复失败");
+        return;
+      }
+      // 恢复成功：会话回到「进行中」，从历史列表移除
+      setSessions((prev) => prev.filter((x) => x.id !== s.id));
+      alert(`「${s.name}」已恢复，可回到首页「进行中」继续。`);
+    } finally {
+      setRestoringId(null);
+    }
+  }
 
   async function permanentlyDelete(s: SessionItem) {
     if (!confirm(`确认永久删除「${s.name}」？\n\n该会话及全部对话记录将不可恢复。`)) return;
@@ -173,6 +196,16 @@ export default function WorkflowHistoryPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
+                      {s.status === "abandoned" && (
+                        <button
+                          onClick={() => restoreSession(s)}
+                          disabled={restoringId === s.id}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[12px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 disabled:opacity-50 transition-colors"
+                          title="恢复到「进行中」，继续这个工作流"
+                        >
+                          <RotateCcw size={12} /> {restoringId === s.id ? "恢复中…" : "恢复"}
+                        </button>
+                      )}
                       <Link
                         href={`/workflows/history/${encodeURIComponent(s.id)}`}
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[12px] font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors"

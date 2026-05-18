@@ -5,9 +5,8 @@ import { useRouter } from "next/navigation";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
-import {
-  Hammer, Plus, CheckCircle2, AlertCircle, Copy, Trash2, Edit, Loader2,
-} from "lucide-react";
+import { Hammer, Plus, Copy, Trash2, Edit, Loader2 } from "lucide-react";
+import { useToast } from "@/components/ui/toast";
 
 // 5.14up PR-B · 智能体搭建器 · 草稿列表
 // 权限：super_admin + system_admin
@@ -33,20 +32,15 @@ const STATUS_LABEL: Record<Draft["status"], { text: string; cls: string }> = {
 
 export default function AgentBuilderListPage() {
   const router = useRouter();
+  const { toast } = useToast();
   const [list, setList] = useState<Draft[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-
-  function flash(type: "ok" | "err", text: string) {
-    setMsg({ type, text });
-    setTimeout(() => setMsg(null), 3000);
-  }
 
   const loadList = useCallback(async () => {
     setLoading(true);
     // 重试 3 次：Supabase 在国内代理下间歇 ECONNRESET，单次失败概率高
-    // 三次都失败才 flash err，避免每次刷新都误报"获取列表失败"
+    // 三次都失败才弹 toast 报错，避免每次刷新都误报"获取列表失败"
     let lastErr: unknown = null;
     for (let i = 0; i < 3; i++) {
       try {
@@ -54,7 +48,6 @@ export default function AgentBuilderListPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "加载失败");
         setList(data.data ?? []);
-        setMsg(null);
         setLoading(false);
         return;
       } catch (e: unknown) {
@@ -62,9 +55,9 @@ export default function AgentBuilderListPage() {
         if (i < 2) await new Promise((r) => setTimeout(r, 300));
       }
     }
-    flash("err", lastErr instanceof Error ? lastErr.message : "加载失败");
+    toast(lastErr instanceof Error ? lastErr.message : "加载失败", "error");
     setLoading(false);
-  }, []);
+  }, [toast]);
 
   useEffect(() => { loadList(); }, [loadList]);
 
@@ -80,7 +73,7 @@ export default function AgentBuilderListPage() {
       if (!res.ok) throw new Error(data.error ?? "创建失败");
       router.push(`/admin/agent-builder/${data.id}`);
     } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "创建失败");
+      toast(e instanceof Error ? e.message : "创建失败", "error");
     } finally {
       setCreating(false);
     }
@@ -91,10 +84,10 @@ export default function AgentBuilderListPage() {
       const res = await fetch(`/api/admin/agent-drafts/${d.id}/duplicate`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "复制失败");
-      flash("ok", "已复制");
+      toast("草稿已复制", "success");
       await loadList();
     } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "复制失败");
+      toast(e instanceof Error ? e.message : "复制失败", "error");
     }
   }
 
@@ -108,10 +101,10 @@ export default function AgentBuilderListPage() {
       const res = await fetch(`/api/admin/agent-drafts/${d.id}`, { method: "DELETE" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "删除失败");
-      flash("ok", isPublished ? "已归档" : "已删除");
+      toast(isPublished ? "草稿已归档" : "草稿已删除", "success");
       await loadList();
     } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "删除失败");
+      toast(e instanceof Error ? e.message : "删除失败", "error");
       // 失败也刷一下列表：可能是 stale 数据（DB 里草稿其实早不在了，前端没同步）
       await loadList();
     }
@@ -130,13 +123,6 @@ export default function AgentBuilderListPage() {
             </Button>
           }
         />
-
-        {msg && (
-          <div className={`flex items-center gap-2 px-4 py-3 rounded-[10px] text-sm ${msg.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-            {msg.type === "ok" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
-            {msg.text}
-          </div>
-        )}
 
         {loading ? (
           <div className="flex items-center justify-center py-20 text-gray-400">

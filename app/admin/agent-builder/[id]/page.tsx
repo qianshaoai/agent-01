@@ -4,9 +4,10 @@ import Link from "next/link";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import {
-  ArrowLeft, CheckCircle2, AlertCircle, Save, Send, MessageSquare,
-  Settings2, Bot, Sparkles, ChevronRight, Loader2, X, Eraser, Rocket, ExternalLink,
+  ArrowLeft, CheckCircle2, Save, Send, MessageSquare,
+  Settings2, Bot, Sparkles, ChevronRight, Loader2, X, Eraser, Rocket, ExternalLink, HelpCircle,
 } from "lucide-react";
+import { useToast } from "@/components/ui/toast";
 
 type TestMsg = { role: "user" | "assistant"; content: string };
 
@@ -106,12 +107,13 @@ export default function AgentBuilderEditPage({
 }) {
   const { id } = use(params);
 
+  const { toast } = useToast();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   // PR-C · 测试聊天 state
   const [testHistory, setTestHistory] = useState<TestMsg[]>([]);
@@ -129,11 +131,6 @@ export default function AgentBuilderEditPage({
     agent_code: string | null;
     republish: boolean;
   } | null>(null);
-
-  function flash(type: "ok" | "err", text: string) {
-    setMsg({ type, text });
-    setTimeout(() => setMsg(null), 3000);
-  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -161,11 +158,11 @@ export default function AgentBuilderEditPage({
       setProviders((provData.data ?? []) as Provider[]);
       setDirty(false);
     } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "加载失败");
+      toast(e instanceof Error ? e.message : "加载失败", "error");
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, toast]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -203,10 +200,10 @@ export default function AgentBuilderEditPage({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "保存失败");
-      flash("ok", "已保存");
+      toast("草稿已保存", "success");
       setDirty(false);
     } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "保存失败");
+      toast(e instanceof Error ? e.message : "保存失败", "error");
     } finally {
       setSaving(false);
     }
@@ -230,15 +227,15 @@ export default function AgentBuilderEditPage({
     const text = testInput.trim();
     if (!text || testStreaming) return;
     if (dirty) {
-      flash("err", "请先保存草稿再测试聊天，否则测试用的是上次保存的配置");
+      toast("请先保存草稿再测试聊天，否则测试用的是上次保存的配置", "error");
       return;
     }
     if (draft.agent_type !== "chat") {
-      flash("err", "外链型智能体不支持测试聊天");
+      toast("外链型智能体不支持测试聊天", "error");
       return;
     }
     if (!draft.provider_id) {
-      flash("err", "请先在「模型设置」选择模型供应商");
+      toast("请先在「模型设置」选择模型供应商", "error");
       return;
     }
 
@@ -266,7 +263,7 @@ export default function AgentBuilderEditPage({
 
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error ?? `HTTP ${res.status}`);
+        throw new Error(data.error ?? `测试请求失败（HTTP ${res.status}），请稍后重试`);
       }
 
       const reader = res.body.getReader();
@@ -302,7 +299,7 @@ export default function AgentBuilderEditPage({
       if (acc) {
         setTestHistory([...history, { role: "assistant", content: acc }]);
       } else {
-        setTestError("上游返回空响应");
+        setTestError("模型没有返回内容。请检查「模型设置」里的供应商 / 模型是否可用，或稍后重试。");
       }
     } catch (e: unknown) {
       const errMsg = e instanceof Error ? e.message : "测试失败";
@@ -324,7 +321,7 @@ export default function AgentBuilderEditPage({
 
   function clearTestChat() {
     if (testStreaming) {
-      flash("err", "请先停止当前测试再清空");
+      toast("请先停止当前测试再清空", "error");
       return;
     }
     setTestHistory([]);
@@ -336,7 +333,7 @@ export default function AgentBuilderEditPage({
   async function doPublish() {
     if (!draft) return;
     if (dirty) {
-      flash("err", "请先保存草稿再发布");
+      toast("请先保存草稿再发布", "error");
       return;
     }
     setPublishing(true);
@@ -352,7 +349,7 @@ export default function AgentBuilderEditPage({
       // 重新拉草稿，更新 status
       load();
     } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "发布失败");
+      toast(e instanceof Error ? e.message : "发布失败", "error");
       setPublishOpen(false);
     } finally {
       setPublishing(false);
@@ -396,8 +393,15 @@ export default function AgentBuilderEditPage({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
+              onClick={() => setShowHelp((v) => !v)}
+              className="px-3 h-9 rounded-[8px] text-sm text-gray-500 hover:text-[#002FA7] hover:bg-[#002FA7]/5 inline-flex items-center gap-1.5"
+              title="查看搭建器使用说明"
+            >
+              <HelpCircle size={14} /> 使用说明
+            </button>
+            <button
               onClick={() => {
-                if (dirty) { flash("err", "请先保存草稿再发布"); return; }
+                if (dirty) { toast("请先保存草稿再发布", "error"); return; }
                 setPublishOpen(true);
                 setPublishResult(null);
               }}
@@ -413,10 +417,17 @@ export default function AgentBuilderEditPage({
           </div>
         </div>
 
-        {msg && (
-          <div className={`flex items-center gap-2 px-4 py-3 rounded-[10px] text-sm ${msg.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-            {msg.type === "ok" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
-            {msg.text}
+        {showHelp && (
+          <div className="card p-4 bg-[#f0f4ff] border border-[#002FA7]/15">
+            <div className="flex items-start gap-2 text-sm text-gray-600">
+              <HelpCircle size={16} className="text-[#002FA7] mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <p className="font-medium text-gray-800">搭建器使用说明</p>
+                <p>按 5 个分区从上到下填：① 基础信息 → ② 模型设置 → ③ 提示词设置 → ④ 对话体验 → ⑤ 发布设置。</p>
+                <p>填完点右上角「保存草稿」，再用右侧「测试聊天」验证效果；确认无误后点「发布」。</p>
+                <p>发布后的智能体默认<strong className="text-gray-700">禁用</strong>，不会立即对员工开放，需到「智能体管理」里启用。</p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -426,7 +437,7 @@ export default function AgentBuilderEditPage({
           <div className="space-y-4">
             {/* 分区 1：基础信息 */}
             <section className="card p-5">
-              <SectionTitle icon={<Bot size={16} />} title="1. 基础信息" />
+              <SectionTitle icon={<Bot size={16} />} title="1. 基础信息" desc="智能体的名字和简介，员工在前台一眼看到的就是这里。" />
               <div className="space-y-3 mt-3">
                 <Field label="智能体名称 *" hint="员工在前台看到的名字，建议简短易记">
                   <input
@@ -454,7 +465,7 @@ export default function AgentBuilderEditPage({
             {/* 分区 2：模型设置（仅对话型显示） */}
             {draft.agent_type === "chat" && (
               <section className="card p-5">
-                <SectionTitle icon={<Settings2 size={16} />} title="2. 模型设置" />
+                <SectionTitle icon={<Settings2 size={16} />} title="2. 模型设置" desc="选择由哪个供应商、哪个模型来驱动这个智能体。" />
                 <div className="space-y-3 mt-3">
                   <Field label="模型供应商 *">
                     <select
@@ -570,7 +581,7 @@ export default function AgentBuilderEditPage({
             {/* 分区 3：提示词设置（仅对话型） */}
             {draft.agent_type === "chat" && (
               <section className="card p-5">
-                <SectionTitle icon={<Sparkles size={16} />} title="3. 提示词设置" />
+                <SectionTitle icon={<Sparkles size={16} />} title="3. 提示词设置" desc="用系统提示词定义智能体的角色、口吻和业务规则。" />
                 <div className="space-y-3 mt-3">
                   <Field label="系统提示词" hint="定义智能体的角色、口吻、业务规则">
                     <textarea
@@ -591,7 +602,7 @@ export default function AgentBuilderEditPage({
             {/* 分区 4：对话体验（仅对话型） */}
             {draft.agent_type === "chat" && (
               <section className="card p-5">
-                <SectionTitle icon={<MessageSquare size={16} />} title="4. 对话体验" />
+                <SectionTitle icon={<MessageSquare size={16} />} title="4. 对话体验" desc="开场白、建议问题，以及是否允许上传文件 / 图片。" />
                 <div className="space-y-3 mt-3">
                   <Field label="开场白" hint="员工进入对话时智能体自动说的第一句话">
                     <textarea
@@ -644,7 +655,7 @@ export default function AgentBuilderEditPage({
 
             {/* 分区 5：发布设置 */}
             <section className="card p-5">
-              <SectionTitle icon={<ChevronRight size={16} />} title="5. 发布设置" />
+              <SectionTitle icon={<ChevronRight size={16} />} title="5. 发布设置" desc="设置发布后哪些用户可见；发布动作在页面右上角「发布」。" />
               <div className="space-y-3 mt-3">
                 <Field label="可见范围" hint="发布后哪些用户能在前台看到这个智能体">
                   <select
@@ -858,11 +869,14 @@ export default function AgentBuilderEditPage({
 }
 
 // ─── 小组件 ────────────────────────────────────────────────────────────────
-function SectionTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
+function SectionTitle({ icon, title, desc }: { icon: React.ReactNode; title: string; desc?: string }) {
   return (
-    <div className="flex items-center gap-2 text-[15px] font-semibold text-gray-900">
-      <span className="text-[#002FA7]">{icon}</span>
-      {title}
+    <div>
+      <div className="flex items-center gap-2 text-[15px] font-semibold text-gray-900">
+        <span className="text-[#002FA7]">{icon}</span>
+        {title}
+      </div>
+      {desc && <p className="text-[12px] text-gray-400 mt-1 pl-6">{desc}</p>}
     </div>
   );
 }
