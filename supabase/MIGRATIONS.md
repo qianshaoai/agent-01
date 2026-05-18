@@ -38,6 +38,8 @@
 | `migration_v21.sql` | 删除用户复用账号字段（status='deleted' 的 username/phone 改墓碑值） | ☐ |
 | `migration_v22.sql` | **4.30up · A 方案** — `messages` 表加 `aborted` 列 + 部分索引 `idx_messages_conv_active`（仅索引未中断行）<br>chat 路由拉历史时 `.eq("aborted", false)` 过滤被中断的 turn | ✅ 2026-04-30 |
 | `migration_v24.sql` | **5.6up** — 后台修改用户所属组织。`users` 加 `force_relogin_at TIMESTAMPTZ`；新增 RPC `change_user_tenant(user_id, new_tenant_code)` 单事务做完：改 users（含 user_type/role/dept_id/team_id 同步）+ 清理跨组织分组成员 + 追溯改 logs.tenant_code + 写一条 audit 事件<br>v23 编号已被"组织码可改"草案占名（已搁置），故跳号到 v24 | ✅ 2026-05-06 |
+| `migration_v25.sql` | **5.7up · GPT 接入阶段一** — `tenants` 加 `openai_key_enc / openai_key_set_at / openai_key_set_by`；`logs` 加 `prompt_tokens / completion_tokens / model_used` + `logs_model_used_idx` 索引；新建 `model_quota_weights` 表（种子 4o-mini=1 / 4o=5 / o1 系列默认禁用）；新增加权扣额度 RPC `increment_quota_used_weighted(p_code, p_weight)`（内部守卫 `quota_used + weight <= quota`）<br>5.16up 从 devA 分支补录文件入仓库 | ✅ 2026-05（用户已跑） |
+| `migration_v26.sql` | **5.7up · GPT 接入阶段二** — `conversations` 加 `summary_text TEXT` + `summary_until_at TIMESTAMPTZ`，支撑滑动窗口 + 增量摘要降本<br>5.16up 从 devA 分支补录文件入仓库 | ✅ 2026-05（用户已跑） |
 | `migration_v27.sql` | **5.8up** — 新增 `audit_logs` 表，记录管理员对智能体/工作流的增删改操作；含 created_at / resource_type / action 三个索引 | ☐ |
 | `migration_v34_logs_status_aborted.sql` | **5.15up** — `logs.status` CHECK 加 `'aborted'`，修 chat aborted 日志被 DB 静默拒收的 bug | ✅ 2026-05-15 |
 | `migration_v35_model_providers.sql` | **5.15up PR-A** — 新增 `model_providers` 表（统一模型供应商：编号/名称/平台/endpoint/加密 key/默认模型参数/启停 + enabled、platform 索引） | ✅ 2026-05-15 |
