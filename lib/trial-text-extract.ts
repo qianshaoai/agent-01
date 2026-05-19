@@ -17,11 +17,18 @@ export type ExtractResult = {
   truncated: boolean;
 };
 
-/** 把 buffer 按文件扩展名解析成纯文本，失败返回 null */
-export async function extractTextFromBuffer(
+/**
+ * 把 buffer 按扩展名解析成「清洗后的纯文本」，**不做长度截断**；
+ * 失败 / 空内容 / 不支持的类型返回 null。
+ *
+ * 5.19up 抽出的公共解析能力（并行约束方案 A §4.1）：
+ * - 聊天附件 → extractTextFromBuffer（在此基础上按 TEXT_MAX_CHARS 截断，行为不变）
+ * - 知识库   → lib/kb/extract.ts（在此基础上按 D9 字符上限处理，超限失败不截断）
+ */
+export async function parseDocumentText(
   buffer: Buffer,
   fileName: string
-): Promise<ExtractResult | null> {
+): Promise<string | null> {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
 
   let raw: string | null = null;
@@ -59,15 +66,20 @@ export async function extractTextFromBuffer(
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  if (cleaned.length === 0) return null;
+  return cleaned.length === 0 ? null : cleaned;
+}
+
+/** 把 buffer 按文件扩展名解析成纯文本，失败返回 null。聊天附件用，超 TEXT_MAX_CHARS 截断（行为不变）。 */
+export async function extractTextFromBuffer(
+  buffer: Buffer,
+  fileName: string
+): Promise<ExtractResult | null> {
+  const cleaned = await parseDocumentText(buffer, fileName);
+  if (cleaned === null) return null;
 
   if (cleaned.length > TEXT_MAX_CHARS) {
-    return {
-      text: cleaned.slice(0, TEXT_MAX_CHARS),
-      truncated: true,
-    };
+    return { text: cleaned.slice(0, TEXT_MAX_CHARS), truncated: true };
   }
-
   return { text: cleaned, truncated: false };
 }
 

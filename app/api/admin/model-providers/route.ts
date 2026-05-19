@@ -17,8 +17,15 @@ const ALLOWED_PLATFORMS = ["openai", "coze", "dify", "yuanqi", "qingyan", "zhipu
 const CATEGORY_PLATFORMS: Record<string, string[]> = {
   model: ["openai", "zhipu"],
   agent: ["coze", "dify", "yuanqi", "qingyan"],
+  // 5.19up D1-2：知识库 embedding 配置并进 API 管理（lib/kb/embed.ts 从这里取配置）
+  embedding: ["zhipu"],
 };
-const CATEGORY_LABEL: Record<string, string> = { model: "大模型 API", agent: "智能体 API" };
+const CATEGORY_LABEL: Record<string, string> = {
+  model: "大模型 API",
+  agent: "智能体 API",
+  embedding: "Embedding API",
+};
+const VALID_CATEGORIES = ["model", "agent", "embedding"];
 
 type ProviderRow = {
   id: string;
@@ -53,7 +60,7 @@ export async function GET(req: NextRequest) {
     .from("model_providers")
     .select("*")
     .order("created_at", { ascending: false });
-  if (category === "model" || category === "agent") {
+  if (category && VALID_CATEGORIES.includes(category)) {
     query = query.eq("category", category);
   }
 
@@ -94,8 +101,8 @@ export async function POST(req: NextRequest) {
     return apiError("供应商编号只允许英文字母、数字、下划线、短横线", "VALIDATION_ERROR");
   }
   if (!name) return apiError("供应商名称不能为空", "VALIDATION_ERROR");
-  if (category !== "model" && category !== "agent") {
-    return apiError("API 类型必须是 大模型 API / 智能体 API 之一", "VALIDATION_ERROR");
+  if (!VALID_CATEGORIES.includes(category)) {
+    return apiError("API 类型必须是 大模型 API / 智能体 API / Embedding API 之一", "VALIDATION_ERROR");
   }
   if (!ALLOWED_PLATFORMS.includes(platform)) {
     return apiError(`平台类型必须是 ${ALLOWED_PLATFORMS.join(" / ")} 之一`, "VALIDATION_ERROR");

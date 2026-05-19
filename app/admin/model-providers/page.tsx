@@ -12,7 +12,7 @@ import {
 // 功能：列表、新增、编辑、启停、删除、测试连通性
 // 权限：super_admin 全部操作；system_admin 仅看 + 测试
 
-type ApiCategory = "model" | "agent";
+type ApiCategory = "model" | "agent" | "embedding";
 
 type Provider = {
   id: string;
@@ -37,16 +37,28 @@ const PLATFORM_OPTIONS: { value: string; label: string; category: ApiCategory }[
   { value: "dify", label: "Dify", category: "agent" },
   { value: "yuanqi", label: "腾讯元器", category: "agent" },
   { value: "qingyan", label: "智谱清言", category: "agent" },
+  // 5.19up D1-2 · 知识库 embedding 配置（lib/kb/embed.ts 从这里取配置）
+  { value: "zhipu", label: "智谱 Embedding（embedding-2 / embedding-3）", category: "embedding" },
 ];
 
-const CATEGORY_LABEL: Record<ApiCategory, string> = { model: "大模型 API", agent: "智能体 API" };
+const CATEGORY_LABEL: Record<ApiCategory, string> = {
+  model: "大模型 API",
+  agent: "智能体 API",
+  embedding: "Embedding API",
+};
 
 /** 行 / 旧数据兜底归类（理论上 migration_v37 后都已有 category） */
 function catOf(c: string | undefined): ApiCategory {
-  return c === "agent" ? "agent" : "model";
+  if (c === "agent") return "agent";
+  if (c === "embedding") return "embedding";
+  return "model";
 }
 
-const PLATFORM_LABEL = Object.fromEntries(PLATFORM_OPTIONS.map((p) => [p.value, p.label]));
+// 平台 → 展示名；同一 platform 值可能在多个 category 下出现（如 zhipu），取首个
+const PLATFORM_LABEL: Record<string, string> = {};
+for (const p of PLATFORM_OPTIONS) {
+  if (!(p.value in PLATFORM_LABEL)) PLATFORM_LABEL[p.value] = p.label;
+}
 
 // 各平台的默认 endpoint / model（切换平台时自动填）
 const PLATFORM_DEFAULTS: Record<string, { endpoint: string; model: string }> = {
@@ -72,6 +84,20 @@ type FormState = {
 
 // 按 category 造一份空表单：平台 / endpoint / model 取该类首个平台的默认值
 function emptyFormFor(category: ApiCategory): FormState {
+  if (category === "embedding") {
+    // D1：智谱 embedding，向量维度固定 1024（embedding-3 用 dimensions 参数降维）
+    return {
+      provider_code: "",
+      name: "",
+      platform: "zhipu",
+      category: "embedding",
+      api_endpoint: "https://open.bigmodel.cn/api/paas/v4/embeddings",
+      api_key: "",
+      default_model: "embedding-3",
+      default_params_json: '{\n  "dimensions": 1024\n}',
+      enabled: true,
+    };
+  }
   const platform = category === "model" ? "openai" : "coze";
   const d = PLATFORM_DEFAULTS[platform];
   return {
@@ -300,7 +326,7 @@ export default function ModelProvidersPage() {
 
         {/* 5.15up · 大模型 API / 智能体 API 两 tab */}
         <div className="flex gap-1 border-b border-gray-200">
-          {(["model", "agent"] as ApiCategory[]).map((c) => {
+          {(["model", "agent", "embedding"] as ApiCategory[]).map((c) => {
             const count = list.filter((p) => catOf(p.category) === c).length;
             return (
               <button
@@ -546,7 +572,7 @@ export default function ModelProvidersPage() {
               {/* 默认模型 / 默认参数仅对「大模型 API」有意义；
                   「智能体 API」（Coze/Dify/元器/清言）模型与参数都在平台侧 bot 上配，
                   这里只是一个平台凭证，不显示这两个字段 */}
-              {form.category === "model" && (
+              {(form.category === "model" || form.category === "embedding") && (
                 <>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-gray-500">默认模型</label>

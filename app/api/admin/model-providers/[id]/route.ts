@@ -14,8 +14,15 @@ const ALLOWED_PLATFORMS = ["openai", "coze", "dify", "yuanqi", "qingyan", "zhipu
 const CATEGORY_PLATFORMS: Record<string, string[]> = {
   model: ["openai", "zhipu"],
   agent: ["coze", "dify", "yuanqi", "qingyan"],
+  // 5.19up D1-2：知识库 embedding 配置并进 API 管理
+  embedding: ["zhipu"],
 };
-const CATEGORY_LABEL: Record<string, string> = { model: "大模型 API", agent: "智能体 API" };
+const CATEGORY_LABEL: Record<string, string> = {
+  model: "大模型 API",
+  agent: "智能体 API",
+  embedding: "Embedding API",
+};
+const VALID_CATEGORIES = ["model", "agent", "embedding"];
 
 type ProviderRow = {
   id: string;
@@ -90,8 +97,8 @@ export async function PATCH(
     patch.platform = body.platform;
   }
   if (typeof body.category === "string") {
-    if (body.category !== "model" && body.category !== "agent") {
-      return apiError("API 类型必须是 大模型 API / 智能体 API 之一", "VALIDATION_ERROR");
+    if (!VALID_CATEGORIES.includes(body.category)) {
+      return apiError("API 类型必须是 大模型 API / 智能体 API / Embedding API 之一", "VALIDATION_ERROR");
     }
     patch.category = body.category;
   }
