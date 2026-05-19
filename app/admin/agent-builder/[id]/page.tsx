@@ -113,6 +113,7 @@ export default function AgentBuilderEditPage({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState(false); // 5.16up · 上次自动保存是否失败
   const [showHelp, setShowHelp] = useState(false);
 
   // PR-C · 测试聊天 state
@@ -171,9 +172,10 @@ export default function AgentBuilderEditPage({
   function patchDraft(updater: (d: Draft) => Draft) {
     setDraft((prev) => (prev ? updater(prev) : prev));
     setDirty(true);
+    setSaveError(false); // 编辑即清除上次保存失败态，放行自动保存重试
   }
 
-  async function save() {
+  async function save(opts?: { auto?: boolean }) {
     if (!draft) return;
     setSaving(true);
     try {
@@ -202,9 +204,11 @@ export default function AgentBuilderEditPage({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "保存失败");
-      toast("草稿已保存", "success");
       setDirty(false);
+      setSaveError(false);
+      if (!opts?.auto) toast("草稿已保存", "success");
     } catch (e: unknown) {
+      setSaveError(true);
       toast(e instanceof Error ? e.message : "保存失败", "error");
     } finally {
       setSaving(false);
@@ -223,15 +227,22 @@ export default function AgentBuilderEditPage({
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, [dirty]);
 
+  // 5.16up · 草稿自动保存：内容变化后防抖 1.5s 落库。
+  // 保存失败则停下（不循环重试刷 toast），待下次编辑或点状态条手动重试。
+  useEffect(() => {
+    if (!draft || !dirty || saving || saveError) return;
+    const t = setTimeout(() => { void save({ auto: true }); }, 1500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, dirty, saving, saveError]);
+
   // ─── PR-C · 测试聊天 ───────────────────────────────────────
   async function sendTestChat() {
     if (!draft) return;
     const text = testInput.trim();
     if (!text || testStreaming) return;
-    if (dirty) {
-      toast("请先保存草稿再测试聊天，否则测试用的是上次保存的配置", "error");
-      return;
-    }
+    // 5.16up · 自动保存：测试前把未落库的改动刷一遍，确保测的是最新配置
+    if (dirty) await save({ auto: true });
     if (draft.agent_type !== "chat") {
       toast("外链型智能体不支持测试聊天", "error");
       return;
@@ -334,10 +345,8 @@ export default function AgentBuilderEditPage({
   // ─── PR-C · 发布 ───────────────────────────────────────────
   async function doPublish() {
     if (!draft) return;
-    if (dirty) {
-      toast("请先保存草稿再发布", "error");
-      return;
-    }
+    // 5.16up · 自动保存：发布前刷盘（publish 接口读 DB 里的草稿）
+    if (dirty) await save({ auto: true });
     setPublishing(true);
     try {
       const res = await fetch(`/api/admin/agent-drafts/${id}/publish`, { method: "POST" });
@@ -390,9 +399,7 @@ export default function AgentBuilderEditPage({
               onChange={(e) => patchDraft((d) => ({ ...d, name: e.target.value }))}
               placeholder="智能体名称"
               className="text-lg font-semibold text-gray-900 bg-transparent border-0 border-b border-transparent hover:border-gray-200 focus:border-[#002FA7] focus:outline-none px-1 py-0.5 min-w-0 flex-1"
-            />
-            {dirty && <span className="text-xs text-amber-600 shrink-0">有未保存的修改</span>}
-          </div>
+            />          </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setShowHelp((v) => !v)}
@@ -403,19 +410,28 @@ export default function AgentBuilderEditPage({
             </button>
             <button
               onClick={() => {
-                if (dirty) { toast("请先保存草稿再发布", "error"); return; }
                 setPublishOpen(true);
                 setPublishResult(null);
               }}
-              disabled={dirty || saving || draft.status === "archived"}
+              disabled={saving || draft.status === "archived"}
               className="px-3 h-9 rounded-[8px] text-sm text-[#002FA7] bg-white border border-[#002FA7] hover:bg-[#002FA7]/5 disabled:text-gray-400 disabled:border-gray-200 disabled:bg-gray-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-              title={dirty ? "有未保存修改，先保存草稿" : "把当前草稿发布为正式智能体（默认 disabled，待 PR-D 启用）"}
+              title="把当前草稿发布为正式智能体"
             >
               <Rocket size={14} /> 发布
             </button>
-            <Button onClick={save} loading={saving} className="flex items-center gap-1.5">
-              <Save size={14} /> 保存草稿
-            </Button>
+            {/* 5.16up · 草稿自动保存：此处是保存状态条，点击可立即保存 / 失败时重试 */}
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving}
+              title="草稿每次改动后自动保存；点此可立即保存"
+              className="px-3 h-9 rounded-[8px] text-sm inline-flex items-center gap-1.5 text-gray-500 hover:bg-gray-100 disabled:cursor-default"
+            >
+              <Save size={14} className="shrink-0" />
+              <span className={saveError ? "text-red-600" : dirty ? "text-amber-600" : "text-green-600"}>
+                {saving ? "保存中…" : saveError ? "保存失败 · 点击重试" : dirty ? "待自动保存…" : "已保存"}
+              </span>
+            </button>
           </div>
         </div>
 
@@ -426,8 +442,8 @@ export default function AgentBuilderEditPage({
               <div className="space-y-1">
                 <p className="font-medium text-gray-800">搭建器使用说明</p>
                 <p>按 5 个分区从上到下填：① 基础信息 → ② 模型设置 → ③ 提示词设置 → ④ 对话体验 → ⑤ 发布设置。</p>
-                <p>填完点右上角「保存草稿」，再用右侧「测试聊天」验证效果；确认无误后点「发布」。</p>
-                <p>发布后的智能体默认<strong className="text-gray-700">禁用</strong>，不会立即对员工开放，需到「智能体管理」里启用。</p>
+                <p>草稿改动会<strong className="text-gray-700">自动保存</strong>；用右侧「测试聊天」验证效果，确认无误后点「发布」。</p>
+                <p>发布后即对授权范围内的员工开放，无需额外启用。</p>
               </div>
             </div>
           </div>
@@ -676,13 +692,7 @@ export default function AgentBuilderEditPage({
                     <option value="all">全平台可见</option>
                     <option value="custom">自定义范围（待后续完善）</option>
                   </select>
-                </Field>
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-[8px] text-xs text-amber-700">
-                  ⚠️ 发布后默认 <code className="font-mono bg-white px-1 rounded">enabled=false</code>，
-                  不会立即对前台用户开放。PR-D 聊天链路兼容上线后，
-                  再统一启用。这避免发布的智能体出现「可见但聊不通」。
-                </div>
-              </div>
+                </Field>              </div>
             </section>
           </div>
 
@@ -809,12 +819,7 @@ export default function AgentBuilderEditPage({
             {!publishResult ? (
               <>
                 <div className="px-6 py-5 space-y-3 text-sm text-gray-700">
-                  <p>把当前草稿发布到正式 <code className="text-xs bg-gray-100 px-1 rounded">agents</code> 表，员工就能在前台看到它。</p>
-                  <div className="bg-amber-50 border border-amber-200 rounded-[8px] p-3 text-xs text-amber-900">
-                    ⚠️ <strong>本次发布的智能体默认禁用</strong>（enabled=false）。<br />
-                    PR-D 阶段把聊天链路适配到新的模型供应商体系后，再统一启用。这样可以避免「发布出来但聊不通」的体验断层。
-                  </div>
-                  {draft.status === "published" && (
+                  <p>把当前草稿发布到正式 <code className="text-xs bg-gray-100 px-1 rounded">agents</code> 表，员工就能在前台看到它。</p>                  {draft.status === "published" && (
                     <p className="text-xs text-gray-500">
                       该草稿之前发布过，会<strong>重新更新</strong>已有的智能体记录，不会重复创建。
                     </p>
@@ -847,8 +852,8 @@ export default function AgentBuilderEditPage({
                     {publishResult.agent_code && (
                       <p>智能体编号：<code className="text-xs bg-gray-100 px-1 rounded">{publishResult.agent_code}</code></p>
                     )}
-                    <p className="text-xs text-amber-600 mt-2">
-                      已写入 agents 表但默认 <strong>未启用</strong>，员工还看不到，待 PR-D 后启用。
+                    <p className="text-xs text-green-600 mt-2">
+                      已发布并启用，授权范围内的员工现在就能在前台看到。
                     </p>
                   </div>
                 </div>

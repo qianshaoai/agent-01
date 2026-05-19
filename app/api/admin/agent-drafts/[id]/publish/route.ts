@@ -8,9 +8,7 @@ import { writeAuditLog } from "@/lib/audit";
 //
 // 设计要点：
 // 1. 重复发布同一草稿不会创建多个 agent（按 published_from_draft_id 唯一匹配，找到则 update，否则 insert）
-// 2. **PR-D 启用边界约束**：发布出的 agent 默认 enabled=false。
-//    PR-D（chat 链路兼容 provider）合入并回归通过后，再批量启用。
-//    避免在 PR-D 之前用户已经能看到新 agent 但聊不通的体验断层。
+// 2. 5.16up · 发布即启用：PR-D 聊天链路兼容已上线，发布出的 agent 直接 enabled=true。
 // 3. system_prompt 既写到 builder_config 也写到 model_params（兼容旧 chat route 读取）
 // 4. agent_code 生成：草稿首次发布 → AGT-BUILD-{draft.id前8位}；重复发布沿用旧 code
 
@@ -134,9 +132,8 @@ export async function POST(
   }
 
   // ── upsert agents ──
-  // 注：agents.enabled 强制 false（PR-D 启用边界约束）
-  //     现有 enabled=true 的 agent 如果被这个 draft 重发布，会被改成 false，
-  //     这是预期行为：draft 改完重发布意味着内容变化，需要回归后再启用
+  // 5.16up · 发布即启用：PR-D 聊天链路兼容已上线，发布出的 agent 直接 enabled=true，
+  //   重发布同理（内容已确认，直接对外）。
   const agentPayload: Record<string, unknown> = {
     name: draft.name.trim(),
     description: (draft.description ?? "").trim(),
@@ -144,7 +141,7 @@ export async function POST(
     api_endpoint: provider?.api_endpoint ?? draft.external_url ?? "",
     api_key_enc: "", // 走 provider_id 取 key，agent 自己不存 key
     model_params: mergedModelParams,
-    enabled: false, // PR-D 启用边界
+    enabled: true, // 5.16up · 发布即启用
     // PR-B 加的字段
     provider_id: draft.provider_id ?? null,
     builder_config: builderConfig,
@@ -214,15 +211,14 @@ export async function POST(
       republish: !!existingAgentId,
       provider_id: draft.provider_id,
       agent_type: draft.agent_type,
-      enabled: false, // 提醒后续启用边界
+      enabled: true,
     },
   });
 
   return NextResponse.json({
     agent_id: agentId,
     agent_code: agentCode,
-    enabled: false,
+    enabled: true,
     republish: !!existingAgentId,
-    note: "已发布但默认 enabled=false。PR-D（chat 链路兼容 provider）完成并回归通过后再统一启用。",
   });
 }
