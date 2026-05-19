@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
   const { page, pageSize, start } = parsePagination(req, 50);
   const [agentsRes, rpRes, acRes, catRes] = await Promise.all([
     db.from("agents")
-      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params, provider_id", { count: "exact" })
+      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params, provider_id, published_from_draft_id", { count: "exact" })
       .order("created_at", { ascending: false })
       .range(start, start + pageSize - 1),
     db.from("resource_permissions").select("resource_id, scope_type, scope_id").eq("resource_type", "agent"),

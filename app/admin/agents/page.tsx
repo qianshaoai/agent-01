@@ -28,6 +28,8 @@ type Agent = {
   api_endpoint?: string;
   model_params?: Record<string, unknown>;
   provider_id?: string | null;
+  // 5.19up · 非空 = 由搭建器发布的智能体（API 配置归搭建器管）
+  published_from_draft_id?: string | null;
   provider?: { name: string; category: string; platform: string; enabled: boolean } | null;
   categories?: { name: string; icon_url?: string | null };
   categoriesAll?: { id: string; name: string; icon_url: string | null }[];
@@ -676,7 +678,8 @@ export default function AgentsAdminPage() {
                               {a.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                             </button>
                             <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
-                            {a.agent_type !== "external" && (
+                            {/* 5.19up · 搭建器发布的智能体 API 配置归搭建器管，此处不放按钮，防误触误改 */}
+                            {a.agent_type !== "external" && !a.published_from_draft_id && (
                               <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置" aria-label="API 配置"><Key size={14} /></button>
                             )}
                             <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置" aria-label="权限设置"><Settings2 size={14} /></button>
