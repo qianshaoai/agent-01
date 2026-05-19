@@ -44,9 +44,8 @@ function sanitize(row: ProviderRow) {
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权查看模型供应商", "FORBIDDEN");
-  }
+  // 5.19up · org_admin 也可读供应商列表（搭建器选模型供应商需要）；
+  //   返回经 sanitize 脱敏、不含 key。创建 / 改 / 删仍限超管。
 
   // ?category=model|agent → 只返回该类（API 管理两 tab 用）；不带则全返
   const category = req.nextUrl.searchParams.get("category");
