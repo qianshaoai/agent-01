@@ -137,7 +137,9 @@ export default function AgentBuilderEditPage({
     try {
       const [draftRes, provRes] = await Promise.all([
         fetch(`/api/admin/agent-drafts/${id}`, { cache: "no-store" }),
-        fetch(`/api/admin/model-providers`, { cache: "no-store" }),
+        // 5.16up 回归修复 · 搭建器只建模型对话型智能体 → 只列 category=model 的供应商，
+        // 不混入 coze / 元器 / 清言等智能体平台 API（category=agent）
+        fetch(`/api/admin/model-providers?category=model`, { cache: "no-store" }),
       ]);
       const draftData = await draftRes.json();
       const provData = await provRes.json();
