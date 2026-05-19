@@ -11,6 +11,8 @@ import { writeAuditLog } from "@/lib/audit";
 // 2. 5.16up · 发布即启用：PR-D 聊天链路兼容已上线，发布出的 agent 直接 enabled=true。
 // 3. system_prompt 既写到 builder_config 也写到 model_params（兼容旧 chat route 读取）
 // 4. agent_code 生成：草稿首次发布 → AGT-BUILD-{draft.id前8位}；重复发布沿用旧 code
+// 5. 5.19up · 发布时把 visibility_config 翻译成 agent 的 resource_permissions（set_agent_permissions
+//    RPC 原子全量替换）；scope 校验在任何 DB 写入之前；权限写入失败即发布失败、不标 draft published
 
 type DraftRow = {
   id: string;
@@ -79,6 +81,35 @@ export async function POST(
       : "";
     if (systemPrompt.length < 10) {
       return apiError("建议系统提示词至少 10 个字符，请补充人设描述", "VALIDATION_ERROR");
+    }
+  }
+
+  // ── 5.19up · 校验可见范围 visibility_config（放在任何 DB 写入之前）──
+  const visCfg = (draft.visibility_config ?? {}) as { visible_to?: string; scope?: unknown };
+  let visibleTo = typeof visCfg.visible_to === "string" ? visCfg.visible_to : "owner_only";
+  // 旧草稿值 "custom" / 未知值 → 降级 "owner_only"（安全侧，不误开放）
+  if (visibleTo !== "all" && visibleTo !== "org" && visibleTo !== "owner_only") {
+    visibleTo = "owner_only";
+  }
+  let orgScope: string[] = [];
+  if (visibleTo === "org") {
+    const rawScope = Array.isArray(visCfg.scope) ? visCfg.scope : [];
+    orgScope = [...new Set(
+      rawScope.filter((s): s is string => typeof s === "string" && s.trim() !== ""),
+    )];
+    if (orgScope.length === 0) {
+      return apiError("「指定组织可见」需至少选择一个组织", "VALIDATION_ERROR");
+    }
+    const { data: tenantRows, error: tErr } = await db
+      .from("tenants").select("code").in("code", orgScope);
+    if (tErr) {
+      console.error("[draft publish validate scope]", tErr);
+      return apiError("校验可见组织失败", "INTERNAL_ERROR");
+    }
+    const validCodes = new Set((tenantRows ?? []).map((t: { code: string }) => t.code));
+    const invalid = orgScope.filter((c) => !validCodes.has(c));
+    if (invalid.length > 0) {
+      return apiError(`可见范围含无效组织码：${invalid.join("、")}`, "VALIDATION_ERROR");
     }
   }
 
@@ -185,6 +216,23 @@ export async function POST(
     agentId = (inserted as { id: string }).id;
   }
 
+  // ── 5.19up · 按可见范围全量替换该 agent 的 resource_permissions（原子 RPC）──
+  const perms: Array<{ scope_type: string; scope_id: string | null }> =
+    visibleTo === "all"
+      ? [{ scope_type: "all", scope_id: null }]
+      : visibleTo === "org"
+        ? orgScope.map((code) => ({ scope_type: "org", scope_id: code }))
+        : []; // owner_only → 不写权限行
+  const { error: permErr } = await db.rpc("set_agent_permissions", {
+    p_agent_id: agentId,
+    p_perms: perms,
+  });
+  if (permErr) {
+    console.error("[draft publish set permissions]", permErr);
+    // 权限替换失败 → 发布失败，且不把 draft 标 published（幂等，可重试）
+    return apiError("发布权限设置失败，请重试：" + permErr.message, "INTERNAL_ERROR");
+  }
+
   // ── 更新 draft 状态 ──
   await db
     .from("agent_drafts")
@@ -212,6 +260,7 @@ export async function POST(
       provider_id: draft.provider_id,
       agent_type: draft.agent_type,
       enabled: true,
+      visible_to: visibleTo,
     },
   });
 

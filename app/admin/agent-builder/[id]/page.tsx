@@ -35,8 +35,8 @@ type BuilderConfig = {
 };
 
 type VisibilityConfig = {
-  visible_to: "owner_only" | "org" | "all" | "custom";
-  scope: unknown[];
+  visible_to: "owner_only" | "org" | "all"; // 5.19up · 去掉 "custom"
+  scope: string[]; // visible_to="org" 时为可见组织码数组
 };
 
 type ModelParams = {
@@ -100,6 +100,19 @@ function defaultVisibilityConfig(): VisibilityConfig {
   return { visible_to: "owner_only", scope: [] };
 }
 
+// 5.19up · 拉全量组织（tenants 接口默认分页 100，循环拉完，供"指定组织可见"多选）
+async function fetchAllTenants(): Promise<{ code: string; name: string }[]> {
+  const all: { code: string; name: string }[] = [];
+  for (let page = 1; ; page++) {
+    const res = await fetch(`/api/admin/tenants?page=${page}&pageSize=100`).then((r) => r.json());
+    const batch: { code: string; name: string }[] = Array.isArray(res) ? res : (res?.data ?? []);
+    all.push(...batch);
+    const total = res?.pagination?.total;
+    if (batch.length < 100 || (typeof total === "number" && all.length >= total)) break;
+  }
+  return all;
+}
+
 export default function AgentBuilderEditPage({
   params,
 }: {
@@ -110,6 +123,8 @@ export default function AgentBuilderEditPage({
   const { toast } = useToast();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
+  // 5.19up · 组织列表（"指定组织可见"多选用）
+  const [tenants, setTenants] = useState<{ code: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -155,10 +170,15 @@ export default function AgentBuilderEditPage({
         ...(d.builder_config.capabilities ?? {}),
       };
       d.visibility_config = { ...defaultVisibilityConfig(), ...(d.visibility_config ?? {}) };
+      // 5.19up · 旧草稿 visible_to="custom" 已废弃 → 降级"暂不公开"（安全侧）
+      if ((d.visibility_config.visible_to as string) === "custom") {
+        d.visibility_config = { ...d.visibility_config, visible_to: "owner_only" };
+      }
       d.suggested_questions_string = (d.builder_config.suggested_questions ?? []).join("\n");
 
       setDraft(d);
       setProviders((provData.data ?? []) as Provider[]);
+      setTenants(await fetchAllTenants().catch(() => []));
       setDirty(false);
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : "加载失败", "error");
@@ -687,12 +707,46 @@ export default function AgentBuilderEditPage({
                     }))}
                     className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
                   >
-                    <option value="owner_only">仅本人可见（推荐 · 测试期使用）</option>
-                    <option value="org">本组织可见</option>
                     <option value="all">全平台可见</option>
-                    <option value="custom">自定义范围（待后续完善）</option>
+                    <option value="org">指定组织可见</option>
+                    <option value="owner_only">暂不公开（仅自己测试，前台不可见）</option>
                   </select>
-                </Field>              </div>
+                </Field>
+                {/* 5.19up · 指定组织可见 → 组织多选 */}
+                {draft.visibility_config.visible_to === "org" && (
+                  <Field label="选择可见组织" hint="勾选的组织，其成员能在前台看到这个智能体">
+                    {tenants.length === 0 ? (
+                      <p className="text-xs text-gray-400">暂无组织</p>
+                    ) : (
+                      <div className="border border-gray-200 rounded-[8px] p-2 max-h-44 overflow-y-auto space-y-0.5">
+                        {tenants.map((t) => {
+                          const checked = draft.visibility_config.scope.includes(t.code);
+                          return (
+                            <label key={t.code} className="flex items-center gap-2 text-sm px-1 py-0.5 rounded cursor-pointer hover:bg-gray-50">
+                              <input
+                                type="checkbox"
+                                className="accent-[#002FA7]"
+                                checked={checked}
+                                onChange={() => patchDraft((d) => ({
+                                  ...d,
+                                  visibility_config: {
+                                    ...d.visibility_config,
+                                    scope: checked
+                                      ? d.visibility_config.scope.filter((c) => c !== t.code)
+                                      : [...d.visibility_config.scope, t.code],
+                                  },
+                                }))}
+                              />
+                              <span className="text-gray-700">{t.name}</span>
+                              <code className="text-[11px] text-gray-400">{t.code}</code>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </Field>
+                )}
+              </div>
             </section>
           </div>
 
@@ -820,9 +874,14 @@ export default function AgentBuilderEditPage({
               <>
                 <div className="px-6 py-5 space-y-3 text-sm text-gray-700">
                   <p>把当前草稿发布到正式 <code className="text-xs bg-gray-100 px-1 rounded">agents</code> 表，员工就能在前台看到它。</p>                  {draft.status === "published" && (
-                    <p className="text-xs text-gray-500">
-                      该草稿之前发布过，会<strong>重新更新</strong>已有的智能体记录，不会重复创建。
-                    </p>
+                    <>
+                      <p className="text-xs text-gray-500">
+                        该草稿之前发布过，会<strong>重新更新</strong>已有的智能体记录，不会重复创建。
+                      </p>
+                      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-[8px] p-2">
+                        ⚠️ 发布会按搭建器「可见范围」<strong>覆盖</strong>该智能体在「智能体管理 → 权限设置」里现有的权限规则。
+                      </p>
+                    </>
                   )}
                 </div>
                 <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">

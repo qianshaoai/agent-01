@@ -51,3 +51,19 @@ BEGIN
   RETURN true;
 END;
 $$ LANGUAGE plpgsql;
+
+-- 5.19up · 搭建器发布可见范围 —— 原子设置某 agent 的 resource_permissions
+-- p_perms 是 JSONB 数组，每项 {"scope_type": "...", "scope_id": "..."|null}。
+-- plpgsql 函数体即单事务：先删该 agent 全部权限行，再按 p_perms 全量写入，
+-- 要么全成、要么全不动。p_perms 为空数组 → 该 agent 无权限行（前台对组织用户不可见）。
+CREATE OR REPLACE FUNCTION set_agent_permissions(p_agent_id UUID, p_perms JSONB)
+RETURNS void AS $$
+BEGIN
+  DELETE FROM resource_permissions
+  WHERE resource_type = 'agent' AND resource_id = p_agent_id;
+
+  INSERT INTO resource_permissions (resource_type, resource_id, scope_type, scope_id)
+  SELECT 'agent', p_agent_id, elem->>'scope_type', elem->>'scope_id'
+  FROM jsonb_array_elements(COALESCE(p_perms, '[]'::jsonb)) AS elem;
+END;
+$$ LANGUAGE plpgsql;
