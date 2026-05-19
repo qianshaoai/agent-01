@@ -45,9 +45,7 @@ export async function POST(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权发布智能体草稿", "FORBIDDEN");
-  }
+  // 5.19up · org_admin 可发布，但后端强制最大可见范围为本组织（见下方可见范围校验）
 
   const { id } = await params;
 
@@ -91,25 +89,48 @@ export async function POST(
   if (visibleTo !== "all" && visibleTo !== "org" && visibleTo !== "owner_only") {
     visibleTo = "owner_only";
   }
+  const rawScope: string[] = Array.isArray(visCfg.scope)
+    ? (visCfg.scope as unknown[]).filter((s): s is string => typeof s === "string" && s.trim() !== "")
+    : [];
   let orgScope: string[] = [];
-  if (visibleTo === "org") {
-    const rawScope = Array.isArray(visCfg.scope) ? visCfg.scope : [];
-    orgScope = [...new Set(
-      rawScope.filter((s): s is string => typeof s === "string" && s.trim() !== ""),
-    )];
-    if (orgScope.length === 0) {
-      return apiError("「指定组织可见」需至少选择一个组织", "VALIDATION_ERROR");
+
+  if (admin.role === "org_admin") {
+    // org_admin：后端强制最大可见范围 = 本组织
+    if (!admin.tenantCode) {
+      return apiError("组织管理员未绑定组织，无法发布", "FORBIDDEN");
     }
-    const { data: tenantRows, error: tErr } = await db
-      .from("tenants").select("code").in("code", orgScope);
-    if (tErr) {
-      console.error("[draft publish validate scope]", tErr);
-      return apiError("校验可见组织失败", "INTERNAL_ERROR");
+    if (visibleTo === "all") {
+      return apiError("组织管理员不能发布「全平台可见」", "FORBIDDEN");
     }
-    const validCodes = new Set((tenantRows ?? []).map((t: { code: string }) => t.code));
-    const invalid = orgScope.filter((c) => !validCodes.has(c));
-    if (invalid.length > 0) {
-      return apiError(`可见范围含无效组织码：${invalid.join("、")}`, "VALIDATION_ERROR");
+    if (visibleTo === "org") {
+      const uniq = [...new Set(rawScope)];
+      if (uniq.length === 0) {
+        orgScope = [admin.tenantCode]; // 未传 scope → 兜底归一化为本组织
+      } else if (uniq.length === 1 && uniq[0] === admin.tenantCode) {
+        orgScope = [admin.tenantCode];
+      } else {
+        return apiError("组织管理员只能发布到本组织", "FORBIDDEN");
+      }
+    }
+    // visibleTo === "owner_only" → orgScope 留空，不写权限行
+  } else {
+    // super_admin / system_admin
+    if (visibleTo === "org") {
+      orgScope = [...new Set(rawScope)];
+      if (orgScope.length === 0) {
+        return apiError("「指定组织可见」需至少选择一个组织", "VALIDATION_ERROR");
+      }
+      const { data: tenantRows, error: tErr } = await db
+        .from("tenants").select("code").in("code", orgScope);
+      if (tErr) {
+        console.error("[draft publish validate scope]", tErr);
+        return apiError("校验可见组织失败", "INTERNAL_ERROR");
+      }
+      const validCodes = new Set((tenantRows ?? []).map((t: { code: string }) => t.code));
+      const invalid = orgScope.filter((c) => !validCodes.has(c));
+      if (invalid.length > 0) {
+        return apiError(`可见范围含无效组织码：${invalid.join("、")}`, "VALIDATION_ERROR");
+      }
     }
   }
 

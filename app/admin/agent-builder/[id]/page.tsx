@@ -125,6 +125,9 @@ export default function AgentBuilderEditPage({
   const [providers, setProviders] = useState<Provider[]>([]);
   // 5.19up · 组织列表（"指定组织可见"多选用）
   const [tenants, setTenants] = useState<{ code: string; name: string }[]>([]);
+  // 5.19up · 当前管理员角色（org_admin 只能发"本组织可见"）
+  const [adminRole, setAdminRole] = useState<string | null>(null);
+  const isOrgAdmin = adminRole === "org_admin";
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -151,16 +154,20 @@ export default function AgentBuilderEditPage({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [draftRes, provRes] = await Promise.all([
+      const [draftRes, provRes, meRes] = await Promise.all([
         fetch(`/api/admin/agent-drafts/${id}`, { cache: "no-store" }),
         // 5.16up 回归修复 · 搭建器只建模型对话型智能体 → 只列 category=model 的供应商，
         // 不混入 coze / 元器 / 清言等智能体平台 API（category=agent）
         fetch(`/api/admin/model-providers?category=model`, { cache: "no-store" }),
+        // 5.19up · 当前管理员角色（决定可见范围选项）
+        fetch(`/api/admin/me`, { cache: "no-store" }),
       ]);
       const draftData = await draftRes.json();
       const provData = await provRes.json();
+      const meData = await meRes.json().catch(() => ({}));
       if (!draftRes.ok) throw new Error(draftData.error ?? "草稿加载失败");
       if (!provRes.ok) throw new Error(provData.error ?? "供应商加载失败");
+      const role: string | null = meRes.ok && typeof meData?.role === "string" ? meData.role : null;
 
       // 兜底：旧草稿 builder_config / visibility_config 可能空
       const d = draftData as Draft;
@@ -178,7 +185,9 @@ export default function AgentBuilderEditPage({
 
       setDraft(d);
       setProviders((provData.data ?? []) as Provider[]);
-      setTenants(await fetchAllTenants().catch(() => []));
+      setAdminRole(role);
+      // 5.19up · 仅 super/system 需要组织列表（org_admin 只发"本组织可见"、无多选）
+      setTenants(role === "org_admin" ? [] : await fetchAllTenants().catch(() => []));
       setDirty(false);
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : "加载失败", "error");
@@ -430,6 +439,12 @@ export default function AgentBuilderEditPage({
             </button>
             <button
               onClick={() => {
+                // 5.19up · super/system 选「指定组织可见」但未勾组织 → 拦下
+                if (!isOrgAdmin && draft.visibility_config.visible_to === "org"
+                    && draft.visibility_config.scope.length === 0) {
+                  toast("「指定组织可见」请先勾选至少一个组织", "error");
+                  return;
+                }
                 setPublishOpen(true);
                 setPublishResult(null);
               }}
@@ -707,13 +722,13 @@ export default function AgentBuilderEditPage({
                     }))}
                     className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
                   >
-                    <option value="all">全平台可见</option>
-                    <option value="org">指定组织可见</option>
+                    {!isOrgAdmin && <option value="all">全平台可见</option>}
+                    <option value="org">{isOrgAdmin ? "本组织可见" : "指定组织可见"}</option>
                     <option value="owner_only">暂不公开（仅自己测试，前台不可见）</option>
                   </select>
                 </Field>
-                {/* 5.19up · 指定组织可见 → 组织多选 */}
-                {draft.visibility_config.visible_to === "org" && (
+                {/* 5.19up · 指定组织可见 → 组织多选（仅 super/system；org_admin 固定本组织、无多选）*/}
+                {!isOrgAdmin && draft.visibility_config.visible_to === "org" && (
                   <Field label="选择可见组织" hint="勾选的组织，其成员能在前台看到这个智能体">
                     {tenants.length === 0 ? (
                       <p className="text-xs text-gray-400">暂无组织</p>

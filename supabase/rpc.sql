@@ -64,6 +64,9 @@ BEGIN
 
   INSERT INTO resource_permissions (resource_type, resource_id, scope_type, scope_id)
   SELECT 'agent', p_agent_id, elem->>'scope_type', elem->>'scope_id'
-  FROM jsonb_array_elements(COALESCE(p_perms, '[]'::jsonb)) AS elem;
+  FROM jsonb_array_elements(COALESCE(p_perms, '[]'::jsonb)) AS elem
+  ON CONFLICT DO NOTHING;
 END;
 $$ LANGUAGE plpgsql;
+
+NOTIFY pgrst, 'reload schema';
