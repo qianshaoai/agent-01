@@ -18,6 +18,7 @@ import {
   ClipboardList,
   Plug,
   Hammer,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +56,7 @@ const navGroups: NavGroup[] = [
     items: [
       { href: "/admin/model-providers", label: "API 管理",   icon: Plug,      allowedRoles: SS_ROLES },
       { href: "/admin/agent-builder",   label: "智能体搭建", icon: Hammer,    allowedRoles: ALL_ROLES },
+      { href: "/admin/knowledge-bases", label: "知识库",     icon: BookOpen,  allowedRoles: SS_ROLES },
       { href: "/admin/agents",          label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES },
       { href: "/admin/workflows",       label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES },
       { href: "/admin/notices",         label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES },
