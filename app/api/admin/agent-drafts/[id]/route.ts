@@ -13,9 +13,6 @@ export async function GET(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权查看智能体草稿", "FORBIDDEN");
-  }
 
   const { id } = await params;
   const { data, error } = await db
@@ -29,6 +26,10 @@ export async function GET(
     return apiError("获取详情失败", "INTERNAL_ERROR");
   }
   if (!data) return apiError("草稿不存在", "NOT_FOUND");
+  // 5.19up · org_admin 只能查看自己创建的草稿
+  if (admin.role === "org_admin" && (data as { created_by?: string }).created_by !== admin.adminId) {
+    return apiError("无权查看该草稿", "FORBIDDEN");
+  }
 
   return NextResponse.json(data);
 }
@@ -39,11 +40,15 @@ export async function PATCH(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权编辑智能体草稿", "FORBIDDEN");
-  }
 
   const { id } = await params;
+  // 5.19up · org_admin 只能编辑自己创建的草稿
+  if (admin.role === "org_admin") {
+    const { data: own } = await db
+      .from("agent_drafts").select("created_by").eq("id", id).maybeSingle();
+    if (!own) return apiError("草稿不存在", "NOT_FOUND");
+    if (own.created_by !== admin.adminId) return apiError("无权编辑该草稿", "FORBIDDEN");
+  }
   const body = await req.json().catch(() => ({}));
 
   const patch: Record<string, unknown> = {};
@@ -114,9 +119,6 @@ export async function DELETE(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权删除智能体草稿", "FORBIDDEN");
-  }
 
   const { id } = await params;
 
@@ -124,7 +126,7 @@ export async function DELETE(
   // 5.15up bugfix · 加 error 检查；之前 fetch failed 也是 data=null，被误报为"草稿不存在"
   const { data: existing, error: loadErr } = await db
     .from("agent_drafts")
-    .select("name, status, published_agent_id")
+    .select("name, status, published_agent_id, created_by")
     .eq("id", id)
     .maybeSingle();
   if (loadErr) {
@@ -132,6 +134,10 @@ export async function DELETE(
     return apiError("加载草稿失败，请稍后重试", "INTERNAL_ERROR");
   }
   if (!existing) return apiError("草稿不存在", "NOT_FOUND");
+  // 5.19up · org_admin 只能删除自己创建的草稿
+  if (admin.role === "org_admin" && existing.created_by !== admin.adminId) {
+    return apiError("无权删除该草稿", "FORBIDDEN");
+  }
 
   // 已发布的草稿：软删（status → archived），保留 published_agent_id 反查关系
   // 未发布的：硬删

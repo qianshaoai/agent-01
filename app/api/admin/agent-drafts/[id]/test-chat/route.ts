@@ -44,9 +44,6 @@ export async function POST(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权测试草稿", "FORBIDDEN");
-  }
 
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
@@ -58,7 +55,7 @@ export async function POST(
   // 加载 draft + provider
   const { data: draftRow, error: draftErr } = await db
     .from("agent_drafts")
-    .select("id, name, agent_type, provider_id, builder_config, model_params")
+    .select("id, name, agent_type, provider_id, builder_config, model_params, created_by")
     .eq("id", id)
     .maybeSingle();
   if (draftErr) {
@@ -67,6 +64,11 @@ export async function POST(
   }
   const draft = draftRow as DraftRow | null;
   if (!draft) return apiError("草稿不存在", "NOT_FOUND");
+  // 5.19up · org_admin 只能测试自己创建的草稿
+  if (admin.role === "org_admin"
+      && (draftRow as { created_by?: string }).created_by !== admin.adminId) {
+    return apiError("无权测试该草稿", "FORBIDDEN");
+  }
   if (draft.agent_type !== "chat") {
     return apiError("外链型智能体不支持测试聊天", "VALIDATION_ERROR");
   }

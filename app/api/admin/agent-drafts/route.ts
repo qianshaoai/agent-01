@@ -31,15 +31,14 @@ type DraftRow = {
 export async function GET() {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权查看智能体草稿", "FORBIDDEN");
-  }
 
-  const { data, error } = await db
+  // 5.19up · org_admin 可用搭建器，但列表只看自己创建的草稿
+  let query = db
     .from("agent_drafts")
     .select("*")
-    .neq("status", "archived")
-    .order("updated_at", { ascending: false });
+    .neq("status", "archived");
+  if (admin.role === "org_admin") query = query.eq("created_by", admin.adminId);
+  const { data, error } = await query.order("updated_at", { ascending: false });
 
   if (error) {
     console.error("[agent-drafts list]", error);
@@ -52,9 +51,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权创建智能体草稿", "FORBIDDEN");
-  }
+  // 5.19up · org_admin 可创建草稿（created_by 即本人，列表/编辑/发布均按此归属）
 
   const body = await req.json().catch(() => ({}));
   const name = String(body.name ?? "未命名智能体").trim() || "未命名智能体";

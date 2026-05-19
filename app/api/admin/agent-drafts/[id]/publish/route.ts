@@ -61,6 +61,10 @@ export async function POST(
   }
   const draft = draftRow as DraftRow | null;
   if (!draft) return apiError("草稿不存在", "NOT_FOUND");
+  // 5.19up · org_admin 只能发布自己创建的草稿
+  if (admin.role === "org_admin" && draft.created_by !== admin.adminId) {
+    return apiError("无权发布该草稿", "FORBIDDEN");
+  }
 
   // ── 校验 ──
   if (!draft.name?.trim()) return apiError("草稿名称不能为空", "VALIDATION_ERROR");

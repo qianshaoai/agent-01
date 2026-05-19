@@ -32,9 +32,6 @@ export async function POST(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权复制智能体草稿", "FORBIDDEN");
-  }
 
   const { id } = await params;
   const { data: src, error: loadError } = await db
@@ -48,6 +45,10 @@ export async function POST(
     return apiError("加载源草稿失败", "INTERNAL_ERROR");
   }
   if (!src) return apiError("源草稿不存在", "NOT_FOUND");
+  // 5.19up · org_admin 只能复制自己创建的草稿
+  if (admin.role === "org_admin" && (src as { created_by?: string }).created_by !== admin.adminId) {
+    return apiError("无权复制该草稿", "FORBIDDEN");
+  }
 
   const source = src as DraftRow;
 
