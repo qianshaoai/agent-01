@@ -6,13 +6,15 @@ import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, CheckCircle2, Save, Send, MessageSquare,
   Settings2, Bot, Sparkles, ChevronRight, Loader2, X, Eraser, Rocket, ExternalLink, HelpCircle,
+  Library,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 
 type TestMsg = { role: "user" | "assistant"; content: string };
 
 // 5.14up PR-B · 智能体搭建器编辑页
-// 5 个分区：基础信息 / 模型设置 / 提示词设置 / 对话体验 / 发布设置
+// 6 个分区：基础信息 / 模型设置 / 提示词设置 / 对话体验 / 知识库 / 发布设置
+//   （5.19up 知识库B 新增「知识库」分区）
 // 右侧"测试聊天"区域占位（PR-C 实现），底部"发布"按钮 disabled（PR-C 实现）
 
 type Provider = {
@@ -32,6 +34,9 @@ type BuilderConfig = {
     file_upload: boolean;
     image_input: boolean;
   };
+  // 5.19up 知识库B · 绑定的知识库 id（搭建器「知识库」分区勾选的意图）；
+  //   发布时按此全量同步到 agent_knowledge_bases 关联表
+  knowledge_base_ids: string[];
 };
 
 type VisibilityConfig = {
@@ -93,6 +98,7 @@ function defaultBuilderConfig(): BuilderConfig {
     opening_message: "",
     suggested_questions: [],
     capabilities: { file_upload: true, image_input: true },
+    knowledge_base_ids: [],
   };
 }
 
@@ -125,6 +131,8 @@ export default function AgentBuilderEditPage({
   const [providers, setProviders] = useState<Provider[]>([]);
   // 5.19up · 组织列表（"指定组织可见"多选用）
   const [tenants, setTenants] = useState<{ code: string; name: string }[]>([]);
+  // 5.19up 知识库B · 知识库列表（「知识库」分区多选用；方案A 的接口未上线时为空）
+  const [knowledgeBases, setKnowledgeBases] = useState<{ id: string; name: string }[]>([]);
   // 5.19up · 当前管理员角色（org_admin 只能发"本组织可见"）
   const [adminRole, setAdminRole] = useState<string | null>(null);
   const isOrgAdmin = adminRole === "org_admin";
@@ -154,13 +162,15 @@ export default function AgentBuilderEditPage({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [draftRes, provRes, meRes] = await Promise.all([
+      const [draftRes, provRes, meRes, kbRes] = await Promise.all([
         fetch(`/api/admin/agent-drafts/${id}`, { cache: "no-store" }),
         // 5.16up 回归修复 · 搭建器只建模型对话型智能体 → 只列 category=model 的供应商，
         // 不混入 coze / 元器 / 清言等智能体平台 API（category=agent）
         fetch(`/api/admin/model-providers?category=model`, { cache: "no-store" }),
         // 5.19up · 当前管理员角色（决定可见范围选项）
         fetch(`/api/admin/me`, { cache: "no-store" }),
+        // 5.19up 知识库B · 知识库列表（方案A 交付的接口；A 未上线时静默降级为空列表）
+        fetch(`/api/admin/knowledge-bases`, { cache: "no-store" }).catch(() => null),
       ]);
       const draftData = await draftRes.json();
       const provData = await provRes.json();
@@ -168,6 +178,24 @@ export default function AgentBuilderEditPage({
       if (!draftRes.ok) throw new Error(draftData.error ?? "草稿加载失败");
       if (!provRes.ok) throw new Error(provData.error ?? "供应商加载失败");
       const role: string | null = meRes.ok && typeof meData?.role === "string" ? meData.role : null;
+
+      // 5.19up 知识库B · 解析知识库列表：A 未交付 / 接口异常 → kbList 空、kbFetchOk=false
+      let kbList: { id: string; name: string }[] = [];
+      let kbFetchOk = false;
+      if (kbRes && kbRes.ok) {
+        try {
+          const kbData = await kbRes.json();
+          const arr: unknown[] = Array.isArray(kbData) ? kbData : (kbData?.data ?? []);
+          kbList = arr
+            .map((x) => x as { id?: unknown; name?: unknown })
+            .filter((x) => typeof x.id === "string")
+            .map((x) => ({
+              id: x.id as string,
+              name: typeof x.name === "string" && x.name ? x.name : (x.id as string),
+            }));
+          kbFetchOk = true;
+        } catch { /* 解析失败 → 降级为空列表 */ }
+      }
 
       // 兜底：旧草稿 builder_config / visibility_config 可能空
       const d = draftData as Draft;
@@ -183,8 +211,17 @@ export default function AgentBuilderEditPage({
       }
       d.suggested_questions_string = (d.builder_config.suggested_questions ?? []).join("\n");
 
+      // 5.19up 知识库B · 过滤草稿里指向「已删除知识库」的脏 id —— 仅当 KB 列表确实拉到时才过滤；
+      //   接口异常（A 未上线）时不动用户已选 id，避免误清。
+      if (kbFetchOk) {
+        const validKb = new Set(kbList.map((k) => k.id));
+        d.builder_config.knowledge_base_ids = (d.builder_config.knowledge_base_ids ?? [])
+          .filter((kid) => validKb.has(kid));
+      }
+
       setDraft(d);
       setProviders((provData.data ?? []) as Provider[]);
+      setKnowledgeBases(kbList);
       setAdminRole(role);
       // 5.19up · 仅 super/system 需要组织列表（org_admin 只发"本组织可见"、无多选）
       setTenants(role === "org_admin" ? [] : await fetchAllTenants().catch(() => []));
@@ -476,7 +513,7 @@ export default function AgentBuilderEditPage({
               <HelpCircle size={16} className="text-[#002FA7] mt-0.5 shrink-0" />
               <div className="space-y-1">
                 <p className="font-medium text-gray-800">搭建器使用说明</p>
-                <p>按 5 个分区从上到下填：① 基础信息 → ② 模型设置 → ③ 提示词设置 → ④ 对话体验 → ⑤ 发布设置。</p>
+                <p>按 6 个分区从上到下填：① 基础信息 → ② 模型设置 → ③ 提示词设置 → ④ 对话体验 → ⑤ 知识库 → ⑥ 发布设置。</p>
                 <p>草稿改动会<strong className="text-gray-700">自动保存</strong>；用右侧「测试聊天」验证效果，确认无误后点「发布」。</p>
                 <p>发布后即对授权范围内的员工开放，无需额外启用。</p>
               </div>
@@ -706,9 +743,53 @@ export default function AgentBuilderEditPage({
               </section>
             )}
 
-            {/* 分区 5：发布设置 */}
+            {/* 分区 5：知识库（仅对话型）*/}
+            {draft.agent_type === "chat" && (
+              <section className="card p-5">
+                <SectionTitle icon={<Library size={16} />} title="5. 知识库" desc="给智能体挂知识库；对话时按用户问题自动检索相关资料、注入回答。" />
+                <div className="space-y-3 mt-3">
+                  <Field label="绑定知识库" hint="勾选的知识库，对话时会按用户问题检索相关片段供智能体参考；可多选">
+                    {knowledgeBases.length === 0 ? (
+                      <p className="text-xs text-gray-400">
+                        暂无知识库可选。请先到「知识库管理」创建知识库并上传文档。
+                      </p>
+                    ) : (
+                      <div className="border border-gray-200 rounded-[8px] p-2 max-h-44 overflow-y-auto space-y-0.5">
+                        {knowledgeBases.map((kb) => {
+                          const checked = (draft.builder_config.knowledge_base_ids ?? []).includes(kb.id);
+                          return (
+                            <label key={kb.id} className="flex items-center gap-2 text-sm px-1 py-0.5 rounded cursor-pointer hover:bg-gray-50">
+                              <input
+                                type="checkbox"
+                                className="accent-[#002FA7]"
+                                checked={checked}
+                                onChange={() => patchDraft((d) => {
+                                  const cur = d.builder_config.knowledge_base_ids ?? [];
+                                  return {
+                                    ...d,
+                                    builder_config: {
+                                      ...d.builder_config,
+                                      knowledge_base_ids: checked
+                                        ? cur.filter((x) => x !== kb.id)
+                                        : [...cur, kb.id],
+                                    },
+                                  };
+                                })}
+                              />
+                              <span className="text-gray-700">{kb.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </Field>
+                </div>
+              </section>
+            )}
+
+            {/* 分区 6：发布设置 */}
             <section className="card p-5">
-              <SectionTitle icon={<ChevronRight size={16} />} title="5. 发布设置" desc="设置发布后哪些用户可见；发布动作在页面右上角「发布」。" />
+              <SectionTitle icon={<ChevronRight size={16} />} title="6. 发布设置" desc="设置发布后哪些用户可见；发布动作在页面右上角「发布」。" />
               <div className="space-y-3 mt-3">
                 <Field label="可见范围" hint="发布后哪些用户能在前台看到这个智能体">
                   <select

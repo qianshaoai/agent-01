@@ -258,6 +258,48 @@ export async function POST(
     return apiError("发布权限设置失败，请重试：" + permErr.message, "INTERNAL_ERROR");
   }
 
+  // ── 5.19up 知识库B · 按 builder_config.knowledge_base_ids 全量同步 agent_knowledge_bases ──
+  // 与可见范围 / 工作流的「全量替换」同口径：先删该 agent 全部绑定行，再按当前勾选写入。
+  // 脏 id（指向已删知识库）在写入前按 knowledge_bases 实际存在性过滤掉，避免 FK 违例。
+  // ⚠ 并行开发期：方案A 的 agent_knowledge_bases / knowledge_bases 表未就绪时，本步出错
+  //   只告警、不阻断发布（否则会拖垮现有发布功能）。A 的迁移上线后，联合联调时应把失败
+  //   提升为硬失败 —— 与上面 set_agent_permissions 同口径。见「变更记录」B 段标注。
+  if (Array.isArray((builderConfig as Record<string, unknown>).knowledge_base_ids)) {
+    const kbIds = [
+      ...new Set(
+        ((builderConfig as Record<string, unknown>).knowledge_base_ids as unknown[])
+          .filter((x): x is string => typeof x === "string" && x.trim() !== ""),
+      ),
+    ];
+    try {
+      const { error: delErr } = await db
+        .from("agent_knowledge_bases")
+        .delete()
+        .eq("agent_id", agentId);
+      if (delErr) throw new Error(delErr.message);
+      if (kbIds.length > 0) {
+        const { data: existRows, error: exErr } = await db
+          .from("knowledge_bases")
+          .select("id")
+          .in("id", kbIds);
+        if (exErr) throw new Error(exErr.message);
+        const validIds = new Set((existRows ?? []).map((r: { id: string }) => r.id));
+        const rows = kbIds
+          .filter((kid) => validIds.has(kid))
+          .map((kid) => ({ agent_id: agentId, kb_id: kid }));
+        if (rows.length > 0) {
+          const { error: insErr } = await db.from("agent_knowledge_bases").insert(rows);
+          if (insErr) throw new Error(insErr.message);
+        }
+      }
+    } catch (e) {
+      console.error(
+        `[draft publish sync agent_knowledge_bases] agent=${agentId} 知识库绑定同步失败（非致命，发布继续）：`,
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
+
   // ── 更新 draft 状态 ──
   await db
     .from("agent_drafts")

@@ -4,10 +4,88 @@ import { db } from "@/lib/db";
 import { streamChat, ChatMessage, TokenUsage } from "@/lib/adapters";
 import { decrypt } from "@/lib/crypto";
 import { withRequestLog } from "@/lib/request-logger";
+import { retrieveKbChunks } from "@/lib/kb/retrieve";
 
 import { CHAT } from "@/lib/config";
 import { humanizeChatError } from "@/lib/chat-error";
 const MAX_CONTEXT_TURNS = CHAT.MAX_CONTEXT_TURNS;
+
+// 5.19up 知识库B · 组织用户对某 agent 是否有访问权 —— 与前台智能体列表 / 工作流同口径。
+// chat route 原本不校验可见性（猜到 agent_code 就能聊）；挂知识库后会升级成「猜到 code
+// 就能问出库里资料」的信息泄露 —— 故发起对话前先校验（母方案 §4.3 / 约束 §7.1）。
+// 个人用户不在此校验内：维持现状（绕过权限表、可见全部 enabled 智能体，见 5.19up 可见范围 D4）。
+async function orgUserCanSeeAgent(
+  userId: string,
+  tenantCode: string | null,
+  agentId: string,
+): Promise<boolean> {
+  // 用户的 dept / team / group —— 细粒度 scope 匹配
+  const [{ data: uRow }, { data: gRows }] = await Promise.all([
+    db.from("users").select("dept_id, team_id").eq("id", userId).maybeSingle(),
+    db.from("user_group_members").select("group_id").eq("user_id", userId),
+  ]);
+  const deptId = (uRow as { dept_id: string | null } | null)?.dept_id ?? null;
+  const teamId = (uRow as { team_id: string | null } | null)?.team_id ?? null;
+  const groupIds = (gRows ?? []).map((g: { group_id: string }) => g.group_id);
+
+  // resource_permissions OR 条件 —— 与 /api/agents 的 buildOrgAccessQuery 同口径
+  const orParts = [
+    "scope_type.eq.all",
+    "and(scope_type.eq.user_type,scope_id.eq.organization)",
+    `and(scope_type.eq.user,scope_id.eq.${userId})`,
+  ];
+  if (tenantCode) orParts.push(`and(scope_type.eq.org,scope_id.eq.${tenantCode})`);
+  if (deptId) orParts.push(`and(scope_type.eq.dept,scope_id.eq.${deptId})`);
+  if (teamId) orParts.push(`and(scope_type.eq.team,scope_id.eq.${teamId})`);
+  if (groupIds.length > 0) orParts.push(`and(scope_type.eq.group,scope_id.in.(${groupIds.join(",")}))`);
+  const orFilter = orParts.join(",");
+
+  // 1. 该 agent 本身有命中当前用户的权限行 → 可见
+  const { data: agentHit } = await db
+    .from("resource_permissions")
+    .select("resource_id")
+    .eq("resource_type", "agent")
+    .eq("resource_id", agentId)
+    .or(orFilter)
+    .limit(1);
+  if (agentHit && agentHit.length > 0) return true;
+
+  // 2. 工作流步骤兜底：该 agent 是某个「用户可访问工作流」的步骤 → 放行。
+  //    工作流运行时经 /agents/[code] 进入对话，步骤 agent 未必有独立权限行；
+  //    不放行会把正常工作流跑断（约束 §8.2「非知识库智能体路径不受影响」）。
+  const { data: stepRows } = await db
+    .from("workflow_steps")
+    .select("workflow_id")
+    .eq("agent_id", agentId);
+  const wfIds = [
+    ...new Set((stepRows ?? []).map((s: { workflow_id: string }) => s.workflow_id).filter(Boolean)),
+  ];
+  if (wfIds.length === 0) return false;
+
+  // 2a. 工作流命中用户权限行（新口径）
+  const { data: wfHit } = await db
+    .from("resource_permissions")
+    .select("resource_id")
+    .eq("resource_type", "workflow")
+    .in("resource_id", wfIds)
+    .or(orFilter)
+    .limit(1);
+  if (wfHit && wfHit.length > 0) return true;
+
+  // 2b. 兼容旧数据：workflows.visible_to 为 "all" 或逗号分隔组织码（未迁到权限表的工作流）
+  const { data: wfRows } = await db
+    .from("workflows")
+    .select("visible_to")
+    .in("id", wfIds)
+    .eq("enabled", true);
+  const tc = (tenantCode ?? "").toUpperCase();
+  for (const w of (wfRows ?? []) as { visible_to: string | null }[]) {
+    const vt = String(w.visible_to ?? "");
+    if (vt === "all") return true;
+    if (vt.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean).includes(tc)) return true;
+  }
+  return false;
+}
 
 export const POST = withRequestLog(async (
   req: NextRequest,
@@ -53,6 +131,16 @@ export const POST = withRequestLog(async (
     // 外链型智能体不支持站内对话
     if (agent.agent_type === "external") {
       return NextResponse.json({ error: "此智能体为外链跳转型，请通过首页卡片访问" }, { status: 400 });
+    }
+
+    // ── 1.5 前置可见性校验（5.19up 知识库B · 收口「猜到 code 就能聊」的安全缺口）──
+    // 个人用户维持现状（不校验、绕过权限表，见 5.19up 可见范围 D4）；组织用户必须对该
+    // agent 有可见权（直接授权 / 工作流步骤），否则 403。挂知识库后此校验防资料外泄。
+    if (!user.isPersonal) {
+      const canSee = await orgUserCanSeeAgent(user.userId, user.tenantCode, agent.id);
+      if (!canSee) {
+        return NextResponse.json({ error: "你没有访问该智能体的权限" }, { status: 403 });
+      }
     }
 
     // ── 2. 解析模型配置 + API key + 算 weight ──────────────────
@@ -294,7 +382,44 @@ export const POST = withRequestLog(async (
       }
     }
 
-    // 构建消息列表（系统提示 + 历史 + 当前用户消息）
+    // ── 5.19up 知识库B · 条件检索：绑库的对话型智能体，按本轮问题取 top-K 片段注入 ──
+    // 仅 openai / 智谱平台（约束 §7.1：扣子 / Dify / 元器 / 清言等外部平台不接检索）。
+    // 检索失败（embedding 桩未实现 / RPC 报错 / 表未就绪）→ 降级为无知识库正常回答、不阻断对话。
+    let kbContextMessage: ChatMessage | null = null;
+    if (resolvedPlatform === "openai" || resolvedPlatform === "zhipu") {
+      try {
+        const { data: kbRows, error: kbErr } = await db
+          .from("agent_knowledge_bases")
+          .select("kb_id")
+          .eq("agent_id", agent.id);
+        if (kbErr) throw new Error(kbErr.message);
+        const kbIds = (kbRows ?? [])
+          .map((r: { kb_id: string }) => r.kb_id)
+          .filter(Boolean);
+        if (kbIds.length > 0) {
+          const chunks = await retrieveKbChunks(kbIds, message);
+          if (chunks.length > 0) {
+            const refBlock = chunks
+              .map((c, i) => `【资料 ${i + 1}】\n${c.content}`)
+              .join("\n\n");
+            kbContextMessage = {
+              role: "system",
+              content:
+                "下面是从知识库检索到的、与用户问题相关的资料。请优先依据这些资料回答；" +
+                "资料未覆盖的内容，按你的常识谨慎回答并说明。\n\n" +
+                refBlock,
+            };
+          }
+        }
+      } catch (e) {
+        console.warn(
+          `[chat] 知识库检索失败，降级为无知识库回答 agent=${agent.agent_code}:`,
+          e instanceof Error ? e.message : e,
+        );
+      }
+    }
+
+    // 构建消息列表（系统提示 + 知识库资料 + 历史 + 当前用户消息）
     const systemPrompt = (agent.model_params as Record<string, unknown>)["system_prompt"] as string | undefined;
     // 工作流跨步骤上下文：拼入 userContent 而非 system 消息，兼容 Coze/Dify/Yuanqi 等不支持 system role 的平台。
     // displayContent（入库/前端展示）不含上下文，用户看不到。
@@ -306,6 +431,8 @@ export const POST = withRequestLog(async (
       : userContent;
     const messages: ChatMessage[] = [
       ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+      // 5.19up 知识库B · 知识库资料注入在系统提示之后、历史之前（母方案 §4.3）
+      ...(kbContextMessage ? [kbContextMessage] : []),
       ...history,
       {
         role: "user",
