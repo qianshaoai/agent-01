@@ -41,12 +41,20 @@
 | `migration_v25.sql` | **5.7up · GPT 接入阶段一** — `tenants` 加 `openai_key_enc / openai_key_set_at / openai_key_set_by`；`logs` 加 `prompt_tokens / completion_tokens / model_used` + `logs_model_used_idx` 索引；新建 `model_quota_weights` 表（种子 4o-mini=1 / 4o=5 / o1 系列默认禁用）；新增加权扣额度 RPC `increment_quota_used_weighted(p_code, p_weight)`（内部守卫 `quota_used + weight <= quota`）<br>5.16up 从 devA 分支补录文件入仓库 | ✅ 2026-05（用户已跑） |
 | `migration_v26.sql` | **5.7up · GPT 接入阶段二** — `conversations` 加 `summary_text TEXT` + `summary_until_at TIMESTAMPTZ`，支撑滑动窗口 + 增量摘要降本<br>5.16up 从 devA 分支补录文件入仓库 | ✅ 2026-05（用户已跑） |
 | `migration_v27.sql` | **5.8up** — 新增 `audit_logs` 表，记录管理员对智能体/工作流的增删改操作；含 created_at / resource_type / action 三个索引 | ☐ |
+| `migration_v28.sql` | **5.8fix** — `audit_logs` 移除 `admin_id` 外键约束（org_admin 的 ID 来自 users 表、非 admins 表，旧 FK 致审计写入 FK 违例后静默失败） | ✅（功能在用，推定已跑） |
+| `migration_v29.sql` | **5.9** — 新增 `workflow_sessions` 表（工作流会话实例） | ✅（功能在用，推定已跑） |
+| `migration_v30.sql` | **5.9** — `conversations` 加 `session_id` 列（关联工作流会话）+ `idx_conversations_session` 索引 | ✅（功能在用，推定已跑） |
+| `migration_v31.sql` | **5.11up** — `workflows` 加 `created_by` + `created_by_role`；数据迁移：历史 NULL 回填 `system_admin` | ✅（功能在用，推定已跑） |
+| `migration_v32.sql` | **5.11up** — `audit_logs` 加 `admin_tenant_code` + `resource_tenant_code` + 索引；数据迁移：backfill 历史 tenant_code（支撑组织管理员按本组织过滤审计） | ✅（功能在用，推定已跑） |
+| `migration_v33.sql` | **5.12up** — `users` 加生成列 `role_priority` + 索引（后台用户列表按角色优先级排序，而非字母序） | ✅（功能在用，推定已跑） |
 | `migration_v34_logs_status_aborted.sql` | **5.15up** — `logs.status` CHECK 加 `'aborted'`，修 chat aborted 日志被 DB 静默拒收的 bug | ✅ 2026-05-15 |
 | `migration_v35_model_providers.sql` | **5.15up PR-A** — 新增 `model_providers` 表（统一模型供应商：编号/名称/平台/endpoint/加密 key/默认模型参数/启停 + enabled、platform 索引） | ✅ 2026-05-15 |
 | `migration_v36_agent_drafts.sql` | **5.15up PR-B** — 新增 `agent_drafts` 表；`agents` 加 `provider_id` / `builder_config` / `published_from_draft_id` 三列 | ✅ 2026-05-15 |
 | `migration_v37_model_providers_category.sql` | **5.15up API 管理 PR-1** — `model_providers` 加 `category` 列（model/agent）+ CHECK 约束 + `(category,enabled)`、`(category,platform)` 索引；存量按 platform 归类 | ✅ 2026-05-15 |
 
-> v20 跳号未使用。v28~v33 为各 up 包历史迁移，本索引暂未补录。
+> v20 / v23 跳号无对应文件（v23 编号被已搁置的"组织码可改"草案占用）。
+> v28~v33 已于 5.16up 回归核查时补登 —— "跑过"列标「功能在用，推定已跑」的，
+> 是因对应表 / 列已被线上代码依赖且回归测试通过、可证已执行；如需精确日期请按需复核。
 
 ## 体验版（trial 模块）
 
