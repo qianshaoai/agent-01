@@ -341,9 +341,6 @@ export default function ModelProvidersPage() {
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">名称 / 编号</th>
                   <th className="px-4 py-3 text-left font-medium">平台</th>
-                  {activeTab === "model" && (
-                    <th className="px-4 py-3 text-left font-medium">默认模型</th>
-                  )}
                   <th className="px-4 py-3 text-left font-medium">API Key</th>
                   <th className="px-4 py-3 text-left font-medium">状态</th>
                   <th className="px-4 py-3 text-left font-medium">操作</th>
@@ -361,11 +358,6 @@ export default function ModelProvidersPage() {
                       <td className="px-4 py-3 text-gray-700">
                         {PLATFORM_LABEL[p.platform]?.split("（")[0] ?? p.platform}
                       </td>
-                      {activeTab === "model" && (
-                        <td className="px-4 py-3 text-gray-700 font-mono text-xs">
-                          {p.default_model || "—"}
-                        </td>
-                      )}
                       <td className="px-4 py-3">
                         {p.has_api_key ? (
                           <span className="inline-flex items-center gap-1 text-green-600 text-xs">
