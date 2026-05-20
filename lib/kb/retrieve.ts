@@ -46,5 +46,17 @@ export async function retrieveKbChunks(
   if (error) {
     throw new Error(`match_kb_chunks RPC 失败：${error.message}`);
   }
-  return (data ?? []) as KbSearchResult[];
+  const results = (data ?? []) as KbSearchResult[];
+
+  // 临时联调日志 —— 5/20 验收期看清"为什么没命中"；联调结束移除（变更记录有标）
+  if (process.env.NODE_ENV !== "production") {
+    const sims = results
+      .map((r) => r.similarity)
+      .filter((s): s is number => typeof s === "number")
+      .map((s) => s.toFixed(3));
+    console.log(
+      `[kb/retrieve] query="${query.slice(0, 40)}" kbIds=${ids.length} top_k=${KB_TOP_K} threshold=${KB_SIMILARITY_THRESHOLD} → hits=${results.length} similarities=[${sims.join(", ")}]`,
+    );
+  }
+  return results;
 }

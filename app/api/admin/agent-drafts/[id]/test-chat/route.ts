@@ -118,7 +118,9 @@ export async function POST(
   // 草稿没有正式的 agent_knowledge_bases，按 builder_config.knowledge_base_ids 取意图；
   // disabled / 已删 KB 由 v39 RPC 服务端兜底过滤（match_kb_chunks 已加 status='active'）。
   // 仅 openai / 智谱平台走检索；其他平台不接（约束 §7.1）；检索失败降级、不阻断测试。
-  let kbContextMessage: ChatMessage | null = null;
+  // 5.19up 三轮收口 · 硬规则 + 资料从 system 改为 inline 拼到 user 消息开头（与 chat 一致），
+  //   弱模型对紧贴问题的指令遵守率更高。
+  let kbInjectText = "";
   if (provider.platform === "openai" || provider.platform === "zhipu") {
     const draftKbField = (builderConfig as Record<string, unknown>).knowledge_base_ids;
     const kbIds = Array.isArray(draftKbField)
@@ -129,16 +131,23 @@ export async function POST(
         const chunks = await retrieveKbChunks(kbIds, message);
         if (chunks.length > 0) {
           const refBlock = chunks.map((c, i) => `【资料 ${i + 1}】\n${c.content}`).join("\n\n");
-          kbContextMessage = {
-            role: "system",
-            content:
-              "以下是从内部知识库检索到的、与用户问题相关的资料 —— 视为权威事实。\n" +
-              "硬规则：\n" +
-              "① 回答**必须严格以这些资料为准**；\n" +
-              "② **即便与你的训练常识冲突，也以资料为唯一事实依据**，不得用常识反驳、纠正或质疑资料内容；\n" +
-              "③ 资料未覆盖的部分才可用常识回答，且回答时必须明确标注「以下来自常识、非知识库」。\n\n" +
-              refBlock,
-          };
+          kbInjectText =
+              "【知识库权威性 · 硬性规则，不可违反】\n" +
+              "你正在使用一个内部知识库。下方「资料」就是事实，对资料覆盖的内容拥有最高权威。\n\n" +
+              "规则（无条件适用，违反任何一条即错误回答）：\n" +
+              "① 回答必须严格以「资料」为准，所有事实判断都以资料为最高依据。\n" +
+              "② 即使资料与你的训练常识 / 世界知识 / 普遍认知严重冲突，**仍然以资料为准**。\n" +
+              "   严禁出现以下任何形式的反驳/纠正/质疑：\n" +
+              "   - 「实际上 / 事实上 / 通常来说 / 严格来说 / 准确地说 …」\n" +
+              "   - 「这可能是误解 / 误传 / 错误信息 / 不准确」\n" +
+              "   - 「正确的应该是 / 正确版本是 / 我建议参考 …」\n" +
+              "   - 「资料里说 X，但实际是 Y」「资料提到 X，然而 …」\n" +
+              "   - 任何「修正」「补充更准确信息」「提供正确版本」的句式\n" +
+              "③ 资料未涵盖的问题 → 答完后另起一段，单独标注「以下来自常识，非知识库：」再说常识。\n" +
+              "④ 用户的问题即便与资料字面矛盾，仍按资料回答；不要解释「资料为什么不对」。\n\n" +
+              "—— 资料 ——\n" +
+              refBlock +
+              "\n\n—— 以下是本轮用户问题（请按上述硬规则作答）——\n";
         }
       } catch (e) {
         console.warn(
@@ -151,10 +160,9 @@ export async function POST(
 
   const messages: ChatMessage[] = [
     ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
-    // 知识库资料注入在系统提示之后、历史之前（与正式 chat 一致）
-    ...(kbContextMessage ? [kbContextMessage] : []),
     ...history,
-    { role: "user" as const, content: message },
+    // 5.19up 三轮收口 · KB inline 拼到 user 消息前缀（详见 chat/route.ts 同位置注释）
+    { role: "user" as const, content: kbInjectText + message },
   ];
 
   const startTime = Date.now();
