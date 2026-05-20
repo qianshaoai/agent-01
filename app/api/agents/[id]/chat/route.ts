@@ -50,16 +50,29 @@ async function orgUserCanSeeAgent(
     .limit(1);
   if (agentHit && agentHit.length > 0) return true;
 
-  // 2. 工作流步骤兜底：该 agent 是某个「用户可访问工作流」的步骤 → 放行。
-  //    工作流运行时经 /agents/[code] 进入对话，步骤 agent 未必有独立权限行；
-  //    不放行会把正常工作流跑断（约束 §8.2「非知识库智能体路径不受影响」）。
+  // 2. 工作流步骤兜底：该 agent 是某个「用户可访问且 enabled 工作流的 enabled 步骤」→ 放行。
+  //    工作流运行时经 /agents/[code] 进入对话，步骤 agent 未必有独立权限行，不放行会把
+  //    正常工作流跑断（约束 §8.2「非知识库智能体路径不受影响」）。
+  //    ⚠ 小B 验收 finding 1：**必须同时校验 step.enabled + workflow.enabled**，否则
+  //    禁用工作流 / 禁用步骤会成为越权后门（用户绕开禁用闸刀间接访问 agent）。
   const { data: stepRows } = await db
     .from("workflow_steps")
     .select("workflow_id")
-    .eq("agent_id", agentId);
-  const wfIds = [
+    .eq("agent_id", agentId)
+    .eq("enabled", true);
+  const candidateWfIds = [
     ...new Set((stepRows ?? []).map((s: { workflow_id: string }) => s.workflow_id).filter(Boolean)),
   ];
+  if (candidateWfIds.length === 0) return false;
+
+  // 收口：只取 enabled=true 的工作流；禁用工作流不放行
+  const { data: enabledWfRows } = await db
+    .from("workflows")
+    .select("id, visible_to")
+    .in("id", candidateWfIds)
+    .eq("enabled", true);
+  const wfRows = (enabledWfRows ?? []) as { id: string; visible_to: string | null }[];
+  const wfIds = wfRows.map((w) => w.id);
   if (wfIds.length === 0) return false;
 
   // 2a. 工作流命中用户权限行（新口径）
@@ -73,13 +86,8 @@ async function orgUserCanSeeAgent(
   if (wfHit && wfHit.length > 0) return true;
 
   // 2b. 兼容旧数据：workflows.visible_to 为 "all" 或逗号分隔组织码（未迁到权限表的工作流）
-  const { data: wfRows } = await db
-    .from("workflows")
-    .select("visible_to")
-    .in("id", wfIds)
-    .eq("enabled", true);
   const tc = (tenantCode ?? "").toUpperCase();
-  for (const w of (wfRows ?? []) as { visible_to: string | null }[]) {
+  for (const w of wfRows) {
     const vt = String(w.visible_to ?? "");
     if (vt === "all") return true;
     if (vt.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean).includes(tc)) return true;
