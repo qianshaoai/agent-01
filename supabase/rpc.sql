@@ -14,3 +14,59 @@ BEGIN
   RETURN affected > 0;
 END;
 $$ LANGUAGE plpgsql;
+
+-- 5.16up · R5 工作流步骤拖拽改顺序 —— 原子重排
+-- 传入完整有序 step id 数组；plpgsql 函数体本身即单事务，要么全成、要么全不动。
+-- 返回 false：传入集合与该工作流当前步骤集合不一致（前端须强制刷新真实顺序）。
+CREATE OR REPLACE FUNCTION reorder_workflow_steps(p_workflow_id UUID, p_step_ids UUID[])
+RETURNS boolean AS $$
+DECLARE
+  existing_count INT;
+  input_count INT;
+BEGIN
+  input_count := COALESCE(array_length(p_step_ids, 1), 0);
+
+  -- 数量必须与该工作流当前步骤数一致
+  SELECT COUNT(*) INTO existing_count FROM workflow_steps WHERE workflow_id = p_workflow_id;
+  IF input_count <> existing_count THEN
+    RETURN false;
+  END IF;
+
+  -- 每个传入 id 必须真实属于该工作流（防越权改别的工作流的步骤）
+  IF EXISTS (
+    SELECT 1 FROM unnest(p_step_ids) AS sid
+    WHERE NOT EXISTS (
+      SELECT 1 FROM workflow_steps WHERE id = sid AND workflow_id = p_workflow_id
+    )
+  ) THEN
+    RETURN false;
+  END IF;
+
+  -- 原子重排：按数组下标重设 step_order（1, 2, 3 …）
+  UPDATE workflow_steps ws
+  SET step_order = t.ord
+  FROM unnest(p_step_ids) WITH ORDINALITY AS t(sid, ord)
+  WHERE ws.id = t.sid AND ws.workflow_id = p_workflow_id;
+
+  RETURN true;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 5.19up · 搭建器发布可见范围 —— 原子设置某 agent 的 resource_permissions
+-- p_perms 是 JSONB 数组，每项 {"scope_type": "...", "scope_id": "..."|null}。
+-- plpgsql 函数体即单事务：先删该 agent 全部权限行，再按 p_perms 全量写入，
+-- 要么全成、要么全不动。p_perms 为空数组 → 该 agent 无权限行（前台对组织用户不可见）。
+CREATE OR REPLACE FUNCTION set_agent_permissions(p_agent_id UUID, p_perms JSONB)
+RETURNS void AS $$
+BEGIN
+  DELETE FROM resource_permissions
+  WHERE resource_type = 'agent' AND resource_id = p_agent_id;
+
+  INSERT INTO resource_permissions (resource_type, resource_id, scope_type, scope_id)
+  SELECT 'agent', p_agent_id, elem->>'scope_type', elem->>'scope_id'
+  FROM jsonb_array_elements(COALESCE(p_perms, '[]'::jsonb)) AS elem
+  ON CONFLICT DO NOTHING;
+END;
+$$ LANGUAGE plpgsql;
+
+NOTIFY pgrst, 'reload schema';

@@ -40,6 +40,13 @@ export type ChatMessage = {
   attachments?: ChatAttachment[];
 };
 
+/** 5.16up W1 · token 用量（OpenAI 返回的 usage） */
+export type TokenUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
 export type AdapterConfig = {
   platform: string;
   apiEndpoint: string;
@@ -50,6 +57,8 @@ export type AdapterConfig = {
   platformConvId?: string | null;
   /** 适配器回调：当获取到平台侧新会话 ID 时通知调用方保存 */
   onPlatformConvId?: (id: string) => void;
+  /** 5.16up W1 · 适配器拿到 token usage 时回调（目前仅 openai 平台会触发） */
+  onUsage?: (usage: TokenUsage) => void;
 };
 
 export async function* streamChat(
@@ -305,22 +314,43 @@ async function* openaiCompatibleStream(
   config: AdapterConfig
 ): AsyncGenerator<string> {
   const model = (config.modelParams["model"] as string) ?? "gpt-4o-mini";
-  const body = {
+  const body: Record<string, unknown> = {
     model,
     messages,
     stream: true,
     temperature: config.modelParams["temperature"] ?? 0.7,
     max_tokens: config.modelParams["max_tokens"] ?? 2000,
   };
+  // 5.16up W1 · 只对明确的 openai 平台请求 token usage。
+  // 默认分支还接着 zhipu 等 OpenAI 兼容平台，有些不认 stream_options 会直接 400，
+  // 不能一刀切（小B finding 3）。
+  if (config.platform === "openai") {
+    body.stream_options = { include_usage: true };
+  }
 
-  const res = await fetch(config.apiEndpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  // 5.15up · dev 期网络抖动重试（仅在 fetch throw 时重试 2 次，HTTP 错误不重试）
+  // 跟 lib/db.ts 的 retryingFetch 同思路：fetch 已经 resolve 就不动 stream
+  let res: Response;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      res = await fetch(config.apiEndpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+    }
+  }
+  if (lastErr) throw lastErr;
+  res = res!;
 
   if (!res.ok) {
     throw new Error(`API error: ${res.status} ${await res.clone().text()}`);
@@ -330,6 +360,14 @@ async function* openaiCompatibleStream(
     if (data === "[DONE]") return null;
     try {
       const obj = JSON.parse(data);
+      // 5.16up W1 · stream_options 的末 chunk：choices 为空、带 usage
+      if (obj.usage && config.onUsage) {
+        config.onUsage({
+          prompt_tokens: obj.usage.prompt_tokens ?? 0,
+          completion_tokens: obj.usage.completion_tokens ?? 0,
+          total_tokens: obj.usage.total_tokens ?? 0,
+        });
+      }
       return obj.choices?.[0]?.delta?.content ?? null;
     } catch {}
     return null;

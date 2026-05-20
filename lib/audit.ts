@@ -1,12 +1,17 @@
 import { db } from "@/lib/db";
 
-export type AuditAction = "create" | "update" | "delete" | "enable" | "disable";
+// 5.14up PR-A · 新增 'test'（模型供应商连通性测试）
+export type AuditAction = "create" | "update" | "delete" | "enable" | "disable" | "test";
 export type AuditResourceType =
   | "agent" | "workflow" | "workflow_step"
   | "category" | "wf_category"
   | "notice" | "tenant" | "user"
   | "department" | "team" | "user_group"
-  | "settings" | "resource_permission";
+  | "settings" | "resource_permission"
+  // 5.14up PR-A · 平台级模型供应商（model_providers 表，无组织归属）
+  | "model_provider"
+  // 5.14up PR-B · 智能体草稿（搭建器使用）
+  | "agent_draft";
 
 /**
  * 5.11up · 写时反查资源所属的组织 code

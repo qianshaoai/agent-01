@@ -153,9 +153,15 @@ export async function PATCH(
       return apiError("新密码至少 8 位", "VALIDATION_ERROR");
     }
     const pwd_hash = await bcrypt.hash(newPassword, 12);
+    // 5.13up · 加 force_relogin_at —— 立刻踢掉被改密码用户 B 的所有会话；
+    // 当前会话是 admin A，不动 admin cookie（这正是 force_relogin_at 机制该解决的事）
     const { error } = await db
       .from("users")
-      .update({ pwd_hash, first_login: true })
+      .update({
+        pwd_hash,
+        first_login: true,
+        force_relogin_at: new Date().toISOString(),
+      })
       .eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({

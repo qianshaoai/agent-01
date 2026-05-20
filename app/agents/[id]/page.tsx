@@ -981,8 +981,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 : `/api/conversations?agentCode=${agentCode}`;
               const convsRes = await fetch(refreshUrl);
               if (convsRes.ok) { const raw = await convsRes.json(); setConversations(raw.data ?? raw ?? []); }
-              // Update quota
-              if (quota) setQuota((q) => q ? { ...q, left: q.left - 1 } : q);
+              // Update quota — 5.16up W2 补丁：按本次 weight 减（加权模型如 gpt-4o 扣 5）；
+              // 服务端没带 weight 时（非加权/旧逻辑）退回减 1，行为不变
+              if (quota) setQuota((q) => q ? { ...q, left: q.left - (obj.weight ?? 1) } : q);
               // P1: 刷消息拿 DB id（编辑/重新生成需要）
               loadConversationMessages(obj.conversationId);
             }

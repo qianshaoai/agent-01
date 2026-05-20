@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon, GitBranch, Trash2, AlertTriangle } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight } from "lucide-react";
 
 type WorkflowRef = { id: string; name: string };
 type UsedByEntry = { id: string; name: string; stepCount: number };
@@ -27,6 +27,10 @@ type Agent = {
   api_key_masked?: string;
   api_endpoint?: string;
   model_params?: Record<string, unknown>;
+  provider_id?: string | null;
+  // 5.19up · 非空 = 由搭建器发布的智能体（API 配置归搭建器管）
+  published_from_draft_id?: string | null;
+  provider?: { name: string; category: string; platform: string; enabled: boolean } | null;
   categories?: { name: string; icon_url?: string | null };
   categoriesAll?: { id: string; name: string; icon_url: string | null }[];
   tenant_codes?: string[];
@@ -51,19 +55,18 @@ type CategoryDisplayConfig = {
 };
 
 const PLATFORMS = ["coze", "dify", "qingyan", "yuanqi", "openai", "other"];
+// 5.15up PR-2 · 智能体平台 → API category（决定 API 配置下拉拉哪类命名 API）
+const AGENT_PLATFORMS = ["coze", "dify", "yuanqi", "qingyan"];
 const EMPTY_AGENT = { id: "", name: "", description: "", categoryIds: [] as string[], platform: "coze", agentType: "chat", externalUrl: "" };
-const EMPTY_API = { endpoint: "", apiKey: "", modelParams: '{"temperature": 0.7, "max_tokens": 2000}' };
+const EMPTY_API = { modelParams: '{"temperature": 0.7, "max_tokens": 2000}', providerId: "" };
 
 export default function AgentsAdminPage() {
   const { toast } = useToast();
   const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
-  // 4.29up：?focus=<agentId>&pageSize=100 跨页定位
-  // 关键：客户端 hydrate 后才能读到 window.location.search（"use client" 页也走 SSR，
-  //       lazy state 首次在服务端执行 window 不存在，初值会被钉成 null），用 urlReady
-  //       防止 load() 在 URL 解析前抢跑
+  // 4.29up：?focus=<agentId> 跨页定位 / 5.16up R4：列表已全量加载，pageSize 参数不再需要
+  // urlReady：客户端 hydrate 后才能读到 window.location.search，防 load() 在 URL 解析前抢跑
   const [focusAgentId, setFocusAgentId] = useState<string | null>(null);
-  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
   const [urlReady, setUrlReady] = useState(false);
   const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
   // 工作流引用列表"+N 更多"popover
@@ -73,13 +76,7 @@ export default function AgentsAdminPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sp = new URLSearchParams(window.location.search);
-    const f = sp.get("focus");
-    const ps = sp.get("pageSize");
-    setFocusAgentId(f);
-    if (ps) {
-      const n = parseInt(ps);
-      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
-    }
+    setFocusAgentId(sp.get("focus"));
     setUrlReady(true);
   }, []);
   // 删除流程
@@ -110,6 +107,8 @@ export default function AgentsAdminPage() {
   const [editing, setEditing] = useState<Agent | null>(null);
   const [form, setForm] = useState(EMPTY_AGENT);
   const [apiForm, setApiForm] = useState(EMPTY_API);
+  // 5.15up PR-2 · API 配置弹窗的「命名 API」下拉选项
+  const [apiProviders, setApiProviders] = useState<{ id: string; name: string; platform: string; enabled: boolean }[]>([]);
   const [saving, setSaving] = useState(false);
   const [agentTypeFilter, setAgentTypeFilter] = useState("");
   const [agentCategoryFilter, setAgentCategoryFilter] = useState("");
@@ -133,17 +132,29 @@ export default function AgentsAdminPage() {
   const [showCatAssignModal, setShowCatAssignModal] = useState<Category | null>(null);
   const [selectedCatTenants, setSelectedCatTenants] = useState<string[]>([]);
 
+  // 5.16up R4 · 完整展示：分页循环拉完所有智能体（parsePagination MAX_PAGE_SIZE=100）
+  async function fetchAllAgents(): Promise<Agent[]> {
+    const PS = 100;
+    const all: Agent[] = [];
+    for (let page = 1; ; page++) {
+      const res = await fetch(`/api/admin/agents?page=${page}&pageSize=${PS}`).then((r) => r.json());
+      const batch: Agent[] = Array.isArray(res?.data) ? res.data : [];
+      all.push(...batch);
+      const total: number = res?.pagination?.total ?? all.length;
+      if (batch.length < PS || all.length >= total) break;
+    }
+    return all;
+  }
+
   async function load() {
     setLoading(true);
     try {
-      // 4.29up：尊重 URL 上的 pageSize（跨页 focus 用），否则走后端默认 50
-      const ps = urlPageSize && urlPageSize > 0 ? `?pageSize=${urlPageSize}` : "";
       const [ar, cr, tr] = await Promise.all([
-        fetch(`/api/admin/agents${ps}`).then((r) => r.json()).then(d => d.data ?? d),
+        fetchAllAgents(),
         fetch("/api/admin/categories").then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
       ]);
-      setAgents(Array.isArray(ar) ? ar : []);
+      setAgents(ar);
       setCategories(Array.isArray(cr) ? cr : []);
       setTenants(Array.isArray(tr) ? tr : []);
     } catch {
@@ -190,7 +201,21 @@ export default function AgentsAdminPage() {
 
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
-  function openApi(a: Agent) { setShowApiModal(a); setApiForm({ endpoint: a.api_endpoint ?? "", apiKey: "", modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}' }); }
+  async function openApi(a: Agent) {
+    setShowApiModal(a);
+    setApiForm({
+      providerId: a.provider_id ?? "",
+      modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}',
+    });
+    // 按 agent 平台拉对应类别的命名 API 作下拉选项
+    setApiProviders([]);
+    const cat = AGENT_PLATFORMS.includes(a.platform) ? "agent" : "model";
+    try {
+      const res = await fetch(`/api/admin/model-providers?category=${cat}`, { cache: "no-store" });
+      const data = await res.json();
+      if (res.ok) setApiProviders(data.data ?? []);
+    } catch { /* 下拉为空时弹窗仍可用，提示去 API 管理新建 */ }
+  }
 
   async function openPermModal(a: Agent) {
     setShowPermModal(a);
@@ -297,6 +322,27 @@ export default function AgentsAdminPage() {
     }
   }
 
+  // 5.14up PR-D 配套 · 启用/禁用切换
+  // 后端 PATCH /api/admin/agents/[id] 已支持 enabled 字段 + 自动写审计
+  async function toggleAgentEnabled(agent: Agent) {
+    try {
+      const res = await fetch(`/api/admin/agents/${agent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !agent.enabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(data.error ?? "切换失败");
+        return;
+      }
+      toast(agent.enabled ? "已禁用" : "已启用");
+      load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "切换失败");
+    }
+  }
+
   async function handleSaveAgent() {
     setFormError("");
     if (!form.name || !form.platform) { setFormError("请填写名称和平台"); return; }
@@ -308,7 +354,13 @@ export default function AgentsAdminPage() {
         : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
-      setShowAgentModal(false); load(); toast(editing ? "智能体已更新" : "智能体已创建");
+      setShowAgentModal(false); load();
+      // 平台变更导致原命名 API 绑定类型不符、被后端自动解绑 → 提示重新配置
+      if (data.providerUnbound) {
+        toast("智能体已更新；平台已变更，原 API 绑定类型不符已自动解除，请在「API 配置」里重新选择");
+      } else {
+        toast(editing ? "智能体已更新" : "智能体已创建");
+      }
     } finally { setSaving(false); }
   }
 
@@ -318,7 +370,18 @@ export default function AgentsAdminPage() {
     try {
       let params: Record<string, unknown> = {};
       try { params = JSON.parse(apiForm.modelParams); } catch {}
-      await fetch(`/api/admin/agents/${showApiModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ apiEndpoint: apiForm.endpoint, apiKey: apiForm.apiKey || undefined, modelParams: params }) });
+      // 5.15up PR-2 · 只提交 providerId（绑定/解绑命名 API）+ modelParams；
+      // 旧 apiEndpoint/apiKey 不再从此入口写入
+      const res = await fetch(`/api/admin/agents/${showApiModal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: apiForm.providerId, modelParams: params }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast(d.error ?? "保存失败");
+        return;
+      }
       setShowApiModal(null); load(); toast("API 配置已保存");
     } finally { setSaving(false); }
   }
@@ -384,12 +447,34 @@ export default function AgentsAdminPage() {
 
   const filteredAgents = useMemo(() => agents.filter(a => {
     if (agentTypeFilter && a.agent_type !== agentTypeFilter) return false;
-    if (agentCategoryFilter && a.category_id !== agentCategoryFilter) return false;
+    // 5.16up R4 · 修筛选漏项：用多分类 categoryIds，不再用遗留单列 category_id
+    if (agentCategoryFilter && !(a.categoryIds ?? []).includes(agentCategoryFilter)) return false;
     if (agentStatusFilter === "enabled" && !a.enabled) return false;
     if (agentStatusFilter === "disabled" && a.enabled) return false;
     return true;
   }), [agents, agentTypeFilter, agentCategoryFilter, agentStatusFilter]);
   const hasAgentFilter = agentTypeFilter || agentCategoryFilter || agentStatusFilter;
+
+  // 5.16up R4 · 完整展示按分类分组：多分类智能体在每个所属分类下都出现（D4-1）；
+  // 未分类兜底分区；分区顺序按 categories（接口已按 sort_order 排）。
+  const groupedSections = useMemo(() => {
+    const cats = agentCategoryFilter
+      ? categories.filter((c) => c.id === agentCategoryFilter)
+      : categories;
+    const sections = cats.map((c) => ({
+      id: c.id,
+      name: c.name,
+      icon_url: c.icon_url ?? null,
+      agents: filteredAgents.filter((a) => (a.categoryIds ?? []).includes(c.id)),
+    }));
+    if (!agentCategoryFilter) {
+      const uncategorized = filteredAgents.filter((a) => (a.categoryIds ?? []).length === 0);
+      if (uncategorized.length > 0) {
+        sections.push({ id: "__uncategorized__", name: "未分类", icon_url: null, agents: uncategorized });
+      }
+    }
+    return sections.filter((s) => s.agents.length > 0);
+  }, [categories, filteredAgents, agentCategoryFilter]);
 
   return (
     <AdminLayout>
@@ -443,7 +528,7 @@ export default function AgentsAdminPage() {
           <Card padding="none" className="overflow-hidden">
             {loading ? (
               <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
-            ) : filteredAgents.length === 0 ? (
+            ) : groupedSections.length === 0 ? (
               <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体，点击右上角新增" : "没有符合筛选条件的智能体"}</p></div>
             ) : (
               <div className="overflow-x-auto">
@@ -453,8 +538,24 @@ export default function AgentsAdminPage() {
                       {["编号/名称", "分类", "类型/平台", "引用工作流", "操作"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {filteredAgents.map((a) => (
+                  {/* 5.16up R4 · 按分类分组展示；多分类智能体在每个所属分类下各出现一次 */}
+                  {groupedSections.map((section) => (
+                  <tbody key={section.id} className="divide-y divide-gray-50">
+                    <tr className="bg-gray-50/80 border-t border-gray-100">
+                      <td colSpan={5} className="px-5 py-2.5">
+                        <div className="flex items-center gap-2">
+                          {section.icon_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={section.icon_url} alt={section.name} className="w-4 h-4 rounded-[3px] object-contain" />
+                          ) : (
+                            <Tag size={13} className="text-[#002FA7]" />
+                          )}
+                          <span className="text-[13px] font-semibold text-gray-700">{section.name}</span>
+                          <span className="text-[11px] text-gray-400">{section.agents.length} 个</span>
+                        </div>
+                      </td>
+                    </tr>
+                    {section.agents.map((a) => (
                       <tr
                         key={a.id}
                         data-agent-row={a.id}
@@ -522,14 +623,16 @@ export default function AgentsAdminPage() {
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setOpenMoreFor(openMoreFor === a.id ? null : a.id);
+                                    // 5.16up R4 · 多分类智能体在多分区有重复行，弹层 key 须含 section.id 区分
+                                    const k = `${section.id}:${a.id}`;
+                                    setOpenMoreFor(openMoreFor === k ? null : k);
                                   }}
                                   className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 transition-colors"
                                 >
                                   +{a.workflows!.length - 2} 更多
                                 </button>
                               )}
-                              {openMoreFor === a.id && (
+                              {openMoreFor === `${section.id}:${a.id}` && (
                                 <>
                                   {/* 点击空白关闭 popover */}
                                   <div
@@ -566,8 +669,17 @@ export default function AgentsAdminPage() {
                             <span className="text-xs text-gray-300">仅可查看</span>
                           ) : (
                           <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => toggleAgentEnabled(a)}
+                              className={`p-1.5 rounded-[8px] transition-colors ${a.enabled ? "text-green-600 hover:bg-green-50" : "text-gray-400 hover:bg-gray-100"}`}
+                              title={a.enabled ? "已启用，点击禁用" : "已禁用，点击启用"}
+                              aria-label={a.enabled ? "禁用" : "启用"}
+                            >
+                              {a.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                            </button>
                             <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
-                            {a.agent_type !== "external" && (
+                            {/* 5.19up · 搭建器发布的智能体 API 配置归搭建器管，此处不放按钮，防误触误改 */}
+                            {a.agent_type !== "external" && !a.published_from_draft_id && (
                               <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置" aria-label="API 配置"><Key size={14} /></button>
                             )}
                             <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置" aria-label="权限设置"><Settings2 size={14} /></button>
@@ -579,6 +691,7 @@ export default function AgentsAdminPage() {
                       </tr>
                     ))}
                   </tbody>
+                  ))}
                 </table>
               </div>
             )}
@@ -744,11 +857,34 @@ export default function AgentsAdminPage() {
             <h2 className="font-semibold text-gray-900 mb-1">API 配置</h2>
             <p className="text-sm text-gray-500 mb-5">{showApiModal.agent_code} · {showApiModal.name} · {showApiModal.platform}</p>
             <div className="space-y-4">
-              <Input label="API Endpoint" placeholder="https://api.coze.cn/v3/chat" value={apiForm.endpoint} onChange={(e) => setApiForm({ ...apiForm, endpoint: e.target.value })} />
+              {/* 5.15up PR-2 · 主操作：选择命名 API（按平台类别过滤） */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-gray-700">API Key <span className="text-xs font-normal text-gray-400">（加密存储，当前已配置：{showApiModal.api_key_masked || "未配置"}）</span></label>
-                <input type="password" placeholder="输入新 Key 覆盖，留空保持不变" className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10" value={apiForm.apiKey} onChange={(e) => setApiForm({ ...apiForm, apiKey: e.target.value })} />
+                <label className="text-sm font-medium text-gray-700">命名 API</label>
+                <select
+                  className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
+                  value={apiForm.providerId}
+                  onChange={(e) => setApiForm({ ...apiForm, providerId: e.target.value })}
+                >
+                  <option value="">未绑定</option>
+                  {apiProviders.map((p) => (
+                    <option key={p.id} value={p.id} disabled={!p.enabled}>
+                      {p.name}（{p.platform}）{p.enabled ? "" : " · 已禁用"}
+                    </option>
+                  ))}
+                </select>
+                <a
+                  href="/admin/model-providers"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-[#002FA7] hover:underline w-fit"
+                >
+                  去「API 管理」新建 / 更新 API →
+                </a>
+                <p className="text-[11px] text-gray-400">
+                  API Key 统一在「API 管理」里命名维护，此处选择引用即可。
+                </p>
               </div>
+
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">模型参数（JSON）</label><textarea rows={4} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none" value={apiForm.modelParams} onChange={(e) => setApiForm({ ...apiForm, modelParams: e.target.value })} /></div>
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowApiModal(null)}>取消</Button><Button onClick={handleSaveApi} loading={saving}>保存配置</Button></div>

@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { signToken, buildAdminSetCookieHeader, type AdminRole } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,8 @@ export async function POST(req: NextRequest) {
     .eq("id", admin.adminId)
     .single();
 
+  // 5.13up · 改完密码写 force_relogin_at 踢其他设备；当前设备靠重发 cookie 保留会话
+  // 这样 admin 改自己密码后不会被自己踢，但其他设备/浏览器的 token 立刻失效
   if (user) {
     const ok = await bcrypt.compare(oldPassword ?? "", user.pwd_hash);
     if (!ok) return apiError("旧密码错误", "UNAUTHORIZED");
@@ -39,14 +42,29 @@ export async function POST(req: NextRequest) {
     const newHash = await bcrypt.hash(newPassword, 12);
     const { error } = await db
       .from("users")
-      .update({ pwd_hash: newHash, first_login: false })
+      .update({
+        pwd_hash: newHash,
+        first_login: false,
+        force_relogin_at: new Date().toISOString(),
+      })
       .eq("id", admin.adminId);
     if (error) return dbError(error);
     await writeAuditLog({
       adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "update", resourceType: "settings", resourceName: "管理员密码",
     });
-    return NextResponse.json({ ok: true });
+    // 给当前会话发新 cookie（带更新后的 iat），保留登录态
+    const newToken = await signToken({
+      type: "admin",
+      adminId: admin.adminId,
+      username: admin.username,
+      role: (admin.role as AdminRole) ?? "super_admin",
+      tenantCode: admin.tenantCode ?? null,
+    });
+    return NextResponse.json(
+      { ok: true },
+      { headers: { "Set-Cookie": buildAdminSetCookieHeader(newToken) } }
+    );
   }
 
   // 不在 users 表 → 在 admins 表
@@ -64,12 +82,26 @@ export async function POST(req: NextRequest) {
   const newHash = await bcrypt.hash(newPassword, 12);
   const { error } = await db
     .from("admins")
-    .update({ pwd_hash: newHash })
+    .update({
+      pwd_hash: newHash,
+      force_relogin_at: new Date().toISOString(),
+    })
     .eq("id", admin.adminId);
   if (error) return dbError(error);
   await writeAuditLog({
     adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     action: "update", resourceType: "settings", resourceName: "管理员密码",
   });
-  return NextResponse.json({ ok: true });
+  // 同样给当前会话发新 cookie，保留登录态
+  const newToken = await signToken({
+    type: "admin",
+    adminId: admin.adminId,
+    username: admin.username,
+    role: (admin.role as AdminRole) ?? "super_admin",
+    tenantCode: admin.tenantCode ?? null,
+  });
+  return NextResponse.json(
+    { ok: true },
+    { headers: { "Set-Cookie": buildAdminSetCookieHeader(newToken) } }
+  );
 }

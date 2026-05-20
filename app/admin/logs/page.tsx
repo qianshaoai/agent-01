@@ -14,6 +14,10 @@ type Log = {
   action: string;
   status: "success" | "error";
   duration_ms: number | null;
+  // 5.16up W1 · GPT 类调用的 token 用量；其它平台为 null
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  model_used: string | null;
   error_msg: string | null;
   created_at: string;
 };
@@ -123,7 +127,7 @@ export default function LogsPage() {
               <table className="w-full text-sm table-sticky-head">
                 <thead>
                   <tr>
-                    {["时间", "用户", "智能体", "操作", "状态", "耗时"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                    {["时间", "用户", "智能体", "操作", "状态", "模型", "Token(in/out)", "耗时"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
@@ -151,6 +155,14 @@ export default function LogsPage() {
                           ) : (
                             <div><div className="flex items-center gap-1 text-red-500"><AlertCircle size={14} /><span className="text-[12px]">失败</span></div>{log.error_msg && <p className="text-[11px] text-red-400 mt-0.5 max-w-[140px] truncate">{log.error_msg}</p>}</div>
                           )}
+                        </td>
+                        <td className="px-5 py-4">
+                          {log.model_used ? <code className="text-[12px] text-gray-500 font-mono">{log.model_used}</code> : <span className="text-[12px] text-gray-300">—</span>}
+                        </td>
+                        <td className="px-5 py-4">
+                          {(log.prompt_tokens != null || log.completion_tokens != null)
+                            ? <span className="text-[12px] text-gray-500">{log.prompt_tokens ?? 0} / {log.completion_tokens ?? 0}</span>
+                            : <span className="text-[12px] text-gray-300">—</span>}
                         </td>
                         <td className="px-5 py-4">
                           {log.duration_ms ? <span className="text-[12px] text-gray-500">{log.duration_ms}ms</span> : <span className="text-[12px] text-gray-300">—</span>}

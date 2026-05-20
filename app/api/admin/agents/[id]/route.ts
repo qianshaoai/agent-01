@@ -2,7 +2,6 @@ import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
-import { encrypt } from "@/lib/crypto";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -29,9 +28,63 @@ export async function PATCH(
   if (body.agentType !== undefined) updates.agent_type = body.agentType;
   if (body.externalUrl !== undefined) updates.external_url = body.externalUrl;
   if (body.apiEndpoint !== undefined) updates.api_endpoint = body.apiEndpoint;
-  if (body.apiKey) updates.api_key_enc = encrypt(body.apiKey);
+  // 5.15up PR-4 收口 · 旧"手输 API Key"入口已废弃：PATCH 不再接受 apiKey 写入
+  //   api_key_enc。智能体 API Key 统一在「API 管理」里维护，agent 侧只走 provider_id 引用。
   if (body.modelParams !== undefined) updates.model_params = body.modelParams;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
+
+  // 5.15up · 平台 / provider_id 一致性（PR-2 + 小B 评审 Medium）
+  //   - 显式传 providerId：按**变更后**的平台校验 provider 的 category
+  //   - 只改平台、没动 providerId：已绑 provider 若与新平台类型不符 → 自动解绑，
+  //     避免 platform=openai 却绑着智能体类 provider 这种不一致状态
+  let providerAutoUnbound = false;
+  if (body.platform !== undefined || body.providerId !== undefined) {
+    const { data: agentRow0 } = await db
+      .from("agents").select("platform, provider_id").eq("id", id).maybeSingle();
+    if (!agentRow0) return apiError("智能体不存在", "NOT_FOUND");
+    // 变更后的有效平台（同一次 PATCH 改了 platform 就用新值）
+    const effPlatform =
+      typeof body.platform === "string" && body.platform ? body.platform : agentRow0.platform;
+    const wantCategory =
+      ["coze", "dify", "yuanqi", "qingyan"].includes(effPlatform) ? "agent" : "model";
+
+    if (body.providerId !== undefined) {
+      if (!body.providerId) {
+        updates.provider_id = null;
+      } else if (typeof body.providerId === "string") {
+        const { data: prov, error: provErr } = await db
+          .from("model_providers")
+          .select("enabled, category")
+          .eq("id", body.providerId)
+          .maybeSingle();
+        if (provErr) return dbError(provErr);
+        if (!prov) return apiError("选择的命名 API 不存在", "VALIDATION_ERROR");
+        if (!prov.enabled) {
+          return apiError("选择的命名 API 已禁用，请先在 API 管理里启用", "VALIDATION_ERROR");
+        }
+        if (prov.category !== wantCategory) {
+          return apiError(
+            `该智能体应绑定${wantCategory === "agent" ? "智能体 API" : "大模型 API"}`,
+            "VALIDATION_ERROR"
+          );
+        }
+        updates.provider_id = body.providerId;
+      } else {
+        return apiError("providerId 格式错误", "VALIDATION_ERROR");
+      }
+    } else if (body.platform !== undefined && agentRow0.provider_id) {
+      // 只改了平台、没动 provider：已绑 provider 与新平台类型不符则自动解绑
+      const { data: boundProv } = await db
+        .from("model_providers")
+        .select("category")
+        .eq("id", agentRow0.provider_id)
+        .maybeSingle();
+      if (!boundProv || boundProv.category !== wantCategory) {
+        updates.provider_id = null;
+        providerAutoUnbound = true;
+      }
+    }
+  }
 
   // 多分类：全量替换 agent_categories 表中的关联
   if (body.categoryIds !== undefined || body.categoryId !== undefined) {
@@ -81,7 +134,8 @@ export async function PATCH(
     });
   }
 
-  return NextResponse.json({ ok: true });
+  // providerUnbound：平台变更导致原 API 绑定类型不符被自动解绑，前端据此提示重新配置
+  return NextResponse.json({ ok: true, providerUnbound: providerAutoUnbound });
 }
 
 /**

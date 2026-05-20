@@ -14,7 +14,19 @@ async function getDbUser(user: { phone: string; tenantCode: string }) {
   return data;
 }
 
-// PATCH: 更新会话（改名 / 更新进度 / 标记完成）
+// 5.16up R3 · 会话状态流转白名单：key = 目标状态，value = 允许的来源状态
+//   abandoned  → in_progress：恢复已放弃的工作流
+//   in_progress → completed ：标记完成
+//   in_progress → abandoned ：放弃
+// 只约束带 status 的请求；纯改名 / 改进度（不带 status）不受影响
+const VALID_SESSION_STATUSES = ["in_progress", "completed", "abandoned"];
+const STATUS_TRANSITIONS: Record<string, string[]> = {
+  in_progress: ["abandoned"],
+  completed: ["in_progress"],
+  abandoned: ["in_progress"],
+};
+
+// PATCH: 更新会话（改名 / 更新进度 / 恢复 / 标记完成 / 放弃）
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -33,7 +45,32 @@ export async function PATCH(
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (typeof body.name === "string" && body.name.trim()) updates.name = body.name.trim();
   if (typeof body.currentStepIdx === "number") updates.current_step_idx = body.currentStepIdx;
-  if (typeof body.status === "string") updates.status = body.status;
+
+  // 5.16up R3 · 仅带 status 的请求才走状态流转白名单；纯改名 / 改进度不受影响
+  if (typeof body.status === "string") {
+    const target = body.status;
+    if (!VALID_SESSION_STATUSES.includes(target)) {
+      return NextResponse.json({ error: `不支持的状态：${target}` }, { status: 422 });
+    }
+    // 先取当前状态（顺带按 user_id 校验归属：只能动自己的会话）
+    const { data: current, error: curErr } = await db
+      .from("workflow_sessions")
+      .select("status")
+      .eq("id", id)
+      .eq("user_id", dbUser.id)
+      .maybeSingle();
+    if (curErr) return NextResponse.json({ error: "加载会话失败" }, { status: 500 });
+    if (!current) return NextResponse.json({ error: "会话不存在" }, { status: 404 });
+
+    // 同状态视为幂等、放行；否则来源状态必须在白名单内
+    if (current.status !== target && !(STATUS_TRANSITIONS[target] ?? []).includes(current.status)) {
+      return NextResponse.json(
+        { error: `不允许从「${current.status}」变更为「${target}」` },
+        { status: 422 },
+      );
+    }
+    updates.status = target;
+  }
 
   const { data, error } = await db
     .from("workflow_sessions")

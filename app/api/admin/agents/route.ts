@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
   const { page, pageSize, start } = parsePagination(req, 50);
   const [agentsRes, rpRes, acRes, catRes] = await Promise.all([
     db.from("agents")
-      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params", { count: "exact" })
+      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params, provider_id, published_from_draft_id", { count: "exact" })
       .order("created_at", { ascending: false })
       .range(start, start + pageSize - 1),
     db.from("resource_permissions").select("resource_id, scope_type, scope_id").eq("resource_type", "agent"),
@@ -80,6 +80,26 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // 5.15up PR-2 · 批量取 agent 绑定的命名 API（provider）展示信息
+  const providerIds = [
+    ...new Set(agents.map((a) => a.provider_id).filter(Boolean)),
+  ] as string[];
+  const providerMap = new Map<
+    string,
+    { name: string; category: string; platform: string; enabled: boolean }
+  >();
+  if (providerIds.length > 0) {
+    const { data: provs } = await db
+      .from("model_providers")
+      .select("id, name, category, platform, enabled")
+      .in("id", providerIds);
+    for (const p of (provs ?? []) as {
+      id: string; name: string; category: string; platform: string; enabled: boolean;
+    }[]) {
+      providerMap.set(p.id, { name: p.name, category: p.category, platform: p.platform, enabled: p.enabled });
+    }
+  }
+
   const masked = agents.map((a) => {
     const categoryIds = agentCatMap.get(a.id) ?? [];
     const cats = categoryIds.map((cid) => catMap.get(cid)).filter(Boolean) as { id: string; name: string; icon_url: string | null }[];
@@ -88,6 +108,8 @@ export async function GET(req: NextRequest) {
       ...a,
       api_key_masked: a.api_key_enc ? "••••••••••••" + a.api_key_enc.slice(-4) : "",
       api_key_enc: undefined,
+      // 绑定的命名 API（null = 未绑定，走旧 api_key_enc）
+      provider: a.provider_id ? (providerMap.get(a.provider_id) ?? null) : null,
       permissions: permMap.get(a.id) ?? [],
       tenant_codes: (permMap.get(a.id) ?? []).filter(p => p.scope_type === "org").map(p => p.scope_id as string),
       categoryIds,
