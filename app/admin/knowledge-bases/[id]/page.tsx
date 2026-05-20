@@ -222,9 +222,9 @@ export default function KnowledgeBaseDetailPage() {
       <div className="relative p-5 sm:p-7 max-w-[1400px] mx-auto space-y-5 page-enter">
         <Link
           href="/admin/knowledge-bases"
-          className="inline-flex items-center gap-1 text-sm text-[#002FA7] hover:text-[#1a47c0] transition-colors"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-white border border-gray-200 text-sm font-medium text-gray-700 hover:text-[#002FA7] hover:border-[#002FA7]/40 hover:bg-[#002FA7]/5 transition-colors shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
         >
-          <ChevronLeft size={15} /> 返回知识库列表
+          <ChevronLeft size={16} /> 返回知识库列表
         </Link>
 
         {err && (
