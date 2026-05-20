@@ -8,7 +8,6 @@ import {
   BookOpen,
   Plus,
   ChevronRight,
-  ChevronLeft,
   AlertCircle,
 } from "lucide-react";
 
@@ -83,13 +82,6 @@ export default function KnowledgeBasesPage() {
       <div className="absolute bottom-0 right-1/4 w-[360px] h-[360px] rounded-full bg-[#a4b8ff]/30 blur-[120px] pointer-events-none" />
 
       <div className="relative p-5 sm:p-7 max-w-[1400px] mx-auto space-y-6 page-enter">
-        <Link
-          href="/admin/dashboard"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-white border border-gray-200 text-sm font-medium text-gray-700 hover:text-[#002FA7] hover:border-[#002FA7]/40 hover:bg-[#002FA7]/5 transition-colors shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
-        >
-          <ChevronLeft size={16} /> 返回管理后台首页
-        </Link>
-
         {/* 顶部 section header + 新建按钮 */}
         <div className="flex items-start justify-between gap-3">
           <div>
