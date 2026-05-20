@@ -138,6 +138,45 @@ export async function POST(
     }
   }
 
+  // ── 5.19up 知识库B · 二轮收口 · 知识库绑定的存在性 + 启用状态校验 ──
+  // 提前到任何 DB 写入之前（与可见范围校验同口径），避免「发布成功但 KB 没绑」的
+  // 假成功，以及「绑了已停用 KB 却被静默跳过」的体验不一致。
+  // - 已删除的 KB id：自然不在查询结果里，沉默丢弃（沿用原「脏 id 过滤」）
+  // - 已停用（status='disabled'）的 KB：硬失败，提示用户启用或取消勾选
+  // kbValidIds = null 表示「草稿没碰过 KB 字段」，跳过后续同步（不动旧绑定）。
+  let kbValidIds: Set<string> | null = null;
+  const draftKbField = (draft.builder_config as Record<string, unknown>).knowledge_base_ids;
+  if (Array.isArray(draftKbField)) {
+    const kbIds = [
+      ...new Set(
+        (draftKbField as unknown[]).filter((x): x is string => typeof x === "string" && x.trim() !== ""),
+      ),
+    ];
+    if (kbIds.length === 0) {
+      kbValidIds = new Set();
+    } else {
+      const { data: kbRows, error: kbErr } = await db
+        .from("knowledge_bases")
+        .select("id, name, status")
+        .in("id", kbIds);
+      if (kbErr) {
+        console.error("[draft publish validate knowledge_bases]", kbErr);
+        return apiError("校验知识库失败，请重试：" + kbErr.message, "INTERNAL_ERROR");
+      }
+      const rows = (kbRows ?? []) as { id: string; name: string; status: "active" | "disabled" }[];
+      const disabled = rows.filter((r) => r.status === "disabled");
+      if (disabled.length > 0) {
+        const names = disabled.map((r) => `「${r.name}」`).join("、");
+        return apiError(
+          `知识库${names}已停用，请启用后再发布、或在搭建器「知识库」分区取消勾选`,
+          "VALIDATION_ERROR",
+        );
+      }
+      // 仅含 active 的 id；已删除的 id 已自然过滤
+      kbValidIds = new Set(rows.map((r) => r.id));
+    }
+  }
+
   // ── 加载 provider（仅 chat 类型）──
   let provider: ProviderRow | null = null;
   if (draft.agent_type === "chat" && draft.provider_id) {
@@ -258,19 +297,12 @@ export async function POST(
     return apiError("发布权限设置失败，请重试：" + permErr.message, "INTERNAL_ERROR");
   }
 
-  // ── 5.19up 知识库B · 按 builder_config.knowledge_base_ids 全量同步 agent_knowledge_bases ──
-  // 与可见范围 / 工作流的「全量替换」同口径：先删该 agent 全部绑定行，再按当前勾选写入。
-  // 脏 id（指向已删知识库）在写入前按 knowledge_bases 实际存在性过滤掉，避免 FK 违例。
-  // 失败 → 发布失败、不标 draft published（与 set_agent_permissions 同口径，幂等可重试）；
-  // 否则会出现「发布成功但知识库没绑」的假成功（小B 验收 finding 2 收口，A 表已就绪后由
-  // 非致命改为硬失败）。
-  if (Array.isArray((builderConfig as Record<string, unknown>).knowledge_base_ids)) {
-    const kbIds = [
-      ...new Set(
-        ((builderConfig as Record<string, unknown>).knowledge_base_ids as unknown[])
-          .filter((x): x is string => typeof x === "string" && x.trim() !== ""),
-      ),
-    ];
+  // ── 5.19up 知识库B · 按校验通过的 kbValidIds 全量同步 agent_knowledge_bases ──
+  // 存在性 + 启用状态已在路由开头校验通过（disabled 已硬失败、deleted 已自然过滤）；
+  // 这里只做「删旧 + 插新」的原子全量替换。失败 → 发布失败、不标 draft published
+  // （与 set_agent_permissions 同口径，幂等可重试）。
+  // kbValidIds === null 表示草稿没碰过 KB 字段 → 完全跳过，不动既有绑定。
+  if (kbValidIds !== null) {
     const { error: delErr } = await db
       .from("agent_knowledge_bases")
       .delete()
@@ -279,25 +311,13 @@ export async function POST(
       console.error("[draft publish sync agent_knowledge_bases delete]", delErr);
       return apiError("知识库绑定同步失败（清旧绑定），请重试：" + delErr.message, "INTERNAL_ERROR");
     }
-    if (kbIds.length > 0) {
-      const { data: existRows, error: exErr } = await db
-        .from("knowledge_bases")
-        .select("id")
-        .in("id", kbIds);
-      if (exErr) {
-        console.error("[draft publish sync agent_knowledge_bases validate]", exErr);
-        return apiError("知识库绑定同步失败（校验存在性），请重试：" + exErr.message, "INTERNAL_ERROR");
-      }
-      const validIds = new Set((existRows ?? []).map((r: { id: string }) => r.id));
-      const rows = kbIds
-        .filter((kid) => validIds.has(kid))
-        .map((kid) => ({ agent_id: agentId, kb_id: kid }));
-      if (rows.length > 0) {
-        const { error: insErr } = await db.from("agent_knowledge_bases").insert(rows);
-        if (insErr) {
-          console.error("[draft publish sync agent_knowledge_bases insert]", insErr);
-          return apiError("知识库绑定同步失败（写新绑定），请重试：" + insErr.message, "INTERNAL_ERROR");
-        }
+    const idsToBind = [...kbValidIds];
+    if (idsToBind.length > 0) {
+      const rows = idsToBind.map((kid) => ({ agent_id: agentId, kb_id: kid }));
+      const { error: insErr } = await db.from("agent_knowledge_bases").insert(rows);
+      if (insErr) {
+        console.error("[draft publish sync agent_knowledge_bases insert]", insErr);
+        return apiError("知识库绑定同步失败（写新绑定），请重试：" + insErr.message, "INTERNAL_ERROR");
       }
     }
   }

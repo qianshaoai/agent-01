@@ -12,20 +12,19 @@
 import { db } from "@/lib/db";
 import { embedQuery } from "@/lib/kb/embed";
 import type { KbSearchResult } from "@/lib/kb/types";
-
-// D4（母方案 §七）：top-K = 5；相似度阈值先给保守默认值，上线后按实际命中效果调
-// （母方案 §八：切块大小 / top-K / 阈值留可调，别一次写死）。
-export const KB_TOP_K = 5;
-// ⚠ 阈值语义（similarity / distance）取决于 A 的 match_kb_chunks 实现，
-//   联合联调时按真实命中效果校准；此处给一个偏宽松的默认，避免误杀全部片段。
-export const KB_MATCH_THRESHOLD = 0.2;
+// 5.19up 知识库 · 二轮收口：top-K / 阈值改从 A 的统一配置出口（@/lib/kb/config）取，
+//   不再在 B 这边硬编码 —— A/B 改默认值只改一处（母方案 D4 推荐值落于 config.ts）。
+import { KB_TOP_K, KB_SIMILARITY_THRESHOLD } from "@/lib/kb/config";
 
 /**
  * 跨指定知识库检索与 query 相关的 top-K 片段。
- * @param kbIds  绑定的知识库 id（来自 agent_knowledge_bases）
+ * @param kbIds  绑定的知识库 id（来自 agent_knowledge_bases，或草稿的 builder_config）
  * @param query  本轮用户问题
  * @returns      命中的片段；无绑定 / 空 query 直接返回 []
  * @throws       embedding 失败或 RPC 报错时抛出 —— 调用方须 try/catch 降级为无知识库回答
+ *
+ * 备注：disabled 知识库与未启用切片由 v39 的 `match_kb_chunks` RPC 服务端兜底过滤
+ * （`knowledge_bases.status='active'`），调用方无需在 kbIds 里再过滤一遍。
  */
 export async function retrieveKbChunks(
   kbIds: string[],
@@ -34,7 +33,7 @@ export async function retrieveKbChunks(
   const ids = [...new Set(kbIds.filter((x) => typeof x === "string" && x))];
   if (ids.length === 0 || !query.trim()) return [];
 
-  // 1. 问题向量化（A 未交付前为桩、抛错）
+  // 1. 问题向量化（A 的 PR-A2 已交付真实现）
   const queryVec = await embedQuery(query);
 
   // 2. 调检索 RPC —— 向量距离排序必须走 RPC，不在业务代码里拼 ORDER BY（约束 §3.2）
@@ -42,7 +41,7 @@ export async function retrieveKbChunks(
     p_kb_ids: ids,
     p_query: queryVec,
     p_top_k: KB_TOP_K,
-    p_threshold: KB_MATCH_THRESHOLD,
+    p_threshold: KB_SIMILARITY_THRESHOLD,
   });
   if (error) {
     throw new Error(`match_kb_chunks RPC 失败：${error.message}`);

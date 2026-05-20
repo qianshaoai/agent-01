@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { streamChat, ChatMessage } from "@/lib/adapters";
 import { writeAuditLog } from "@/lib/audit";
+import { retrieveKbChunks } from "@/lib/kb/retrieve";
 
 // 5.14up PR-C · 草稿测试聊天（SSE 流式，不入 messages 表，不扣额度）
 // 权限：super_admin + system_admin 可（system_admin 看不到 key 明文，调用通过后端代理）
@@ -113,8 +114,42 @@ export async function POST(
     mergedParams.model = provider.default_model;
   }
 
+  // ── 5.19up 知识库B · 草稿测试聊天接知识库检索（与正式 chat 同口径） ──
+  // 草稿没有正式的 agent_knowledge_bases，按 builder_config.knowledge_base_ids 取意图；
+  // disabled / 已删 KB 由 v39 RPC 服务端兜底过滤（match_kb_chunks 已加 status='active'）。
+  // 仅 openai / 智谱平台走检索；其他平台不接（约束 §7.1）；检索失败降级、不阻断测试。
+  let kbContextMessage: ChatMessage | null = null;
+  if (provider.platform === "openai" || provider.platform === "zhipu") {
+    const draftKbField = (builderConfig as Record<string, unknown>).knowledge_base_ids;
+    const kbIds = Array.isArray(draftKbField)
+      ? [...new Set((draftKbField as unknown[]).filter((x): x is string => typeof x === "string" && !!x))]
+      : [];
+    if (kbIds.length > 0) {
+      try {
+        const chunks = await retrieveKbChunks(kbIds, message);
+        if (chunks.length > 0) {
+          const refBlock = chunks.map((c, i) => `【资料 ${i + 1}】\n${c.content}`).join("\n\n");
+          kbContextMessage = {
+            role: "system",
+            content:
+              "下面是从知识库检索到的、与用户问题相关的资料。请优先依据这些资料回答；" +
+              "资料未覆盖的内容，按你的常识谨慎回答并说明。\n\n" +
+              refBlock,
+          };
+        }
+      } catch (e) {
+        console.warn(
+          `[draft test-chat] 知识库检索失败，降级为无知识库测试 draft=${draft.id}:`,
+          e instanceof Error ? e.message : e,
+        );
+      }
+    }
+  }
+
   const messages: ChatMessage[] = [
     ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+    // 知识库资料注入在系统提示之后、历史之前（与正式 chat 一致）
+    ...(kbContextMessage ? [kbContextMessage] : []),
     ...history,
     { role: "user" as const, content: message },
   ];

@@ -132,7 +132,10 @@ export default function AgentBuilderEditPage({
   // 5.19up · 组织列表（"指定组织可见"多选用）
   const [tenants, setTenants] = useState<{ code: string; name: string }[]>([]);
   // 5.19up 知识库B · 知识库列表（「知识库」分区多选用；方案A 的接口未上线时为空）
-  const [knowledgeBases, setKnowledgeBases] = useState<{ id: string; name: string }[]>([]);
+  // status 用于：disabled 库可见但禁选（避免静默丢配置），已绑 disabled 时显示告警「不参与检索」
+  const [knowledgeBases, setKnowledgeBases] = useState<
+    { id: string; name: string; status: "active" | "disabled" }[]
+  >([]);
   // 5.19up · 当前管理员角色（org_admin 只能发"本组织可见"）
   const [adminRole, setAdminRole] = useState<string | null>(null);
   const isOrgAdmin = adminRole === "org_admin";
@@ -180,18 +183,21 @@ export default function AgentBuilderEditPage({
       const role: string | null = meRes.ok && typeof meData?.role === "string" ? meData.role : null;
 
       // 5.19up 知识库B · 解析知识库列表：A 未交付 / 接口异常 → kbList 空、kbFetchOk=false
-      let kbList: { id: string; name: string }[] = [];
+      // 5.19up 二轮收口 · 保留每个 KB 的 status（A 接口默认返回 active + disabled）
+      let kbList: { id: string; name: string; status: "active" | "disabled" }[] = [];
       let kbFetchOk = false;
       if (kbRes && kbRes.ok) {
         try {
           const kbData = await kbRes.json();
           const arr: unknown[] = Array.isArray(kbData) ? kbData : (kbData?.data ?? []);
           kbList = arr
-            .map((x) => x as { id?: unknown; name?: unknown })
+            .map((x) => x as { id?: unknown; name?: unknown; status?: unknown })
             .filter((x) => typeof x.id === "string")
             .map((x) => ({
               id: x.id as string,
               name: typeof x.name === "string" && x.name ? x.name : (x.id as string),
+              // disabled 兜底：未传 status 或其他值都按 active 处理（防误标停用）
+              status: x.status === "disabled" ? "disabled" : "active",
             }));
           kbFetchOk = true;
         } catch { /* 解析失败 → 降级为空列表 */ }
@@ -748,7 +754,7 @@ export default function AgentBuilderEditPage({
               <section className="card p-5">
                 <SectionTitle icon={<Library size={16} />} title="5. 知识库" desc="给智能体挂知识库；对话时按用户问题自动检索相关资料、注入回答。" />
                 <div className="space-y-3 mt-3">
-                  <Field label="绑定知识库" hint="勾选的知识库，对话时会按用户问题检索相关片段供智能体参考；可多选">
+                  <Field label="绑定知识库" hint="勾选的知识库，对话时会按用户问题检索相关片段供智能体参考；可多选。已停用的知识库不参与检索（v39 RPC 兜底过滤），但仍展示在列表里避免静默丢配置。">
                     {knowledgeBases.length === 0 ? (
                       <p className="text-xs text-gray-400">
                         暂无知识库可选。请先到「知识库管理」创建知识库并上传文档。
@@ -757,26 +763,54 @@ export default function AgentBuilderEditPage({
                       <div className="border border-gray-200 rounded-[8px] p-2 max-h-44 overflow-y-auto space-y-0.5">
                         {knowledgeBases.map((kb) => {
                           const checked = (draft.builder_config.knowledge_base_ids ?? []).includes(kb.id);
+                          const isDisabledKb = kb.status === "disabled";
+                          // disabled 已勾：允许取消（用户清理用），不允许新加（点已不勾的 disabled 项要被拦下）
+                          const canToggle = !isDisabledKb || checked;
                           return (
-                            <label key={kb.id} className="flex items-center gap-2 text-sm px-1 py-0.5 rounded cursor-pointer hover:bg-gray-50">
+                            <label
+                              key={kb.id}
+                              className={`flex items-start gap-2 text-sm px-1 py-0.5 rounded ${
+                                canToggle ? "cursor-pointer hover:bg-gray-50" : "cursor-not-allowed opacity-60"
+                              }`}
+                              title={
+                                isDisabledKb
+                                  ? checked
+                                    ? "该知识库已停用，当前不参与检索；可取消勾选清理配置"
+                                    : "该知识库已停用，无法新绑定"
+                                  : undefined
+                              }
+                            >
                               <input
                                 type="checkbox"
-                                className="accent-[#002FA7]"
+                                className="accent-[#002FA7] mt-0.5"
                                 checked={checked}
-                                onChange={() => patchDraft((d) => {
-                                  const cur = d.builder_config.knowledge_base_ids ?? [];
-                                  return {
-                                    ...d,
-                                    builder_config: {
-                                      ...d.builder_config,
-                                      knowledge_base_ids: checked
-                                        ? cur.filter((x) => x !== kb.id)
-                                        : [...cur, kb.id],
-                                    },
-                                  };
-                                })}
+                                disabled={!canToggle}
+                                onChange={() => {
+                                  if (!canToggle) return;
+                                  patchDraft((d) => {
+                                    const cur = d.builder_config.knowledge_base_ids ?? [];
+                                    return {
+                                      ...d,
+                                      builder_config: {
+                                        ...d.builder_config,
+                                        knowledge_base_ids: checked
+                                          ? cur.filter((x) => x !== kb.id)
+                                          : [...cur, kb.id],
+                                      },
+                                    };
+                                  });
+                                }}
                               />
-                              <span className="text-gray-700">{kb.name}</span>
+                              <div className="flex-1 min-w-0">
+                                <span className={isDisabledKb ? "text-gray-500" : "text-gray-700"}>{kb.name}</span>
+                                {isDisabledKb && (
+                                  <span className="ml-2 text-[11px] text-amber-600">
+                                    {checked
+                                      ? "⚠ 已停用 · 当前不参与检索（启用后才生效；或取消勾选清理）"
+                                      : "已停用 · 不可绑定"}
+                                  </span>
+                                )}
+                              </div>
                             </label>
                           );
                         })}
