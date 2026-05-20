@@ -11,15 +11,22 @@ function denyKbAdmin(role: string): boolean {
   return role !== "super_admin" && role !== "system_admin";
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
   if (denyKbAdmin(admin.role)) return apiError("无权访问知识库", "FORBIDDEN");
 
-  const { data, error } = await db
+  // 可选 ?status=active|disabled —— 不传则返全量（兼容现有调用）
+  // 方案 B 的搭建器可用 ?status=active 只列出可绑定的库
+  const statusParam = req.nextUrl.searchParams.get("status");
+  let query = db
     .from("knowledge_bases")
     .select("*")
     .order("created_at", { ascending: false });
+  if (statusParam === "active" || statusParam === "disabled") {
+    query = query.eq("status", statusParam);
+  }
+  const { data, error } = await query;
   if (error) {
     console.error("[knowledge-bases list]", error);
     return apiError("获取知识库列表失败", "INTERNAL_ERROR");

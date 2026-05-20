@@ -197,6 +197,13 @@ export default function KnowledgeBaseDetailPage() {
   async function toggleStatus() {
     if (!kb) return;
     const next = kb.status === "active" ? "disabled" : "active";
+    // 停用是 "暂不参与检索"，文档和绑定都保留 —— 做个确认避免被误解为删除 / 解绑
+    if (next === "disabled") {
+      const ok = window.confirm(
+        `确认停用「${kb.name}」？\n\n停用后：\n· 已绑定的智能体对话时不再命中本库片段\n· 文档与智能体绑定关系都保留\n· 点「启用」可随时恢复检索\n\n这不是删除、也不会解绑。`,
+      );
+      if (!ok) return;
+    }
     setErr("");
     try {
       const res = await fetch(`/api/admin/knowledge-bases/${kbId}`, {
@@ -316,6 +323,11 @@ export default function KnowledgeBaseDetailPage() {
                     <button
                       onClick={toggleStatus}
                       className="text-xs text-gray-600 hover:text-amber-600 px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors"
+                      title={
+                        kb.status === "active"
+                          ? "停用检索：智能体不再命中本库，但文档与绑定关系保留（≠ 删除）"
+                          : "启用检索：恢复智能体可命中本库片段"
+                      }
                     >
                       {kb.status === "active" ? "停用" : "启用"}
                     </button>
@@ -329,6 +341,20 @@ export default function KnowledgeBaseDetailPage() {
                 </div>
               )}
             </div>
+
+            {/* 停用语义说明 —— 仅 disabled 时显示 */}
+            {kb.status === "disabled" && (
+              <div className="flex items-start gap-2 px-4 py-3 rounded-[12px] bg-amber-50/95 border border-amber-200 text-sm text-amber-800 shadow-[0_2px_10px_rgba(0,0,0,0.04)]">
+                <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <p className="font-medium">该知识库已停用 —— 已绑定的智能体对话时不会再命中本库片段。</p>
+                  <p className="text-amber-700/85 text-xs mt-1">
+                    文档和与智能体的绑定关系都保留；点上方「启用」即可恢复检索。
+                    <span className="font-medium">停用 ≠ 删除 / 解绑。</span>
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* 引用反查 */}
             <div className="flex items-center gap-2 px-1 text-[13px] text-gray-500">

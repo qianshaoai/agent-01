@@ -3,6 +3,9 @@
 // 方案 A 创建并拥有；方案 B 只 import、不得修改（见「并行开发统一约束」§3.3）。
 // 需要新增字段时，先改并行约束的冻结契约，再由方案 A 改本文件。
 // 本文件即方案 A · PR-A1 的正式交付，取代方案 B 联调期的临时桩。
+//
+// 运行参数统一出口：见 `lib/kb/config.ts`（含 D4 检索参数 + 本文件 D1/D5/D9 的常量
+// 再导出）。新增运行参数请加到 config.ts，不要散落到调用处硬编码。
 
 /** 知识库文档的摄取状态机 */
 export type KbDocumentStatus = "pending" | "indexing" | "done" | "failed";

@@ -51,12 +51,50 @@
 | `migration_v35_model_providers.sql` | **5.15up PR-A** — 新增 `model_providers` 表（统一模型供应商：编号/名称/平台/endpoint/加密 key/默认模型参数/启停 + enabled、platform 索引） | ✅ 2026-05-15 |
 | `migration_v36_agent_drafts.sql` | **5.15up PR-B** — 新增 `agent_drafts` 表；`agents` 加 `provider_id` / `builder_config` / `published_from_draft_id` 三列 | ✅ 2026-05-15 |
 | `migration_v37_model_providers_category.sql` | **5.15up API 管理 PR-1** — `model_providers` 加 `category` 列（model/agent）+ CHECK 约束 + `(category,enabled)`、`(category,platform)` 索引；存量按 platform 归类 | ✅ 2026-05-15 |
-| `migration_v38_knowledge_base.sql` | **5.19up 知识库方案 A · PR-A1** — 启用 `pgvector`；新增 `knowledge_bases` / `kb_documents` / `kb_chunks`（`embedding vector(1024)` + HNSW 余弦索引）/ `agent_knowledge_bases` 4 表；`model_providers.category` CHECK 加 `'embedding'`（D1-2）；新增检索 RPC `match_kb_chunks(p_kb_ids, p_query, p_top_k, p_threshold)` | ☐ |
-| `migration_v39_kb_chunks_active_filter.sql` | **5.19up 方案 A 小B验收 finding 1** — `match_kb_chunks` RPC 加 `knowledge_bases.status='active'` 过滤（停用知识库不参与检索）；签名 / 返回字段保持不变 | ☐ |
+| `migration_v38_knowledge_base.sql` | **5.19up 知识库方案 A · PR-A1**【🔑 知识库上线必跑】启用 `pgvector`；新增 `knowledge_bases` / `kb_documents` / `kb_chunks`（`embedding vector(1024)` + HNSW 余弦索引）/ `agent_knowledge_bases` 4 表；`model_providers.category` CHECK 加 `'embedding'`（D1-2）；新增检索 RPC `match_kb_chunks(p_kb_ids, p_query, p_top_k, p_threshold)` | ☐ |
+| `migration_v39_kb_chunks_active_filter.sql` | **5.19up 方案 A 小B验收 finding 1**【🔑 知识库上线必跑】`match_kb_chunks` RPC 加 `knowledge_bases.status='active'` 过滤（停用知识库不参与检索）；签名 / 返回字段保持不变。**未跑 v39 = 后台"停用"按钮无效。** | ☐ |
 
 > v20 / v23 跳号无对应文件（v23 编号被已搁置的"组织码可改"草案占用）。
 > v28~v33 已于 5.16up 回归核查时补登 —— "跑过"列标「功能在用，推定已跑」的，
 > 是因对应表 / 列已被线上代码依赖且回归测试通过、可证已执行；如需精确日期请按需复核。
+
+## 🔑 知识库（5.19up）上线必跑迁移
+
+知识库功能依赖以下 **两条** 迁移，**少跑任何一条都会让方案A 行为不完整 / 安全语义打折扣**：
+
+| 顺序 | 文件 | 后果（如果不跑） |
+| --- | --- | --- |
+| 1 | `migration_v38_knowledge_base.sql` | 4 张 KB 表 + RPC 都不存在 —— 知识库后台、文档上传、对话检索全部 500 |
+| 2 | `migration_v39_kb_chunks_active_filter.sql` | RPC 没有 `status='active'` 过滤 —— 后台「停用知识库」按钮**形同虚设**，已绑定智能体仍能命中停用库的片段 |
+
+**验证 SQL**（任何时候都可跑，幂等）：
+
+```sql
+-- 1. 4 张表都建了
+SELECT count(*) FROM knowledge_bases;
+SELECT count(*) FROM kb_documents;
+SELECT count(*) FROM kb_chunks;
+SELECT count(*) FROM agent_knowledge_bases;
+
+-- 2. RPC 存在
+SELECT proname FROM pg_proc WHERE proname = 'match_kb_chunks';
+
+-- 3. 关键：RPC 函数体里必须包含 `kb.status = 'active'`
+-- 这是 v39 是否跑过的判定标准
+SELECT pg_get_functiondef(oid) AS def
+FROM pg_proc
+WHERE proname = 'match_kb_chunks';
+-- 验收：返回的 def 字段中，应能搜到 "kb.status = 'active'"
+--        找不到 = v39 没跑过 / 跑失败，需要重跑
+
+-- 4. model_providers.category 允许 'embedding'
+SELECT pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conname = 'model_providers_category_check';
+-- 验收：返回应包含 'embedding'，否则 v38 没跑（或被旧 v37 约束拦截）
+```
+
+跑完都打 ✅。
 
 ## 体验版（trial 模块）
 
