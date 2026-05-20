@@ -23,11 +23,13 @@ export async function DELETE(
   if (admin instanceof Response) return admin;
   if (denyKbAdmin(admin.role)) return apiError("无权删除文档", "FORBIDDEN");
 
-  const { docId } = await params;
+  // 小B finding 3：必须校验 docId 属于 URL 里的 kbId，否则错误 URL 可操作别库的文档
+  const { id, docId } = await params;
   const { data: doc, error } = await db
     .from("kb_documents")
     .select("id, storage_path")
     .eq("id", docId)
+    .eq("kb_id", id)
     .maybeSingle();
   if (error) {
     console.error("[kb document delete] 查询失败", error);
@@ -35,7 +37,11 @@ export async function DELETE(
   }
   if (!doc) return apiError("文档不存在", "NOT_FOUND");
 
-  const { error: delErr } = await db.from("kb_documents").delete().eq("id", docId);
+  const { error: delErr } = await db
+    .from("kb_documents")
+    .delete()
+    .eq("id", docId)
+    .eq("kb_id", id);
   if (delErr) {
     console.error("[kb document delete]", delErr);
     return apiError("删除文档失败", "INTERNAL_ERROR");
@@ -58,11 +64,13 @@ export async function POST(
   if (admin instanceof Response) return admin;
   if (denyKbAdmin(admin.role)) return apiError("无权重建索引", "FORBIDDEN");
 
-  const { docId } = await params;
+  // 小B finding 3：校验 docId 属于 URL 里的 kbId
+  const { id, docId } = await params;
   const { data: doc, error } = await db
     .from("kb_documents")
     .select("id")
     .eq("id", docId)
+    .eq("kb_id", id)
     .maybeSingle();
   if (error) {
     console.error("[kb document reindex] 查询失败", error);

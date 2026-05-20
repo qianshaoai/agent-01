@@ -52,6 +52,7 @@
 | `migration_v36_agent_drafts.sql` | **5.15up PR-B** — 新增 `agent_drafts` 表；`agents` 加 `provider_id` / `builder_config` / `published_from_draft_id` 三列 | ✅ 2026-05-15 |
 | `migration_v37_model_providers_category.sql` | **5.15up API 管理 PR-1** — `model_providers` 加 `category` 列（model/agent）+ CHECK 约束 + `(category,enabled)`、`(category,platform)` 索引；存量按 platform 归类 | ✅ 2026-05-15 |
 | `migration_v38_knowledge_base.sql` | **5.19up 知识库方案 A · PR-A1** — 启用 `pgvector`；新增 `knowledge_bases` / `kb_documents` / `kb_chunks`（`embedding vector(1024)` + HNSW 余弦索引）/ `agent_knowledge_bases` 4 表；`model_providers.category` CHECK 加 `'embedding'`（D1-2）；新增检索 RPC `match_kb_chunks(p_kb_ids, p_query, p_top_k, p_threshold)` | ☐ |
+| `migration_v39_kb_chunks_active_filter.sql` | **5.19up 方案 A 小B验收 finding 1** — `match_kb_chunks` RPC 加 `knowledge_bases.status='active'` 过滤（停用知识库不参与检索）；签名 / 返回字段保持不变 | ☐ |
 
 > v20 / v23 跳号无对应文件（v23 编号被已搁置的"组织码可改"草案占用）。
 > v28~v33 已于 5.16up 回归核查时补登 —— "跑过"列标「功能在用，推定已跑」的，

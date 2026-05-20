@@ -30,12 +30,15 @@ export async function ingestDocument(documentId: string): Promise<void> {
     return;
   }
 
+  // 小B finding 2：失败时同步把统计清零，避免页面残留旧的 "已完成 N 个片段"
   const fail = async (msg: string) => {
     await db
       .from("kb_documents")
       .update({
         status: "failed",
         error_msg: msg.slice(0, 500),
+        chunk_count: 0,
+        char_count: 0,
         updated_at: new Date().toISOString(),
       })
       .eq("id", documentId);
@@ -48,7 +51,15 @@ export async function ingestDocument(documentId: string): Promise<void> {
       .eq("id", documentId);
 
     // 重建支持：先清掉旧切片
-    await db.from("kb_chunks").delete().eq("document_id", documentId);
+    // 小B finding 2：清失败必须中断，否则旧 chunk 残留 + 新 chunk 写入 → 重复检索
+    const { error: clearErr } = await db
+      .from("kb_chunks")
+      .delete()
+      .eq("document_id", documentId);
+    if (clearErr) {
+      await fail(`清理旧索引失败：${clearErr.message}`);
+      return;
+    }
 
     // 1. 下载文件
     const buffer = await downloadFromStorage(doc.storage_path);

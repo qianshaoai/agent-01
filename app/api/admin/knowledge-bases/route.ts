@@ -59,9 +59,26 @@ export async function POST(req: NextRequest) {
   if (!name) return apiError("知识库名称不能为空", "VALIDATION_ERROR");
   if (name.length > 100) return apiError("知识库名称过长（上限 100 字）", "VALIDATION_ERROR");
 
+  // 小B minor：建库时记录当前 embedding 模型名，便于将来识别"哪些库需按新模型重建"
+  // 查询失败不阻塞（字段留空，建库照常成功）
+  let embedding_model = "";
+  try {
+    const { data: emb } = await db
+      .from("model_providers")
+      .select("default_model")
+      .eq("category", "embedding")
+      .eq("enabled", true)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    embedding_model = (emb?.default_model ?? "").trim();
+  } catch (e) {
+    console.error("[knowledge-bases create] 读取 embedding 模型名失败（不阻塞）", e);
+  }
+
   const { data, error } = await db
     .from("knowledge_bases")
-    .insert({ name, description, created_by: admin.adminId })
+    .insert({ name, description, embedding_model, created_by: admin.adminId })
     .select("*")
     .single();
   if (error) {
