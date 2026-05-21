@@ -80,7 +80,17 @@ const ROLE_LABEL: Record<AdminRole, string> = {
   org_admin:    "组织管理员",
 };
 
-export function AdminLayout({ children }: { children: React.ReactNode }) {
+export function AdminLayout({
+  children,
+  fullBleed = false,
+  hideFooter = false,
+}: {
+  children: React.ReactNode;
+  /** 让页面自己铺满右侧内容区，不使用后台默认 padding / max-width。适合知识库这类沉浸式页面。 */
+  fullBleed?: boolean;
+  /** 隐藏默认白色 footer，避免沉浸式页面底部露出白框。 */
+  hideFooter?: boolean;
+}) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [siteSettings, setSiteSettings] = useState(() => {
@@ -235,11 +245,21 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           </span>
         </div>
 
-        <main className="flex-1 p-5 sm:p-7 page-enter max-w-[1600px] w-full mx-auto">{children}</main>
+        <main
+          className={
+            fullBleed
+              ? "flex-1 page-enter w-full"
+              : "flex-1 p-5 sm:p-7 page-enter max-w-[1600px] w-full mx-auto"
+          }
+        >
+          {children}
+        </main>
 
-        <footer className="px-6 py-3 text-[11px] text-gray-400 border-t border-gray-100 bg-white">
-          © 2026 前哨科技（QianShao.AI）管理后台
-        </footer>
+        {!hideFooter && (
+          <footer className="px-6 py-3 text-[11px] text-gray-400 border-t border-gray-100 bg-white">
+            © 2026 前哨科技（QianShao.AI）管理后台
+          </footer>
+        )}
       </div>
     </div>
   );

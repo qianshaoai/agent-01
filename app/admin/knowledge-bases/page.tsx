@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   BookOpen,
   Plus,
@@ -75,11 +76,12 @@ export default function KnowledgeBasesPage() {
   }
 
   return (
-    <div className="relative -m-5 sm:-m-7 overflow-hidden bg-gradient-to-br from-[#cdd9ff] via-[#dfe6ff] to-[#aebcff] min-h-[calc(100vh-3.5rem)]">
-      {/* 浅色环境光晕（与主页一致） */}
-      <div className="absolute -top-32 -right-32 w-[480px] h-[480px] rounded-full bg-[#7a93ff]/25 blur-[140px] pointer-events-none" />
-      <div className="absolute top-1/2 -left-32 w-[420px] h-[420px] rounded-full bg-[#8da4ff]/25 blur-[140px] pointer-events-none" />
-      <div className="absolute bottom-0 right-1/4 w-[360px] h-[360px] rounded-full bg-[#a4b8ff]/30 blur-[120px] pointer-events-none" />
+    <AdminLayout fullBleed hideFooter>
+      <div className="relative overflow-hidden bg-gradient-to-br from-[#cdd9ff] via-[#dfe6ff] to-[#aebcff] min-h-[calc(100vh-3.5rem)] lg:min-h-screen">
+        {/* 浅色环境光晕（与主页一致） */}
+        <div className="absolute -top-32 -right-32 w-[480px] h-[480px] rounded-full bg-[#7a93ff]/25 blur-[140px] pointer-events-none" />
+        <div className="absolute top-1/2 -left-32 w-[420px] h-[420px] rounded-full bg-[#8da4ff]/25 blur-[140px] pointer-events-none" />
+        <div className="absolute bottom-0 right-1/4 w-[360px] h-[360px] rounded-full bg-[#a4b8ff]/30 blur-[120px] pointer-events-none" />
 
       <div className="relative p-5 sm:p-7 max-w-[1400px] mx-auto space-y-6 page-enter">
         {/* 顶部 section header + 新建按钮 */}
@@ -229,6 +231,7 @@ export default function KnowledgeBasesPage() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </AdminLayout>
   );
 }

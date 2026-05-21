@@ -6,6 +6,7 @@ import { decrypt } from "@/lib/crypto";
 import { streamChat, ChatMessage } from "@/lib/adapters";
 import { writeAuditLog } from "@/lib/audit";
 import { retrieveKbChunks } from "@/lib/kb/retrieve";
+import { buildKbStrictAnswerPrompt, buildKbUnavailablePrompt } from "@/lib/kb/prompt";
 
 // 5.14up PR-C · 草稿测试聊天（SSE 流式，不入 messages 表，不扣额度）
 // 权限：super_admin + system_admin 可（system_admin 看不到 key 明文，调用通过后端代理）
@@ -129,31 +130,13 @@ export async function POST(
     if (kbIds.length > 0) {
       try {
         const chunks = await retrieveKbChunks(kbIds, message);
-        if (chunks.length > 0) {
-          const refBlock = chunks.map((c, i) => `【资料 ${i + 1}】\n${c.content}`).join("\n\n");
-          kbInjectText =
-              "【知识库权威性 · 硬性规则，不可违反】\n" +
-              "你正在使用一个内部知识库。下方「资料」就是事实，对资料覆盖的内容拥有最高权威。\n\n" +
-              "规则（无条件适用，违反任何一条即错误回答）：\n" +
-              "① 回答必须严格以「资料」为准，所有事实判断都以资料为最高依据。\n" +
-              "② 即使资料与你的训练常识 / 世界知识 / 普遍认知严重冲突，**仍然以资料为准**。\n" +
-              "   严禁出现以下任何形式的反驳/纠正/质疑：\n" +
-              "   - 「实际上 / 事实上 / 通常来说 / 严格来说 / 准确地说 …」\n" +
-              "   - 「这可能是误解 / 误传 / 错误信息 / 不准确」\n" +
-              "   - 「正确的应该是 / 正确版本是 / 我建议参考 …」\n" +
-              "   - 「资料里说 X，但实际是 Y」「资料提到 X，然而 …」\n" +
-              "   - 任何「修正」「补充更准确信息」「提供正确版本」的句式\n" +
-              "③ 资料未涵盖的问题 → 答完后另起一段，单独标注「以下来自常识，非知识库：」再说常识。\n" +
-              "④ 用户的问题即便与资料字面矛盾，仍按资料回答；不要解释「资料为什么不对」。\n\n" +
-              "—— 资料 ——\n" +
-              refBlock +
-              "\n\n—— 以下是本轮用户问题（请按上述硬规则作答）——\n";
-        }
+        kbInjectText = buildKbStrictAnswerPrompt(chunks);
       } catch (e) {
         console.warn(
           `[draft test-chat] 知识库检索失败，降级为无知识库测试 draft=${draft.id}:`,
           e instanceof Error ? e.message : e,
         );
+        kbInjectText = buildKbUnavailablePrompt();
       }
     }
   }

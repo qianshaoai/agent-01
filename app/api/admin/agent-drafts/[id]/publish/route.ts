@@ -39,6 +39,10 @@ type ProviderRow = {
   default_params: Record<string, unknown>;
 };
 
+function isZhipuFlashModel(model: unknown): boolean {
+  return typeof model === "string" && /^glm-4-flash\b/i.test(model.trim());
+}
+
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -224,6 +228,21 @@ export async function POST(
   };
   if (!mergedModelParams.model && provider?.default_model) {
     mergedModelParams.model = provider.default_model;
+  }
+
+  // 5.20up · 知识库验收收口：glm-4-flash 会反驳知识库里的强事实，不能发布为知识库智能体。
+  // UI 已提示，这里后端兜底，避免绕过前端或供应商默认模型仍是 flash。
+  if (
+    draft.agent_type === "chat" &&
+    provider?.platform === "zhipu" &&
+    kbValidIds !== null &&
+    kbValidIds.size > 0 &&
+    isZhipuFlashModel(mergedModelParams.model)
+  ) {
+    return apiError(
+      "已绑定知识库的智谱智能体不能使用 glm-4-flash，请改用 glm-4-air 或更高模型后再发布",
+      "VALIDATION_ERROR",
+    );
   }
 
   // ── upsert agents ──

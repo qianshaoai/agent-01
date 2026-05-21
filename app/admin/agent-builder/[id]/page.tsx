@@ -70,12 +70,14 @@ type Draft = {
   suggested_questions_string?: string;
 };
 
-// 5.15up · 各平台预设模型列表（按免费 → 性价比 → 旗舰排序）
+// 5.15up · 各平台预设模型列表
+// 5.20up · 知识库验收锁定：绑定知识库的智谱智能体最低推荐 glm-4-air；
+// glm-4-flash 会反驳 KB 中的强事实，不能再标为推荐。
 // 没列在这里的模型可在下方选"自定义模型名"手填
 const PLATFORM_MODELS: Record<string, { value: string; label: string }[]> = {
   zhipu: [
-    { value: "glm-4-flash", label: "GLM-4-Flash（免费 · 推荐）" },
-    { value: "glm-4-air", label: "GLM-4-Air（性价比）" },
+    { value: "glm-4-air", label: "GLM-4-Air（知识库推荐）" },
+    { value: "glm-4-flash", label: "GLM-4-Flash（免费 · 不建议知识库）" },
     { value: "glm-4-plus", label: "GLM-4-Plus（旗舰）" },
     { value: "glm-4", label: "GLM-4（旗舰）" },
   ],
@@ -451,6 +453,14 @@ export default function AgentBuilderEditPage({
 
   const enabledProviders = providers.filter((p) => p.enabled && p.has_api_key);
   const selectedProvider = providers.find((p) => p.id === draft.provider_id);
+  const boundKnowledgeBaseCount = draft.builder_config.knowledge_base_ids?.length ?? 0;
+  const effectiveModel = String(
+    (draft.model_params.model as string | undefined) || selectedProvider?.default_model || "",
+  ).trim();
+  const isKnowledgeBaseFlashModel =
+    boundKnowledgeBaseCount > 0 &&
+    selectedProvider?.platform === "zhipu" &&
+    /^glm-4-flash\b/i.test(effectiveModel);
 
   return (
     <AdminLayout>
@@ -486,6 +496,10 @@ export default function AgentBuilderEditPage({
                 if (!isOrgAdmin && draft.visibility_config.visible_to === "org"
                     && draft.visibility_config.scope.length === 0) {
                   toast("「指定组织可见」请先勾选至少一个组织", "error");
+                  return;
+                }
+                if (isKnowledgeBaseFlashModel) {
+                  toast("已绑定知识库的智谱智能体请改用 glm-4-air 或更高模型；glm-4-flash 会反驳知识库事实", "error");
                   return;
                 }
                 setPublishOpen(true);
@@ -586,6 +600,12 @@ export default function AgentBuilderEditPage({
                     {selectedProvider && (
                       <p className="text-[11px] text-gray-400 mt-1">
                         默认模型：<code className="font-mono">{selectedProvider.default_model || "未设置"}</code>
+                      </p>
+                    )}
+                    {isKnowledgeBaseFlashModel && (
+                      <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
+                        已绑定知识库时不建议使用 GLM-4-Flash：验收中该模型会用常识反驳知识库事实。
+                        请在下方改为 <code className="font-mono">glm-4-air</code> 或更高模型。
                       </p>
                     )}
                   </Field>
@@ -757,7 +777,9 @@ export default function AgentBuilderEditPage({
                   <Field label="绑定知识库" hint="勾选的知识库，对话时会按用户问题检索相关片段供智能体参考；可多选。已停用的知识库不参与检索（v39 RPC 兜底过滤），但仍展示在列表里避免静默丢配置。">
                     {knowledgeBases.length === 0 ? (
                       <p className="text-xs text-gray-400">
-                        暂无知识库可选。请先到「知识库管理」创建知识库并上传文档。
+                        {isOrgAdmin
+                          ? "知识库由平台管理员统一维护。当前没有可绑定知识库，请联系超级管理员或系统管理员配置。"
+                          : "暂无知识库可选。请先到「知识库管理」创建知识库并上传文档。"}
                       </p>
                     ) : (
                       <div className="border border-gray-200 rounded-[8px] p-2 max-h-44 overflow-y-auto space-y-0.5">

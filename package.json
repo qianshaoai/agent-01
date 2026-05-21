@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "next build",
+    "build:standalone": "next build && node scripts/copy-standalone-assets.mjs",
     "start": "next start",
     "lint": "eslint",
     "ci:lint": "npm run lint",
