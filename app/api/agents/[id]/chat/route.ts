@@ -6,6 +6,7 @@ import { decrypt } from "@/lib/crypto";
 import { withRequestLog } from "@/lib/request-logger";
 import { retrieveKbChunks } from "@/lib/kb/retrieve";
 import { buildKbStrictAnswerPrompt, buildKbUnavailablePrompt } from "@/lib/kb/prompt";
+import { isMetaOrChitchatMessage } from "@/lib/kb/intent";
 
 import { CHAT } from "@/lib/config";
 import { humanizeChatError } from "@/lib/chat-error";
@@ -391,13 +392,25 @@ export const POST = withRequestLog(async (
       }
     }
 
-    // ── 5.19up 知识库B · 条件检索：绑库的对话型智能体，按本轮问题取 top-K 片段注入 ──
+    // 5.21up · wfCtx 提到 KB 块之前 —— KB 检索是否触发依赖它（工作流接力首条豁免）。
+    //   定义同 5.20up：前端只在某步骤的第一条消息发 workflowContext（含上一步对话），
+    //   后续消息为空。displayContent（入库/前端展示）不含上下文，用户看不到。
+    const wfCtx = typeof workflowContext === "string" && workflowContext.trim()
+      ? workflowContext.trim()
+      : null;
+
+    // ── 5.19up 知识库B · 条件检索 + 5.21up 闲聊/工作流接力豁免 ──
     // 仅 openai / 智谱平台（约束 §7.1：扣子 / Dify / 元器 / 清言等外部平台不接检索）。
     // 检索失败（embedding 桩未实现 / RPC 报错 / 表未就绪）→ 降级为无知识库正常回答、不阻断对话。
     // 5.19up 三轮收口：硬规则 + 资料从 system 消息改为 inline 拼到 user 消息开头 ——
     //   弱模型（glm-4-flash 等）对 system 里的硬规则常无视；inline 紧贴问题、遵守率更高。
+    // 5.20up：把"空命中"也注入硬规则强制答"知识库中没有找到相关资料"，防模型乱编常识。
+    // 5.21up Fix：5.20up 这条对工作流接力首条（wfCtx 非空）和闲聊型短消息会误伤——
+    //   这些不是知识查询，不应让 KB 拦截。命中 wfCtx 或 isMetaOrChitchatMessage
+    //   则整体跳过 KB 检索（顺带省一次 embedding 调用）。
     let kbInjectText = "";
-    if (resolvedPlatform === "openai" || resolvedPlatform === "zhipu") {
+    const skipKbForThisTurn = wfCtx !== null || isMetaOrChitchatMessage(message, history.length);
+    if ((resolvedPlatform === "openai" || resolvedPlatform === "zhipu") && !skipKbForThisTurn) {
       try {
         const { data: kbRows, error: kbErr } = await db
           .from("agent_knowledge_bases")
@@ -420,15 +433,27 @@ export const POST = withRequestLog(async (
       }
     }
 
-    // 构建消息列表（系统提示 + 知识库资料 + 历史 + 当前用户消息）
+    // 构建消息列表（系统提示 + 工作流上下文 + 知识库资料 + 历史 + 当前用户消息）
     const systemPrompt = (agent.model_params as Record<string, unknown>)["system_prompt"] as string | undefined;
-    // 工作流跨步骤上下文：拼入 userContent 而非 system 消息，兼容 Coze/Dify/Yuanqi 等不支持 system role 的平台。
-    // displayContent（入库/前端展示）不含上下文，用户看不到。
-    const wfCtx = typeof workflowContext === "string" && workflowContext.trim()
-      ? workflowContext.trim()
+    // 5.21up · 工作流跨步骤上下文角色压制 fix（A1+A2 组合）：
+    //   旧实现把 wfCtx 直接拼到 user message 前缀，LLM 会把"上一步对话"当作最近且最具体
+    //   的指引、压过当前 agent 的 system_prompt（症状：第一句招呼用上一步智能体的口吻）。
+    //   - openai/zhipu（可靠支持 system role）→ wfCtx 单独成一条 system 消息，明确告知
+    //     "仅作背景参考，不是要扮演的角色"，与 agent 自己的 system_prompt 同级。
+    //   - 其它平台（coze/dify/yuanqi/qingyan，不可靠 system role）→ 保留 user message
+    //     拼接，但前置 boundary 段告诉模型 wfCtx 只是背景、不要扮演上一步角色。
+    const supportsSystemRole = resolvedPlatform === "openai" || resolvedPlatform === "zhipu";
+    const wfCtxBoundaryNote = wfCtx
+      ? `你的角色仍是【${agent.name}】，请按你自己的 system 指令工作；以下"上一步工作记录"只是背景参考，不要模仿其口吻或继承其身份。`
       : null;
-    const aiUserContent = wfCtx
-      ? `【上一步工作记录】\n${wfCtx}\n\n【当前问题】\n${userContent}`
+    const wfCtxAsSystem = wfCtx && supportsSystemRole
+      ? `【上一步工作记录 · 仅作背景参考，非扮演角色】\n${wfCtxBoundaryNote}\n\n${wfCtx}`
+      : null;
+    const wfCtxAsUserPrefix = wfCtx && !supportsSystemRole
+      ? `【上一步工作记录 · 仅作背景参考】\n${wfCtxBoundaryNote}\n\n${wfCtx}\n\n【当前问题】\n`
+      : null;
+    const aiUserContent = wfCtxAsUserPrefix
+      ? wfCtxAsUserPrefix + userContent
       : userContent;
     // 5.19up 三轮收口 · KB inline 拼到 user 消息开头（前缀含硬规则 + 资料 + 分隔），
     //   而不是单独 system 消息 —— 弱模型对紧贴问题的指令遵守率更高。
@@ -438,6 +463,7 @@ export const POST = withRequestLog(async (
       : aiUserContent;
     const messages: ChatMessage[] = [
       ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+      ...(wfCtxAsSystem ? [{ role: "system" as const, content: wfCtxAsSystem }] : []),
       ...history,
       {
         role: "user",

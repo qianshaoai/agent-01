@@ -7,6 +7,7 @@ import { streamChat, ChatMessage } from "@/lib/adapters";
 import { writeAuditLog } from "@/lib/audit";
 import { retrieveKbChunks } from "@/lib/kb/retrieve";
 import { buildKbStrictAnswerPrompt, buildKbUnavailablePrompt } from "@/lib/kb/prompt";
+import { isMetaOrChitchatMessage } from "@/lib/kb/intent";
 
 // 5.14up PR-C · 草稿测试聊天（SSE 流式，不入 messages 表，不扣额度）
 // 权限：super_admin + system_admin 可（system_admin 看不到 key 明文，调用通过后端代理）
@@ -121,8 +122,11 @@ export async function POST(
   // 仅 openai / 智谱平台走检索；其他平台不接（约束 §7.1）；检索失败降级、不阻断测试。
   // 5.19up 三轮收口 · 硬规则 + 资料从 system 改为 inline 拼到 user 消息开头（与 chat 一致），
   //   弱模型对紧贴问题的指令遵守率更高。
+  // 5.21up Fix · 闲聊型短消息（"你好" / "在吗" / 短追问）跳过 KB 检索 + 注入，与 chat 同
+  //   口径；test-chat 无工作流，仅 B2 闲聊豁免、不用 B3 wfCtx 豁免。
   let kbInjectText = "";
-  if (provider.platform === "openai" || provider.platform === "zhipu") {
+  const skipKbForThisTurn = isMetaOrChitchatMessage(message, history.length);
+  if ((provider.platform === "openai" || provider.platform === "zhipu") && !skipKbForThisTurn) {
     const draftKbField = (builderConfig as Record<string, unknown>).knowledge_base_ids;
     const kbIds = Array.isArray(draftKbField)
       ? [...new Set((draftKbField as unknown[]).filter((x): x is string => typeof x === "string" && !!x))]
