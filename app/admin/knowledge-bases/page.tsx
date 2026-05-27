@@ -11,6 +11,7 @@ import {
   ChevronRight,
   AlertCircle,
 } from "lucide-react";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
 type KnowledgeBase = {
   id: string;
@@ -28,7 +29,8 @@ export default function KnowledgeBasesPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
-  const [creating, setCreating] = useState(false);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  const createGuard = useSubmitGuard();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,25 +56,25 @@ export default function KnowledgeBasesPage() {
       setErr("请填写知识库名称");
       return;
     }
-    setCreating(true);
     setErr("");
-    try {
-      const res = await fetch("/api/admin/knowledge-bases", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName.trim(), description: newDesc.trim() }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "创建失败");
-      setShowCreate(false);
-      setNewName("");
-      setNewDesc("");
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "创建失败");
-    } finally {
-      setCreating(false);
-    }
+    await createGuard.submit(async (idempotencyKey) => {
+      try {
+        const res = await fetch("/api/admin/knowledge-bases", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+          body: JSON.stringify({ name: newName.trim(), description: newDesc.trim() }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error ?? "创建失败");
+        setShowCreate(false);
+        setNewName("");
+        setNewDesc("");
+        await load();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "创建失败");
+        throw e;
+      }
+    });
   }
 
   return (
@@ -222,10 +224,10 @@ export default function KnowledgeBasesPage() {
               </button>
               <button
                 onClick={handleCreate}
-                disabled={creating || !newName.trim()}
+                disabled={createGuard.loading || !newName.trim()}
                 className="px-6 py-2 rounded-[10px] text-sm font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {creating ? "创建中…" : "创建"}
+                {createGuard.loading ? "创建中…" : "创建"}
               </button>
             </div>
           </div>

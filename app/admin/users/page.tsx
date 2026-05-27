@@ -7,6 +7,7 @@ import { useToast } from "@/components/ui/toast";
 import { useDebounce } from "@/lib/use-debounce";
 import { Users, Search, RefreshCw, ShieldOff, ShieldCheck, KeyRound, X, ChevronDown, GitBranch, Trash2, Plus, Tag, Pencil, Check, UserMinus, UserPlus, Eye, Bell, Building2, Loader2 } from "lucide-react";
 import { ScopeFilter } from "@/components/admin/scope-filter";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
 type UserRow = {
   id: string;
@@ -88,7 +89,9 @@ export default function AdminUsersPage() {
   // 5.12up · 批量调整所属组织
   const [bulkTenantOpen, setBulkTenantOpen] = useState(false);
   const [bulkTenantTarget, setBulkTenantTarget] = useState<string>(""); // "" = 未选；"PERSONAL" = 个人空间
-  const [bulkTenantSaving, setBulkTenantSaving] = useState(false);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  const bulkTenantGuard = useSubmitGuard();
+  const addGroupGuard = useSubmitGuard();
   const [bulkTenantResult, setBulkTenantResult] = useState<
     | null
     | {
@@ -305,11 +308,10 @@ export default function AdminUsersPage() {
   // 5.12up · 批量调整所属组织
   async function doBulkSetTenant() {
     if (!bulkTenantTarget || selectedIds.length === 0) return;
-    setBulkTenantSaving(true);
-    try {
+    await bulkTenantGuard.submit(async (idempotencyKey) => {
       const res = await fetch("/api/admin/users/bulk-set-tenant", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
         body: JSON.stringify({
           userIds: selectedIds,
           tenantCode: bulkTenantTarget,
@@ -331,9 +333,7 @@ export default function AdminUsersPage() {
       const okIds = new Set(data.succeeded.map((x) => x.id));
       setSelectedIds((prev) => prev.filter((id) => !okIds.has(id)));
       fetchUsers(page);
-    } finally {
-      setBulkTenantSaving(false);
-    }
+    });
   }
 
   async function doReset() {
@@ -507,8 +507,10 @@ export default function AdminUsersPage() {
       setGroupNameHint("请输入分组名称");
       return;
     }
-    await fetch("/api/admin/user-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newGroupName.trim() }) });
-    setNewGroupName(""); loadGroups();
+    await addGroupGuard.submit(async (idempotencyKey) => {
+      await fetch("/api/admin/user-groups", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ name: newGroupName.trim() }) });
+      setNewGroupName(""); loadGroups();
+    });
   }
 
   async function saveEditGroup(id: string) {
@@ -1394,7 +1396,7 @@ export default function AdminUsersPage() {
         const visibleCount = selectedUsers.length;
         const offPageCount = selectedIds.length - visibleCount;
         return (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => !bulkTenantSaving && setBulkTenantOpen(false)}>
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => !bulkTenantGuard.loading && setBulkTenantOpen(false)}>
             <div className="bg-white rounded-[16px] shadow-2xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-base font-semibold text-gray-900 mb-1">批量调整所属组织</h3>
               <p className="text-xs text-gray-500 mb-4">选中 {selectedIds.length} 人</p>
@@ -1433,16 +1435,16 @@ export default function AdminUsersPage() {
               <div className="flex gap-2 mt-5">
                 <button
                   onClick={() => setBulkTenantOpen(false)}
-                  disabled={bulkTenantSaving}
+                  disabled={bulkTenantGuard.loading}
                   className="flex-1 px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-[10px] hover:bg-gray-50 transition-colors disabled:opacity-60"
                 >取消</button>
                 <button
                   onClick={doBulkSetTenant}
-                  disabled={bulkTenantSaving || !bulkTenantTarget}
+                  disabled={bulkTenantGuard.loading || !bulkTenantTarget}
                   className="flex-1 px-4 py-2 text-sm font-medium text-white bg-[#002FA7] rounded-[10px] hover:bg-[#1a47c0] transition-colors disabled:opacity-60 inline-flex items-center justify-center gap-1.5"
                 >
-                  {bulkTenantSaving && <Loader2 size={14} className="animate-spin" />}
-                  {bulkTenantSaving ? "处理中…" : `确认移动 ${selectedIds.length} 人`}
+                  {bulkTenantGuard.loading && <Loader2 size={14} className="animate-spin" />}
+                  {bulkTenantGuard.loading ? "处理中…" : `确认移动 ${selectedIds.length} 人`}
                 </button>
               </div>
             </div>

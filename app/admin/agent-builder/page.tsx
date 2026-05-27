@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { Hammer, Plus, Copy, Trash2, Edit, Loader2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
 // 5.14up PR-B · 智能体搭建器 · 草稿列表
 // 权限：super_admin + system_admin
@@ -35,7 +36,9 @@ export default function AgentBuilderListPage() {
   const { toast } = useToast();
   const [list, setList] = useState<Draft[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
+  // 5.27up Fix · 防重复提交：A useRef 同步锁 + B 客户端幂等键，详见 lib/hooks/use-submit-guard.ts
+  const createGuard = useSubmitGuard();
+  const duplicateGuard = useSubmitGuard();
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -62,33 +65,37 @@ export default function AgentBuilderListPage() {
   useEffect(() => { loadList(); }, [loadList]);
 
   async function create() {
-    setCreating(true);
-    try {
-      const res = await fetch("/api/admin/agent-drafts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "未命名智能体" }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "创建失败");
-      router.push(`/admin/agent-builder/${data.id}`);
-    } catch (e: unknown) {
-      toast(e instanceof Error ? e.message : "创建失败", "error");
-    } finally {
-      setCreating(false);
-    }
+    await createGuard.submit(async (idempotencyKey) => {
+      try {
+        const res = await fetch("/api/admin/agent-drafts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+          body: JSON.stringify({ name: "未命名智能体" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "创建失败");
+        router.push(`/admin/agent-builder/${data.id}`);
+      } catch (e: unknown) {
+        toast(e instanceof Error ? e.message : "创建失败", "error");
+      }
+    });
   }
 
   async function duplicate(d: Draft) {
-    try {
-      const res = await fetch(`/api/admin/agent-drafts/${d.id}/duplicate`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "复制失败");
-      toast("草稿已复制", "success");
-      await loadList();
-    } catch (e: unknown) {
-      toast(e instanceof Error ? e.message : "复制失败", "error");
-    }
+    await duplicateGuard.submit(async (idempotencyKey) => {
+      try {
+        const res = await fetch(`/api/admin/agent-drafts/${d.id}/duplicate`, {
+          method: "POST",
+          headers: { "Idempotency-Key": idempotencyKey },
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "复制失败");
+        toast("草稿已复制", "success");
+        await loadList();
+      } catch (e: unknown) {
+        toast(e instanceof Error ? e.message : "复制失败", "error");
+      }
+    });
   }
 
   async function remove(d: Draft) {
@@ -118,7 +125,7 @@ export default function AgentBuilderListPage() {
           title="智能体搭建"
           subtitle="拖拽式配置智能体：基础信息 / 模型 / 提示词 / 对话体验 / 发布范围"
           actions={
-            <Button onClick={create} loading={creating} className="flex items-center gap-1.5">
+            <Button onClick={create} loading={createGuard.loading} className="flex items-center gap-1.5">
               <Plus size={16} /> 新建草稿
             </Button>
           }

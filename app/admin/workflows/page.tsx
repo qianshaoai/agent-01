@@ -35,6 +35,7 @@ import {
   Building2,
   Image as ImageIcon,
 } from "lucide-react";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
 type Agent = { id: string; agent_code: string; name: string; agent_type: string; external_url: string };
 type Category = { id: string; name: string; icon_url?: string | null };
@@ -148,7 +149,12 @@ export default function WorkflowsAdminPage() {
   const [showStepModal, setShowStepModal] = useState<{ workflowId: string; step?: WorkflowStep; insertAfterOrder?: number } | null>(null);
   const [stepForm, setStepForm] = useState<{ title: string; description: string; execType: "agent" | "manual" | "review" | "external"; agentId: string; buttonText: string; enabled: boolean; stepOrder: number }>(EMPTY_STEP);
   const [stepError, setStepError] = useState("");
-  const [saving, setSaving] = useState(false);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  // 三个独立 guard：工作流 save / 步骤 save / 复制 / 新建分类
+  const saveWfGuard = useSubmitGuard();
+  const saveStepGuard = useSubmitGuard();
+  const duplicateWfGuard = useSubmitGuard();
+  const addCatGuard = useSubmitGuard();
 
   // Confirm dialog state
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
@@ -309,8 +315,7 @@ export default function WorkflowsAdminPage() {
       setWfError("请至少选择一个可见对象");
       return;
     }
-    setSaving(true);
-    try {
+    await saveWfGuard.submit(async (idempotencyKey) => {
       // 生成 permissions 数组（custom 模式才有；org_admin 选"全员"由后端兜底写 scope=org）
       const permissions = wfForm.visibleTo === "custom"
         ? wfForm.permIds.map((scopeId) => ({ scope_type: wfForm.permScope, scope_id: scopeId }))
@@ -325,13 +330,14 @@ export default function WorkflowsAdminPage() {
         categoryIds: wfForm.categoryIds,
         permissions,
       };
+      // PATCH 天然幂等；POST 创建带 Idempotency-Key
       const res = editingWf
         ? await fetch(`/api/admin/workflows/${editingWf.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-        : await fetch("/api/admin/workflows", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        : await fetch("/api/admin/workflows", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) { setWfError(data.error ?? "保存失败"); return; }
       setShowWfModal(false); load();
-    } finally { setSaving(false); }
+    });
   }
 
   async function toggleWfEnabled(wf: Workflow) {
@@ -341,8 +347,13 @@ export default function WorkflowsAdminPage() {
 
   function duplicateWf(wf: Workflow) {
     showConfirm(`确认复制工作流「${wf.name}」？将连同所有步骤一起复制。`, async () => {
-      await fetch(`/api/admin/workflows/${wf.id}/duplicate`, { method: "POST" });
-      load(); toast("工作流已复制");
+      await duplicateWfGuard.submit(async (idempotencyKey) => {
+        await fetch(`/api/admin/workflows/${wf.id}/duplicate`, {
+          method: "POST",
+          headers: { "Idempotency-Key": idempotencyKey },
+        });
+        load(); toast("工作流已复制");
+      });
     });
   }
 
@@ -413,12 +424,12 @@ export default function WorkflowsAdminPage() {
     setStepError("");
     if (!stepForm.title.trim()) { setStepError("请填写步骤标题"); return; }
     if (!showStepModal) return;
-    setSaving(true);
-    try {
+    await saveStepGuard.submit(async (idempotencyKey) => {
       const body = { stepOrder: stepForm.stepOrder, title: stepForm.title, description: stepForm.description, execType: stepForm.execType, agentId: stepForm.execType === "agent" ? (stepForm.agentId || null) : null, buttonText: stepForm.buttonText, enabled: stepForm.enabled };
+      // PATCH 天然幂等；POST 创建带 Idempotency-Key
       const res = showStepModal.step
         ? await fetch(`/api/admin/workflow-steps/${showStepModal.step.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-        : await fetch(`/api/admin/workflows/${showStepModal.workflowId}/steps`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        : await fetch(`/api/admin/workflows/${showStepModal.workflowId}/steps`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) { setStepError(data.error ?? "保存失败"); return; }
       const parentId = showStepModal.workflowId;
@@ -430,7 +441,7 @@ export default function WorkflowsAdminPage() {
         await renumberSteps(parentId, newStepId);
         await load();
       }
-    } finally { setSaving(false); }
+    });
   }
 
   function deleteStep(step: WorkflowStep) {
@@ -649,8 +660,10 @@ export default function WorkflowsAdminPage() {
       setCatNameHint("请输入分类名称");
       return;
     }
-    await fetch("/api/admin/wf-categories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newCatName.trim() }) });
-    setNewCatName(""); load();
+    await addCatGuard.submit(async (idempotencyKey) => {
+      await fetch("/api/admin/wf-categories", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ name: newCatName.trim() }) });
+      setNewCatName(""); load();
+    });
   }
 
   async function saveEditWfCat(id: string) {
@@ -1435,7 +1448,7 @@ export default function WorkflowsAdminPage() {
             </div>
             <div className="flex justify-end gap-2 mt-6">
               <Button variant="ghost" onClick={() => setShowWfModal(false)}>取消</Button>
-              <Button onClick={handleSaveWf} loading={saving}>{editingWf ? "保存" : "创建"}</Button>
+              <Button onClick={handleSaveWf} loading={saveWfGuard.loading}>{editingWf ? "保存" : "创建"}</Button>
             </div>
           </div>
         </div>
@@ -1496,7 +1509,7 @@ export default function WorkflowsAdminPage() {
             </div>
             <div className="flex justify-end gap-2 mt-6">
               <Button variant="ghost" onClick={() => setShowStepModal(null)}>取消</Button>
-              <Button onClick={handleSaveStep} loading={saving}>{showStepModal.step ? "保存" : "添加"}</Button>
+              <Button onClick={handleSaveStep} loading={saveStepGuard.loading}>{showStepModal.step ? "保存" : "添加"}</Button>
             </div>
           </div>
         </div>

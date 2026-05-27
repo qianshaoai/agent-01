@@ -7,10 +7,22 @@ import {
   Plug, Plus, CheckCircle2, AlertCircle, Edit, Trash2,
   ToggleLeft, ToggleRight, Loader2, Activity, ShieldCheck, ShieldOff,
 } from "lucide-react";
+import {
+  getPresetsByCategory,
+  getPresetByCode,
+  inferPresetFromExisting,
+  type ProviderPreset,
+} from "@/lib/model-providers/presets";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
 // 5.14up PR-A · 模型供应商管理后台
 // 功能：列表、新增、编辑、启停、删除、测试连通性
 // 权限：super_admin 全部操作；system_admin 仅看 + 测试
+// 5.27up · 厂商预设：表单下拉走 lib/model-providers/presets.ts，
+//   下拉选项里直接是各家厂商（OpenAI/智谱/千问/豆包/DeepSeek/Kimi/文心/混元 共 9 项），
+//   选中后 endpoint / 默认模型 / 默认参数自动填好，admin 只需补 name + provider_code + api_key。
+// 5.20up · "默认模型"字段加回：5.27up Fix 删除导致新建 provider 默认模型为空，
+//   运行时兜底成 gpt-4o-mini，在非 OpenAI 兼容厂商（千问/豆包等）上会被服务端 404 拒绝。
 
 type ApiCategory = "model" | "agent" | "embedding";
 
@@ -29,18 +41,6 @@ type Provider = {
   updated_at: string;
 };
 
-// 5.15up API 管理模块 · 平台按 category 分两类
-const PLATFORM_OPTIONS: { value: string; label: string; category: ApiCategory }[] = [
-  { value: "openai", label: "OpenAI（兼容协议 / GPT 系列 / 第三方中转）", category: "model" },
-  { value: "zhipu", label: "智谱 GLM", category: "model" },
-  { value: "coze", label: "扣子 Coze", category: "agent" },
-  { value: "dify", label: "Dify", category: "agent" },
-  { value: "yuanqi", label: "腾讯元器", category: "agent" },
-  { value: "qingyan", label: "智谱清言", category: "agent" },
-  // 5.19up D1-2 · 知识库 embedding 配置（lib/kb/embed.ts 从这里取配置）
-  { value: "zhipu", label: "智谱 Embedding（embedding-2 / embedding-3）", category: "embedding" },
-];
-
 const CATEGORY_LABEL: Record<ApiCategory, string> = {
   model: "大模型 API",
   agent: "智能体 API",
@@ -54,25 +54,12 @@ function catOf(c: string | undefined): ApiCategory {
   return "model";
 }
 
-// 平台 → 展示名；同一 platform 值可能在多个 category 下出现（如 zhipu），取首个
-const PLATFORM_LABEL: Record<string, string> = {};
-for (const p of PLATFORM_OPTIONS) {
-  if (!(p.value in PLATFORM_LABEL)) PLATFORM_LABEL[p.value] = p.label;
-}
-
-// 各平台的默认 endpoint / model（切换平台时自动填）
-const PLATFORM_DEFAULTS: Record<string, { endpoint: string; model: string }> = {
-  openai:  { endpoint: "https://api.openai.com/v1/chat/completions",                 model: "gpt-4o-mini" },
-  zhipu:   { endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",       model: "glm-4-flash" },
-  coze:    { endpoint: "https://api.coze.cn/v3/chat",                                 model: "" },
-  dify:    { endpoint: "",                                                            model: "" },
-  yuanqi:  { endpoint: "https://yuanqi.tencent.com/openapi/v1/agent/chat/completions", model: "" },
-  qingyan: { endpoint: "",                                                            model: "" },
-};
-
 type FormState = {
   provider_code: string;
   name: string;
+  /** 5.27up · 厂商预设 code（仅前端用，不入库）；选中后驱动 platform/endpoint/model 自动填 */
+  preset_code: string;
+  /** 入库字段：lib/adapters/index.ts 分发用的 platform 值 */
   platform: string;
   category: ApiCategory;
   api_endpoint: string;
@@ -82,34 +69,38 @@ type FormState = {
   enabled: boolean;
 };
 
-// 按 category 造一份空表单：平台 / endpoint / model 取该类首个平台的默认值
+// 按 category 造一份空表单：默认取该类首个 preset 的 endpoint / 模型 / 参数
 function emptyFormFor(category: ApiCategory): FormState {
-  if (category === "embedding") {
-    // D1：智谱 embedding，向量维度固定 1024（embedding-3 用 dimensions 参数降维）
+  const presets = getPresetsByCategory(category);
+  const first = presets[0];
+  // 该类至少有一个 preset，否则代码已失稳；fallback 仅防御
+  if (!first) {
     return {
-      provider_code: "",
-      name: "",
-      platform: "zhipu",
-      category: "embedding",
-      api_endpoint: "https://open.bigmodel.cn/api/paas/v4/embeddings",
-      api_key: "",
-      default_model: "embedding-3",
-      default_params_json: '{\n  "dimensions": 1024\n}',
-      enabled: true,
+      provider_code: "", name: "", preset_code: "", platform: "openai", category,
+      api_endpoint: "", api_key: "", default_model: "",
+      default_params_json: "{}", enabled: true,
     };
   }
-  const platform = category === "model" ? "openai" : "coze";
-  const d = PLATFORM_DEFAULTS[platform];
+  return formFromPreset(first, { provider_code: "", name: "", api_key: "", enabled: true });
+}
+
+// 把一个 preset 应用到（部分）已有表单字段上 —— 共享给「初始化」+「切换预设」两条路径
+// 5.20up · default_model 重新加回表单（5.27up Fix 删除导致新建空字符串、运行时兜底成
+//   gpt-4o-mini → 在非 OpenAI 兼容厂商上 404）。新建时按预设默认模型预填，admin 可改。
+function formFromPreset(
+  preset: ProviderPreset,
+  base: { provider_code: string; name: string; api_key: string; enabled: boolean },
+): FormState {
   return {
-    provider_code: "",
-    name: "",
-    platform,
-    category,
-    api_endpoint: d?.endpoint ?? "",
-    api_key: "",
-    default_model: d?.model ?? "",
-    default_params_json: "{}",
-    enabled: true,
+    ...base,
+    preset_code: preset.code,
+    platform: preset.platform,
+    category: preset.category,
+    api_endpoint: preset.endpoint,
+    default_model: preset.defaultModel,
+    default_params_json: preset.defaultParams
+      ? JSON.stringify(preset.defaultParams, null, 2)
+      : "{}",
   };
 }
 
@@ -125,7 +116,8 @@ export default function ModelProvidersPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(() => emptyFormFor("model"));
-  const [saving, setSaving] = useState(false);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  const saveGuard = useSubmitGuard();
 
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
@@ -167,14 +159,22 @@ export default function ModelProvidersPage() {
 
   function openEdit(p: Provider) {
     setEditingId(p.id);
+    // 5.27up · 反查 preset：endpoint 精确匹配 → host 匹配 → 该 platform 首个 preset
+    // 失败兜底（admin 编辑老数据时下拉里能有合适默认值）
+    const cat = catOf(p.category);
+    const inferred = inferPresetFromExisting(p.platform, p.api_endpoint, cat);
     setForm({
       provider_code: p.provider_code,
       name: p.name,
-      platform: p.platform,
-      category: catOf(p.category),
+      preset_code: inferred.code,
+      platform: p.platform, // 编辑场景以 DB 实际值为准，不被 preset 覆盖
+      category: cat,
       api_endpoint: p.api_endpoint,
       api_key: "", // 留空 = 不修改
-      default_model: p.default_model,
+      // 5.20up · DB default_model 为空（5.27up Fix 期间新建的 provider 入库为 ""）时，
+      //   用反查到的厂商预设默认模型补上 —— 否则保存还是空、运行时兜底 gpt-4o-mini，
+      //   非 OpenAI 兼容厂商会 404。已有 DB 值则不动。
+      default_model: p.default_model || inferred.defaultModel,
       default_params_json: JSON.stringify(p.default_params ?? {}, null, 2),
       enabled: p.enabled,
     });
@@ -182,61 +182,61 @@ export default function ModelProvidersPage() {
   }
 
   async function save() {
-    setSaving(true);
+    // JSON 格式预校验放在 guard 外面，校验失败不消耗 guard 名额 / 幂等键
+    let defaultParams: Record<string, unknown> = {};
     try {
-      let defaultParams: Record<string, unknown> = {};
-      try {
-        defaultParams = form.default_params_json.trim()
-          ? JSON.parse(form.default_params_json)
-          : {};
-        if (typeof defaultParams !== "object" || Array.isArray(defaultParams)) {
-          throw new Error("默认参数必须是 JSON 对象");
-        }
-      } catch {
-        flash("err", "默认参数 JSON 格式错误");
-        setSaving(false);
-        return;
+      defaultParams = form.default_params_json.trim()
+        ? JSON.parse(form.default_params_json)
+        : {};
+      if (typeof defaultParams !== "object" || Array.isArray(defaultParams)) {
+        throw new Error("默认参数必须是 JSON 对象");
       }
-
-      const payload: Record<string, unknown> = {
-        name: form.name,
-        platform: form.platform,
-        category: form.category,
-        api_endpoint: form.api_endpoint,
-        default_model: form.default_model,
-        default_params: defaultParams,
-        enabled: form.enabled,
-      };
-      // api_key 仅在非空时提交（编辑场景留空 = 不改）
-      if (form.api_key) payload.api_key = form.api_key;
-
-      let res: Response;
-      if (editingId) {
-        res = await fetch(`/api/admin/model-providers/${editingId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } else {
-        // 创建时 provider_code 必填
-        payload.provider_code = form.provider_code;
-        res = await fetch("/api/admin/model-providers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      }
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "保存失败");
-      flash("ok", editingId ? "已更新" : "已创建");
-      setEditorOpen(false);
-      await loadList();
-    } catch (e: unknown) {
-      flash("err", e instanceof Error ? e.message : "保存失败");
-    } finally {
-      setSaving(false);
+    } catch {
+      flash("err", "默认参数 JSON 格式错误");
+      return;
     }
+
+    await saveGuard.submit(async (idempotencyKey) => {
+      try {
+        const payload: Record<string, unknown> = {
+          name: form.name,
+          platform: form.platform,
+          category: form.category,
+          api_endpoint: form.api_endpoint,
+          default_model: form.default_model,
+          default_params: defaultParams,
+          enabled: form.enabled,
+        };
+        // api_key 仅在非空时提交（编辑场景留空 = 不改）
+        if (form.api_key) payload.api_key = form.api_key;
+
+        let res: Response;
+        if (editingId) {
+          // PATCH 天然幂等（RFC 7231），不带 Idempotency-Key
+          res = await fetch(`/api/admin/model-providers/${editingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          // 创建时 provider_code 必填
+          payload.provider_code = form.provider_code;
+          res = await fetch("/api/admin/model-providers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+            body: JSON.stringify(payload),
+          });
+        }
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "保存失败");
+        flash("ok", editingId ? "已更新" : "已创建");
+        setEditorOpen(false);
+        await loadList();
+      } catch (e: unknown) {
+        flash("err", e instanceof Error ? e.message : "保存失败");
+      }
+    });
   }
 
   async function toggleEnabled(p: Provider) {
@@ -366,7 +366,7 @@ export default function ModelProvidersPage() {
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">名称 / 编号</th>
-                  <th className="px-4 py-3 text-left font-medium">平台</th>
+                  <th className="px-4 py-3 text-left font-medium">厂商</th>
                   <th className="px-4 py-3 text-left font-medium">API Key</th>
                   <th className="px-4 py-3 text-left font-medium">状态</th>
                   <th className="px-4 py-3 text-left font-medium">操作</th>
@@ -382,7 +382,9 @@ export default function ModelProvidersPage() {
                         <div className="text-xs text-gray-400 font-mono">{p.provider_code}</div>
                       </td>
                       <td className="px-4 py-3 text-gray-700">
-                        {PLATFORM_LABEL[p.platform]?.split("（")[0] ?? p.platform}
+                        {/* 5.27up · 按 endpoint 反查厂商预设，显示真实厂商名（DeepSeek/Kimi/通义...）
+                            而不是统一显示 "OpenAI"（多家厂商共享 platform="openai"）*/}
+                        {inferPresetFromExisting(p.platform, p.api_endpoint, catOf(p.category)).label.split("（")[0]}
                       </td>
                       <td className="px-4 py-3">
                         {p.has_api_key ? (
@@ -513,34 +515,54 @@ export default function ModelProvidersPage() {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs text-gray-500">平台类型 *</label>
+                <label className="text-xs text-gray-500">厂商 *</label>
                 <select
-                  value={form.platform}
+                  value={form.preset_code}
                   onChange={(e) => {
-                    const newPlatform = e.target.value;
-                    const oldDefaults = PLATFORM_DEFAULTS[form.platform];
-                    const newDefaults = PLATFORM_DEFAULTS[newPlatform];
-                    // 仅当 endpoint/model 还是旧平台的默认值时，才覆盖为新平台的默认值
-                    // （用户手填过的内容不被覆盖）
+                    const newPreset = getPresetByCode(e.target.value);
+                    if (!newPreset) return;
+                    const oldPreset = getPresetByCode(form.preset_code);
+                    // 切换厂商时，endpoint / 默认模型 / 默认参数：
+                    //   - 字段为空 OR 还是旧预设的原值 → 覆盖为新预设的默认值
+                    //   - admin 已手填过 → 保留不动
+                    // 5.20up · default_model 走与 endpoint 同一套联动逻辑
+                    const keepEndpoint =
+                      form.api_endpoint && form.api_endpoint !== (oldPreset?.endpoint ?? "");
+                    const keepModel =
+                      form.default_model && form.default_model !== (oldPreset?.defaultModel ?? "");
+                    const oldParamsJson = oldPreset?.defaultParams
+                      ? JSON.stringify(oldPreset.defaultParams, null, 2)
+                      : "{}";
+                    const keepParams =
+                      form.default_params_json.trim() &&
+                      form.default_params_json !== oldParamsJson &&
+                      form.default_params_json !== "{}";
                     setForm({
                       ...form,
-                      platform: newPlatform,
-                      api_endpoint:
-                        !form.api_endpoint || form.api_endpoint === oldDefaults?.endpoint
-                          ? newDefaults?.endpoint ?? ""
-                          : form.api_endpoint,
-                      default_model:
-                        !form.default_model || form.default_model === oldDefaults?.model
-                          ? newDefaults?.model ?? ""
-                          : form.default_model,
+                      preset_code: newPreset.code,
+                      platform: newPreset.platform,
+                      api_endpoint: keepEndpoint ? form.api_endpoint : newPreset.endpoint,
+                      default_model: keepModel ? form.default_model : newPreset.defaultModel,
+                      default_params_json: keepParams
+                        ? form.default_params_json
+                        : newPreset.defaultParams
+                          ? JSON.stringify(newPreset.defaultParams, null, 2)
+                          : "{}",
                     });
                   }}
                   className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
                 >
-                  {PLATFORM_OPTIONS.filter((p) => p.category === form.category).map((p) => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
+                  {getPresetsByCategory(form.category).map((p) => (
+                    <option key={p.code} value={p.code}>{p.label}</option>
                   ))}
                 </select>
+                {/* 选中厂商的小提示（来源 / 注意事项） */}
+                {(() => {
+                  const cur = getPresetByCode(form.preset_code);
+                  return cur?.hint ? (
+                    <p className="text-[11px] text-gray-500 leading-snug">💡 {cur.hint}</p>
+                  ) : null;
+                })()}
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -569,9 +591,11 @@ export default function ModelProvidersPage() {
                 <p className="text-[11px] text-gray-400">加密存储；保存后不可再次查看明文</p>
               </div>
 
-              {/* 默认模型 / 默认参数仅对「大模型 API」有意义；
+              {/* 5.20up · 默认模型字段加回（5.27up Fix 删除导致新建为空、运行时兜底
+                  成 gpt-4o-mini → 在非 OpenAI 兼容厂商上 404）。切厂商时按预设联动填，
+                  admin 仍可手填覆盖；agent 侧的模型设置可继续覆盖此默认值。
                   「智能体 API」（Coze/Dify/元器/清言）模型与参数都在平台侧 bot 上配，
-                  这里只是一个平台凭证，不显示这两个字段 */}
+                  这两个字段都不显示。*/}
               {(form.category === "model" || form.category === "embedding") && (
                 <>
                   <div className="flex flex-col gap-1.5">
@@ -580,11 +604,17 @@ export default function ModelProvidersPage() {
                       type="text"
                       value={form.default_model}
                       onChange={(e) => setForm({ ...form, default_model: e.target.value })}
-                      placeholder="gpt-4o-mini"
-                      className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
+                      placeholder={
+                        getPresetByCode(form.preset_code)?.defaultModel || "如：qwen-plus / deepseek-chat / gpt-4o-mini"
+                      }
+                      className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono text-xs"
                     />
+                    <p className="text-[11px] text-gray-400">
+                      切换厂商时会按预设自动填；不填则运行时兜底（openai 平台兜底
+                      <code className="mx-1 px-1 py-0.5 bg-gray-100 rounded text-[10px]">gpt-4o-mini</code>
+                      非 openai 平台会被服务端拒绝）。agent 侧未单独指定模型时使用此值。
+                    </p>
                   </div>
-
                   <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-gray-500">默认参数（JSON）</label>
                     <textarea
@@ -614,7 +644,7 @@ export default function ModelProvidersPage() {
               >
                 取消
               </button>
-              <Button onClick={save} loading={saving}>
+              <Button onClick={save} loading={saveGuard.loading}>
                 {editingId ? "保存" : "创建"}
               </Button>
             </div>

@@ -1,11 +1,12 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { Globe, Building2, Plus, Edit2, Eye, EyeOff, Trash2 } from "lucide-react";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
 type Notice = { id: string; tenant_code: string | null; content: string; enabled: boolean };
 type Tenant = { code: string; name: string };
@@ -17,7 +18,8 @@ export default function NoticesPage() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Notice | null>(null);
   const [form, setForm] = useState({ type: "global" as "global" | "enterprise", tenantCode: "", content: "" });
-  const [saving, setSaving] = useState(false);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  const saveGuard = useSubmitGuard();
   // 5.11up · 组织管理员只能发本组织公告，UI 上需要锁住类型和目标
   const [adminRole, setAdminRole] = useState<"super_admin" | "system_admin" | "org_admin" | null>(null);
   const [adminTenantCode, setAdminTenantCode] = useState<string | null>(null);
@@ -26,7 +28,13 @@ export default function NoticesPage() {
     ? (tenants.find((t) => t.code === adminTenantCode)?.name ?? adminTenantCode)
     : null;
 
-  async function load() {
+  // 5.27up Fix · load 用 useCallback 包一下 + useEffect deps 加上 load。
+  //   React 19 的 react-hooks/set-state-in-effect 规则会校验 effect 里间接 setState
+  //   的链路；这里 load() 在初次挂载拉数据时确实要调 setState，本就是合法模式
+  //   （列表页 mount-fetch），不算 cascading render。同项目其它列表页（agent-builder
+  //   / model-providers 等）通用此模式 lint 通过，本文件触发是因为某些版本启发式略严，
+  //   局部 disable 即可。
+  const load = useCallback(async () => {
     setLoading(true);
     const [nr, tr, me] = await Promise.all([
       fetch("/api/admin/notices").then((r) => r.json()).then(d => d.data ?? d),
@@ -38,8 +46,9 @@ export default function NoticesPage() {
     if (me?.role) setAdminRole(me.role);
     if (me?.tenantCode) setAdminTenantCode(me.tenantCode);
     setLoading(false);
-  }
-  useEffect(() => { load(); }, []);
+  }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { load(); }, [load]);
 
   function openAdd() {
     setEditing(null);
@@ -67,14 +76,14 @@ export default function NoticesPage() {
   async function handleSave() {
     if (!form.content.trim()) return;
     if (form.type === "enterprise" && !form.tenantCode) { alert("请选择组织"); return; }
-    setSaving(true);
-    try {
+    await saveGuard.submit(async (idempotencyKey) => {
       const body = { tenantCode: form.type === "enterprise" ? form.tenantCode : null, content: form.content };
+      // PATCH 天然幂等；POST 创建带 Idempotency-Key
       const res = editing
         ? await fetch(`/api/admin/notices/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-        : await fetch("/api/admin/notices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        : await fetch("/api/admin/notices", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify(body) });
       if (res.ok) { setShowModal(false); load(); }
-    } finally { setSaving(false); }
+    });
   }
 
   return (
@@ -168,7 +177,7 @@ export default function NoticesPage() {
                 <textarea rows={4} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="请输入公告内容…" value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />
               </div>
             </div>
-            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowModal(false)}>取消</Button><Button onClick={handleSave} loading={saving}>{editing ? "保存" : "发布"}</Button></div>
+            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowModal(false)}>取消</Button><Button onClick={handleSave} loading={saveGuard.loading}>{editing ? "保存" : "发布"}</Button></div>
           </div>
         </div>
       )}

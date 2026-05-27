@@ -9,6 +9,8 @@ import {
   Library,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
+import { inferPresetFromExisting } from "@/lib/model-providers/presets";
 
 type TestMsg = { role: "user" | "assistant"; content: string };
 
@@ -21,6 +23,7 @@ type Provider = {
   id: string;
   name: string;
   platform: string;
+  api_endpoint: string; // 5.27up · 反查厂商预设需要 endpoint host
   default_model: string;
   enabled: boolean;
   has_api_key: boolean;
@@ -71,28 +74,10 @@ type Draft = {
 };
 
 // 5.15up · 各平台预设模型列表
-// 5.20up · 知识库验收锁定：绑定知识库的智谱智能体最低推荐 glm-4-air；
-// glm-4-flash 会反驳 KB 中的强事实，不能再标为推荐。
-// 没列在这里的模型可在下方选"自定义模型名"手填
-const PLATFORM_MODELS: Record<string, { value: string; label: string }[]> = {
-  zhipu: [
-    { value: "glm-4-air", label: "GLM-4-Air（知识库推荐）" },
-    { value: "glm-4-flash", label: "GLM-4-Flash（免费 · 不建议知识库）" },
-    { value: "glm-4-plus", label: "GLM-4-Plus（旗舰）" },
-    { value: "glm-4", label: "GLM-4（旗舰）" },
-  ],
-  openai: [
-    { value: "gpt-4o-mini", label: "GPT-4o-mini（便宜快速）" },
-    { value: "gpt-4o", label: "GPT-4o（旗舰）" },
-    { value: "gpt-3.5-turbo", label: "GPT-3.5-turbo（经典）" },
-    { value: "gpt-4-turbo", label: "GPT-4-turbo" },
-  ],
-  // 扣子 / Dify / 元器 / 清言 走 bot_id / assistant_id，不通过 model 字段选型
-  coze: [],
-  dify: [],
-  yuanqi: [],
-  qingyan: [],
-};
+// 5.27up · 模型下拉清单移到 lib/model-providers/presets.ts 的 preset.recommendedModels；
+// 这里按厂商（不是 platform）查 —— 修复"新加 DeepSeek/千问/豆包 等 OpenAI 兼容厂商
+// 后下拉仍显示 GPT 列表"的 bug（同 platform="openai" 但模型完全不同）。
+// 5.20up 验收的「绑 KB 智能体最低 glm-4-air」标注仍在 zhipu-glm preset 里。
 
 function defaultBuilderConfig(): BuilderConfig {
   return {
@@ -157,7 +142,8 @@ export default function AgentBuilderEditPage({
 
   // PR-C · 发布 state
   const [publishOpen, setPublishOpen] = useState(false);
-  const [publishing, setPublishing] = useState(false);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  const publishGuard = useSubmitGuard();
   const [publishResult, setPublishResult] = useState<{
     agent_id: string;
     agent_code: string | null;
@@ -421,24 +407,26 @@ export default function AgentBuilderEditPage({
     if (!draft) return;
     // 5.16up · 自动保存：发布前刷盘（publish 接口读 DB 里的草稿）
     if (dirty) await save({ auto: true });
-    setPublishing(true);
-    try {
-      const res = await fetch(`/api/admin/agent-drafts/${id}/publish`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "发布失败");
-      setPublishResult({
-        agent_id: data.agent_id,
-        agent_code: data.agent_code ?? null,
-        republish: data.republish ?? false,
-      });
-      // 重新拉草稿，更新 status
-      load();
-    } catch (e: unknown) {
-      toast(e instanceof Error ? e.message : "发布失败", "error");
-      setPublishOpen(false);
-    } finally {
-      setPublishing(false);
-    }
+    await publishGuard.submit(async (idempotencyKey) => {
+      try {
+        const res = await fetch(`/api/admin/agent-drafts/${id}/publish`, {
+          method: "POST",
+          headers: { "Idempotency-Key": idempotencyKey },
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "发布失败");
+        setPublishResult({
+          agent_id: data.agent_id,
+          agent_code: data.agent_code ?? null,
+          republish: data.republish ?? false,
+        });
+        // 重新拉草稿，更新 status
+        load();
+      } catch (e: unknown) {
+        toast(e instanceof Error ? e.message : "发布失败", "error");
+        setPublishOpen(false);
+      }
+    });
   }
 
   if (loading || !draft) {
@@ -612,7 +600,14 @@ export default function AgentBuilderEditPage({
 
                   <Field label="模型名称（不选用供应商默认）">
                     {(() => {
-                      const presets = PLATFORM_MODELS[selectedProvider?.platform ?? ""] ?? [];
+                      // 5.27up · 按厂商预设（不是 platform）查推荐模型清单；DeepSeek / 千问 /
+                      //   豆包 / 文心 / 混元 都是 platform="openai" 但要各自的模型清单。
+                      //   反查规则：endpoint host 匹配 → 找不到落到该 platform 首个预设
+                      //   （如 openai-official 给出 GPT 全套；openai-compat-custom 给空）。
+                      const matchedPreset = selectedProvider
+                        ? inferPresetFromExisting(selectedProvider.platform, selectedProvider.api_endpoint, "model")
+                        : null;
+                      const presets = matchedPreset?.recommendedModels ?? [];
                       const currentModel = (draft.model_params.model as string) ?? "";
                       const isCustom = currentModel && !presets.find((p) => p.value === currentModel);
                       const selectValue = !currentModel ? "" : isCustom ? "__custom__" : currentModel;
@@ -641,7 +636,9 @@ export default function AgentBuilderEditPage({
                             </select>
                           ) : (
                             <p className="text-[11px] text-gray-400 mb-1">
-                              {selectedProvider ? `${selectedProvider.platform} 平台不通过 model 字段选择模型（如扣子用 bot_id），下方可手填覆盖参数。` : "请先选择供应商"}
+                              {selectedProvider
+                                ? `该厂商没有预设模型清单${matchedPreset?.code === "doubao-ark" ? "（豆包用接入点 ID ep-xxx，不是固定模型名）" : ""}，下方手填模型名。`
+                                : "请先选择供应商"}
                             </p>
                           )}
                           {(isCustom || selectValue === "__custom__" || presets.length === 0) && (
@@ -1011,7 +1008,7 @@ export default function AgentBuilderEditPage({
       {publishOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => !publishing && setPublishOpen(false)}
+          onClick={() => !publishGuard.loading && setPublishOpen(false)}
         >
           <div
             className="bg-white rounded-[14px] shadow-2xl w-full max-w-md"
@@ -1039,12 +1036,12 @@ export default function AgentBuilderEditPage({
                 <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
                   <button
                     onClick={() => setPublishOpen(false)}
-                    disabled={publishing}
+                    disabled={publishGuard.loading}
                     className="px-4 h-9 rounded-[8px] text-sm text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed"
                   >
                     取消
                   </button>
-                  <Button onClick={doPublish} loading={publishing} className="flex items-center gap-1.5">
+                  <Button onClick={doPublish} loading={publishGuard.loading} className="flex items-center gap-1.5">
                     <Rocket size={14} /> 确认发布
                   </Button>
                 </div>

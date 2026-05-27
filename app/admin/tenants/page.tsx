@@ -11,6 +11,7 @@ import {
   ChevronRight, ChevronDown, GitBranch, Users, Pencil, Trash2, X, Check,
   Loader2,
 } from "lucide-react";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
 type Tenant = {
   id: string; code: string; name: string;
@@ -28,7 +29,8 @@ export default function TenantsPage() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Tenant | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  const saveGuard = useSubmitGuard();
   const [formError, setFormError] = useState("");
 
   // 展开的组织结构
@@ -248,15 +250,15 @@ export default function TenantsPage() {
     // 5.12up · initialPwd 已废弃，不再校验
     if (!editing && !form.code) { setFormError("新建时请填写组织码"); return; }
     if (!editing && !/^[A-Za-z]{4,8}$/.test(form.code.trim())) { setFormError("组织码只能为 4~8 位英文字母"); return; }
-    setSaving(true);
-    try {
+    await saveGuard.submit(async (idempotencyKey) => {
+      // PATCH 天然幂等；POST 创建带 Idempotency-Key
       const res = editing
         ? await fetch(`/api/admin/tenants/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.name, quota: form.quota, expiresAt: form.expiresAt, initialPwd: form.initialPwd || undefined }) })
-        : await fetch("/api/admin/tenants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: form.code, name: form.name, initialPwd: form.initialPwd, quota: form.quota, expiresAt: form.expiresAt }) });
+        : await fetch("/api/admin/tenants", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ code: form.code, name: form.name, initialPwd: form.initialPwd, quota: form.quota, expiresAt: form.expiresAt }) });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
       setShowModal(false); load();
-    } finally { setSaving(false); }
+    });
   }
 
   return (
@@ -507,7 +509,7 @@ export default function TenantsPage() {
             </div>
             <div className="flex justify-end gap-2 mt-6">
               <Button variant="ghost" onClick={() => setShowModal(false)}>取消</Button>
-              <Button onClick={handleSave} loading={saving}>{editing ? "保存修改" : "创建"}</Button>
+              <Button onClick={handleSave} loading={saveGuard.loading}>{editing ? "保存修改" : "创建"}</Button>
             </div>
           </div>
         </div>

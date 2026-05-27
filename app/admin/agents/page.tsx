@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight } from "lucide-react";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
 type WorkflowRef = { id: string; name: string };
 type UsedByEntry = { id: string; name: string; stepCount: number };
@@ -109,7 +110,12 @@ export default function AgentsAdminPage() {
   const [apiForm, setApiForm] = useState(EMPTY_API);
   // 5.15up PR-2 · API 配置弹窗的「命名 API」下拉选项
   const [apiProviders, setApiProviders] = useState<{ id: string; name: string; platform: string; enabled: boolean }[]>([]);
-  const [saving, setSaving] = useState(false);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  // 三个独立的 guard，对应三个 modal 的保存按钮
+  const saveAgentGuard = useSubmitGuard();
+  const saveApiGuard = useSubmitGuard();
+  const saveCatAssignGuard = useSubmitGuard();
+  const addCatGuard = useSubmitGuard();
   const [agentTypeFilter, setAgentTypeFilter] = useState("");
   const [agentCategoryFilter, setAgentCategoryFilter] = useState("");
   const [agentStatusFilter, setAgentStatusFilter] = useState("");
@@ -347,11 +353,12 @@ export default function AgentsAdminPage() {
     setFormError("");
     if (!form.name || !form.platform) { setFormError("请填写名称和平台"); return; }
     if (!form.id) { setFormError("请填写智能体编号"); return; }
-    setSaving(true);
-    try {
+    await saveAgentGuard.submit(async (idempotencyKey) => {
+      const body = JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl });
+      // PATCH 天然幂等不带 Idempotency-Key；POST 创建带
       const res = editing
-        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) })
-        : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl }) });
+        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
+        : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
       setShowAgentModal(false); load();
@@ -361,17 +368,16 @@ export default function AgentsAdminPage() {
       } else {
         toast(editing ? "智能体已更新" : "智能体已创建");
       }
-    } finally { setSaving(false); }
+    });
   }
 
   async function handleSaveApi() {
     if (!showApiModal) return;
-    setSaving(true);
-    try {
+    await saveApiGuard.submit(async () => {
       let params: Record<string, unknown> = {};
       try { params = JSON.parse(apiForm.modelParams); } catch {}
       // 5.15up PR-2 · 只提交 providerId（绑定/解绑命名 API）+ modelParams；
-      // 旧 apiEndpoint/apiKey 不再从此入口写入
+      // 旧 apiEndpoint/apiKey 不再从此入口写入。PATCH 天然幂等。
       const res = await fetch(`/api/admin/agents/${showApiModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -383,7 +389,7 @@ export default function AgentsAdminPage() {
         return;
       }
       setShowApiModal(null); load(); toast("API 配置已保存");
-    } finally { setSaving(false); }
+    });
   }
 
   async function openCatAssign(cat: Category) {
@@ -394,9 +400,11 @@ export default function AgentsAdminPage() {
 
   async function handleCatAssign() {
     if (!showCatAssignModal) return;
-    setSaving(true);
-    await fetch(`/api/admin/categories/${showCatAssignModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tenantCodes: selectedCatTenants }) });
-    setSaving(false); setShowCatAssignModal(null);
+    await saveCatAssignGuard.submit(async () => {
+      // PATCH 天然幂等，不带 Idempotency-Key
+      await fetch(`/api/admin/categories/${showCatAssignModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tenantCodes: selectedCatTenants }) });
+      setShowCatAssignModal(null);
+    });
   }
 
   async function addCategory() {
@@ -404,8 +412,10 @@ export default function AgentsAdminPage() {
       setCatNameHint("请输入分类名称");
       return;
     }
-    await fetch("/api/admin/categories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newCatName.trim() }) });
-    setNewCatName(""); load();
+    await addCatGuard.submit(async (idempotencyKey) => {
+      await fetch("/api/admin/categories", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ name: newCatName.trim() }) });
+      setNewCatName(""); load();
+    });
   }
 
   async function saveEditCat(id: string) {
@@ -845,7 +855,7 @@ export default function AgentsAdminPage() {
               )}
               {formError && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{formError}</div>}
             </div>
-            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowAgentModal(false)}>取消</Button><Button onClick={handleSaveAgent} loading={saving}>{editing ? "保存" : "创建"}</Button></div>
+            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowAgentModal(false)}>取消</Button><Button onClick={handleSaveAgent} loading={saveAgentGuard.loading}>{editing ? "保存" : "创建"}</Button></div>
           </div>
         </div>
       )}
@@ -887,7 +897,7 @@ export default function AgentsAdminPage() {
 
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">模型参数（JSON）</label><textarea rows={4} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none" value={apiForm.modelParams} onChange={(e) => setApiForm({ ...apiForm, modelParams: e.target.value })} /></div>
             </div>
-            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowApiModal(null)}>取消</Button><Button onClick={handleSaveApi} loading={saving}>保存配置</Button></div>
+            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowApiModal(null)}>取消</Button><Button onClick={handleSaveApi} loading={saveApiGuard.loading}>保存配置</Button></div>
           </div>
         </div>
       )}
@@ -1092,7 +1102,7 @@ export default function AgentsAdminPage() {
               ))}
               {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无组织，请先新增</p>}
             </div>
-            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowCatAssignModal(null)}>取消</Button><Button onClick={handleCatAssign} loading={saving}>保存分配</Button></div>
+            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowCatAssignModal(null)}>取消</Button><Button onClick={handleCatAssign} loading={saveCatAssignGuard.loading}>保存分配</Button></div>
           </div>
         </div>
       )}
