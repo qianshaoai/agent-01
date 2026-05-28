@@ -15,7 +15,10 @@ export const dynamic = "force-dynamic";
  * - 默认 admins 表的账号也支持走此接口
  */
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
+  // 5.28up 小B 复审 R3 Fix 1 · 改密码路由是 firstLogin 闸门的唯一出口，必须传
+  //   allowFirstLogin=true 豁免；否则带 firstLogin=true 的 admin 也无法调本接口
+  //   就锁死了。
+  const admin = await requireAdmin({ allowFirstLogin: true });
   if (admin instanceof Response) return admin;
 
   const { oldPassword, newPassword } = await req.json();

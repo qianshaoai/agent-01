@@ -111,16 +111,24 @@ export async function POST(req: NextRequest) {
   // 所有校验通过，清空失败记录
   clearLoginFail(rateKey);
 
+  // 非超管在首次登录（仍使用初始密码）时必须修改密码
+  const mustChangePassword = role !== "super_admin" && matchedUser.first_login === true;
+
+  // 5.28up 小B 复审 R3 Fix 1 · 防绕过强制改密码
+  //   旧实现：first_login=true 也照常签普通 admin cookie，前端 mustChangePassword 只是
+  //     "建议" —— 用户改 URL 直接进 /admin/dashboard 就绕过去了。
+  //   新实现：mustChangePassword=true 时 token payload 带 firstLogin=true：
+  //     - middleware 见此字段把页面访问重定向到 /admin（强制走改密码页）
+  //     - requireAdmin 默认拒绝带 firstLogin=true 的 token（仅 change-password 豁免）
+  //     - change-password 改完密码后重签新 token 不带 firstLogin，闸门解除
   const token = await signToken({
     type: "admin",
     adminId: matchedUser.id,
     username: matchedUser.username ?? matchedUser.phone,
     role: role as AdminRole,
     tenantCode: role === "org_admin" ? matchedUser.tenant_code : null,
+    ...(mustChangePassword ? { firstLogin: true } : {}),
   });
-
-  // 非超管在首次登录（仍使用初始密码）时必须修改密码
-  const mustChangePassword = role !== "super_admin" && matchedUser.first_login === true;
 
   return NextResponse.json(
     { ok: true, mustChangePassword },

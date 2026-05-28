@@ -62,6 +62,14 @@ export async function middleware(req: NextRequest) {
       res.cookies.set(ADMIN_COOKIE_NAME, "", { path: "/", maxAge: 0 });
       return res;
     }
+    // 5.28up 小B 复审 R3 Fix 1 · 强制改密码闸门：
+    //   admin token 含 firstLogin=true（admin/login 首次登录签发的）→ 直接踢回
+    //   /admin（登录/改密码页），不允许进任何 ADMIN_PROTECTED 页面。
+    //   要走完 /admin 的"首次登录 · 修改密码"分支 → /api/admin/change-password
+    //   重签 token 后才能进。
+    if (payload.firstLogin === true) {
+      return NextResponse.redirect(new URL("/admin", req.url));
+    }
     return NextResponse.next();
   }
 

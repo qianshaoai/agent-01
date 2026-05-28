@@ -46,6 +46,14 @@ export type AdminPayload = {
   username: string;
   role: AdminRole;
   tenantCode?: string | null;  // 组织管理员关联的组织码
+  /**
+   * 5.28up 小B 复审 R3 Fix 1 · 强制改密码闸门
+   * - admin/login 在 `users.first_login=true` + non-super_admin 时签 token 带此字段
+   * - middleware：见 firstLogin=true → 重定向 /admin（改密码页）；防直接访问 /admin/dashboard 绕过
+   * - requireAdmin：firstLogin=true 默认拒绝（FORBIDDEN）；仅 change-password 路由传 allowFirstLogin=true 豁免
+   * - change-password 成功改密后重签 token 不带此字段，闸门解除
+   */
+  firstLogin?: boolean;
   /** JWT iat（同上） */
   iat?: number;
 };

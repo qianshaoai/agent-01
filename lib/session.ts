@@ -105,10 +105,22 @@ export async function getActiveAdmin(): Promise<AdminPayload | null> {
  *   const result = await requireAdmin();
  *   if (result instanceof Response) return result;
  *   const admin = result; // AdminPayload
+ *
+ * 5.28up 小B 复审 R3 Fix 1 · 强制改密码闸门：
+ *   admin token 含 `firstLogin=true` 时（admin/login 对 first_login=true 的非超管签
+ *   发的）默认 403 拒绝；防 admin 拿初始密码登录后直接调业务 API。
+ *   仅 `/api/admin/change-password` 调用时传 `{ allowFirstLogin: true }` 豁免 ——
+ *   让用户能完成首次改密码。其它所有 admin API 调用不传此参数即可。
  */
-export async function requireAdmin(): Promise<AdminPayload | Response> {
+export async function requireAdmin(opts?: { allowFirstLogin?: boolean }): Promise<AdminPayload | Response> {
   const admin = await getActiveAdmin();
   if (!admin) return apiError("未登录或权限已变更", "UNAUTHORIZED");
+  if (admin.firstLogin === true && opts?.allowFirstLogin !== true) {
+    return apiError(
+      "首次登录需先修改初始密码，请回登录页完成密码修改",
+      "FORBIDDEN",
+    );
+  }
   return admin;
 }
 
