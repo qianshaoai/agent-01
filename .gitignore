@@ -52,3 +52,7 @@ supabase/.temp/
 
 # Local node compile cache
 .tmp/
+
+# 一次性临时文件（dev DB 初始化 / env 备份）
+setup-dev-db*.sql
+.env.local.backup-*
