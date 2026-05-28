@@ -262,7 +262,7 @@ export default function HomePage() {
     window.location.href = "/login";
   }
 
-  // 5.29up · 用户端「管理后台」按钮 onClick：
+  // 5.28up · 用户端「管理后台」按钮 onClick：
   //   1) 先 POST /api/auth/elevate-to-admin 拿 admin cookie（同 30 天 TTL）
   //   2) 后端会重查 DB 确认仍是 admin；失败弹错并 return
   //   3) 成功后 window.open 新 tab 进 /admin/dashboard，middleware 见 admin cookie 放行
@@ -597,7 +597,7 @@ export default function HomePage() {
               >
                 <QrCode size={20} />
               </button>
-              {/* 5.29up · 管理后台一键入口：仅当 /api/me 返回 isAdmin=true 时渲染。
+              {/* 5.28up · 管理后台一键入口：仅当 /api/me 返回 isAdmin=true 时渲染。
                   普通员工 user.isAdmin 为 undefined / false，DOM 里都没这个按钮。
                   样式与同行其它按钮一致，区别只是 hover 时变金色 + 角标显示 ExternalLink。 */}
               {user?.isAdmin && (

@@ -9,7 +9,7 @@ import {
 } from "@/lib/auth";
 import { checkLoginRate, recordLoginFail, clearLoginFail } from "@/lib/rate-limit";
 
-// 5.29up · 用户端「管理后台」一键入口 · 颁 admin cookie
+// 5.28up · 用户端「管理后台」一键入口 · 颁 admin cookie
 //
 // 流程：用户态已登录的人点首页右上「管理后台」按钮 → 本接口 → 重查 DB 确认仍是 admin
 //      → 颁 admin cookie（与 admin/login 同款 token / 同 30 天 TTL）→ 前端新 tab 打开

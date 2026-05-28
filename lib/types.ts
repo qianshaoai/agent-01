@@ -5,7 +5,7 @@ export type UserInfo = {
   tenantName: string;
   isPersonal: boolean;
   role: "super_admin" | "system_admin" | "org_admin" | "user";
-  /** 5.29up · 用户端「管理后台」按钮的渲染依据；服务端按 role 算好返回 */
+  /** 5.28up · 用户端「管理后台」按钮的渲染依据；服务端按 role 算好返回 */
   isAdmin?: boolean;
   userType: "personal" | "organization";
   quota: { total: number; used: number; left: number; expiresAt: string } | null;
