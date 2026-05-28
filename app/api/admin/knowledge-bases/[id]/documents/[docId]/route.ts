@@ -95,7 +95,8 @@ export async function POST(
     return apiError("重建排队失败，请重试", "INTERNAL_ERROR");
   }
   if (!flipped || flipped.length === 0) {
-    return apiError("该文档正在索引中，请等待当前索引完成后再重建", "VALIDATION_ERROR");
+    // 5.28up · 小B 复审 Fix 4 · 状态冲突应为 409 不是 400；CONFLICT 已映到 409
+    return apiError("该文档正在索引中，请等待当前索引完成后再重建", "CONFLICT");
   }
 
   after(async () => {

@@ -42,7 +42,7 @@ export async function POST() {
   // ① 重查 DB —— 不信 JWT
   const { data: dbUser, error: dbErr } = await db
     .from("users")
-    .select("id, phone, username, role, status, tenant_code")
+    .select("id, phone, username, role, status, tenant_code, first_login")
     .eq("id", user.userId)
     .maybeSingle();
   if (dbErr) {
@@ -75,7 +75,20 @@ export async function POST() {
     return apiError("该账号无后台访问权限", "FORBIDDEN");
   }
 
-  // ④ org_admin · 校验租户（同 admin/login 97-109 行）
+  // ④ 5.28up 小B 复审 Fix 2：first_login=true 的 admin 必须先走「后台登录页 →
+  //   强制改密码」流程，不能从前台一键 SSO 进后台绕过。
+  //   理由：admin/login 对 first_login=true 返回 mustChangePassword=true，
+  //   后台登录页 (app/admin/page.tsx) 强制走改密码分支才能进 dashboard；
+  //   本接口若不挡，admin role + 仍是初始密码的人能从首页盾牌一键进后台、跳过改密码。
+  //   非 super_admin 才检查（与 admin/login 第 123 行同口径：super_admin 不要求改初始密码）。
+  if (role !== "super_admin" && dbUser.first_login === true) {
+    return apiError(
+      "首次登录需先在管理后台修改初始密码，请直接打开后台登录页",
+      "FORBIDDEN",
+    );
+  }
+
+  // ⑤ org_admin · 校验租户（同 admin/login 97-109 行）
   if (role === "org_admin" && dbUser.tenant_code) {
     const { data: tenant } = await db
       .from("tenants")

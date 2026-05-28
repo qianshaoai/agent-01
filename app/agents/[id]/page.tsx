@@ -539,10 +539,16 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   //   一闪而过。解决：用 ref（不触发 rerender）按 content snippet 缓存 refs，
   //   loadConversationMessages 重建消息后按 snippet 对照、把 refs 重新挂上。
   //   不持久化 = 刷整页 / 切换会话仍然丢，但同一会话内的渲染不再被刷掉。
+  //
+  // 5.28up · 小B 复审 Fix 3 · key 加 conversationId 前缀做隔离
+  //   起因：原 key 只用 content 前 160 字 → 两个会话或两条不同会话回答的开头相同
+  //   时（"你好。让我来帮你…"之类），后写入的 refs 会覆盖前一条的，切回看时
+  //   会显示错的来源。加 `${convId}:` 前缀保证不同会话之间不冲突。
+  //   同会话内仍按 snippet 区分多条 assistant 消息（snippet 取 160 字差异已够）。
   const refsBySnippetRef = useRef<Map<string, KbReference[]>>(new Map());
   const SNIPPET_KEY_LEN = 160;
-  function snippetKey(content: string): string {
-    return content.trim().slice(0, SNIPPET_KEY_LEN);
+  function snippetKey(convId: string | null, content: string): string {
+    return `${convId ?? "_"}::${content.trim().slice(0, SNIPPET_KEY_LEN)}`;
   }
   // 5.12up · 进度条点击带的"参考"步骤标题，用于在输入框上方显示 chip
   const [stepReferenceLabel, setStepReferenceLabel] = useState<string | null>(null);
@@ -773,9 +779,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 : { text: m.content, attachedFiles: [] as string[], attachedImages: [] as { filename: string; url: string }[], stepReference: undefined as string | undefined };
             const hasAttach = parsed.attachedFiles.length > 0 || parsed.attachedImages.length > 0;
             // 5.28up · B · Fix 1 · DB 不存 references，按 content snippet 从 ref 缓存里回贴
+            // 小B 复审 Fix 3 · key 加 convId，loadConversationMessages 拿到的是
+            //   这条消息所属会话 id（参数 convId）
             const restoredRefs =
               m.role === "assistant"
-                ? refsBySnippetRef.current.get(snippetKey(parsed.text))
+                ? refsBySnippetRef.current.get(snippetKey(convId, parsed.text))
                 : undefined;
             return {
               id: m.id,
@@ -1055,7 +1063,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               if (Array.isArray(obj.references) && obj.references.length > 0) {
                 const refs = obj.references as KbReference[];
                 // 同时缓存到 ref，loadConversationMessages 用 DB 数据重建时回填
-                refsBySnippetRef.current.set(snippetKey(aiContent), refs);
+                // Fix 3 · key 用本轮 conversationId（done 事件带回）
+                refsBySnippetRef.current.set(snippetKey(obj.conversationId, aiContent), refs);
                 setMessages((prev) =>
                   prev.map((m) => (m.id === aiId ? { ...m, references: refs } : m)),
                 );

@@ -31,13 +31,26 @@ export async function ingestDocument(documentId: string): Promise<void> {
   }
 
   // 小B finding 2：失败时同步把统计清零，避免页面残留旧的 "已完成 N 个片段"
+  // 5.28up 小B 复审 Fix 1：失败时**必须清掉已 insert 的半截 chunks** ——
+  //   A 分批 insert 后某批失败时，前面成功批次的 chunks 已经落库；只标 status=failed
+  //   不清 chunks → 部分 chunks 仍能被 match_kb_chunks RPC 返回（migration_v42 之前），
+  //   chat 引用里出现"半截文档"的片段。即便 v42 RPC 已加 status='done' 过滤兜底，
+  //   代码层也主动清掉，多一层保险。失败时 DB 状态：status=failed + 0 chunks。
   const fail = async (msg: string) => {
+    const { error: clearErr } = await db
+      .from("kb_chunks")
+      .delete()
+      .eq("document_id", documentId);
+    if (clearErr) {
+      console.error("[kb/ingest] fail() 清理半截 chunks 失败（不阻断 status 标记）", documentId, clearErr);
+    }
     await db
       .from("kb_documents")
       .update({
         status: "failed",
         error_msg: msg.slice(0, 500),
         chunk_count: 0,
+        total_chunks: 0,
         char_count: 0,
         updated_at: new Date().toISOString(),
       })
