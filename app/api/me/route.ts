@@ -24,6 +24,16 @@ export async function GET() {
     tenantNameFromDb = data?.name ?? null;
   }
 
+  // 5.29up · 用户端「管理后台」按钮的渲染依据：
+  //   role 在 super_admin / system_admin / org_admin 三选一 → 当前账号有后台权限
+  //   普通员工 role='user' → isAdmin=false → 前端不渲染该按钮
+  // 这里只看 users.role；不查 admins 表 —— admins 表是系统内置账号（默认 admin），
+  //   前台只能手机号登录、不会出现在用户态
+  const isAdmin =
+    user.role === "super_admin" ||
+    user.role === "system_admin" ||
+    user.role === "org_admin";
+
   return NextResponse.json({
     userId: user.userId,
     phone: user.phone,
@@ -33,6 +43,7 @@ export async function GET() {
     tenantName: tenantNameFromDb || user.tenantName,
     isPersonal: user.isPersonal,
     role: user.role,
+    isAdmin,
     userType: user.userType,
     status: user.status,
     createdAt: user.createdAt,

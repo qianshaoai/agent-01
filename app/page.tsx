@@ -19,6 +19,7 @@ import {
   Eye,
   Wrench,
   BookOpen,
+  ShieldCheck,
   ChevronRight,
   ChevronLeft,
   ChevronDown,
@@ -259,6 +260,26 @@ export default function HomePage() {
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/login";
+  }
+
+  // 5.29up · 用户端「管理后台」按钮 onClick：
+  //   1) 先 POST /api/auth/elevate-to-admin 拿 admin cookie（同 30 天 TTL）
+  //   2) 后端会重查 DB 确认仍是 admin；失败弹错并 return
+  //   3) 成功后 window.open 新 tab 进 /admin/dashboard，middleware 见 admin cookie 放行
+  //   必须 await 完再 open —— 否则新 tab 加载时 cookie 还没设上、middleware 把它踢回登录页
+  async function enterAdmin() {
+    try {
+      const res = await fetch("/api/auth/elevate-to-admin", { method: "POST" });
+      if (!res.ok) {
+        const data: { error?: string } = await res.json().catch(() => ({}));
+        alert(data.error ?? "无法进入管理后台，请重新登录后再试");
+        return;
+      }
+      window.open("/admin/dashboard", "_blank", "noopener,noreferrer");
+    } catch (e) {
+      console.error("[enterAdmin] elevate 失败", e);
+      alert("网络异常，无法进入管理后台");
+    }
   }
 
   function dismissNotice(id: string) {
@@ -576,6 +597,19 @@ export default function HomePage() {
               >
                 <QrCode size={20} />
               </button>
+              {/* 5.29up · 管理后台一键入口：仅当 /api/me 返回 isAdmin=true 时渲染。
+                  普通员工 user.isAdmin 为 undefined / false，DOM 里都没这个按钮。
+                  样式与同行其它按钮一致，区别只是 hover 时变金色 + 角标显示 ExternalLink。 */}
+              {user?.isAdmin && (
+                <button
+                  onClick={enterAdmin}
+                  className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-white/10 text-white/85 hover:text-amber-200 transition-colors"
+                  title="进入管理后台（新标签页）"
+                  aria-label="进入管理后台"
+                >
+                  <ShieldCheck size={20} />
+                </button>
+              )}
               <Link
                 href="/settings"
                 className="w-10 h-10 flex items-center justify-center rounded-[10px] hover:bg-white/10 text-white/85 hover:text-white transition-colors"
