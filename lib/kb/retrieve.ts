@@ -46,5 +46,31 @@ export async function retrieveKbChunks(
   if (error) {
     throw new Error(`match_kb_chunks RPC 失败：${error.message}`);
   }
-  return (data ?? []) as KbSearchResult[];
+  const chunks = (data ?? []) as KbSearchResult[];
+
+  // 5.28up · B · 引用可视化：批量补 filename（RPC 没返）。
+  //   一次查询拉所有命中的 document_id → filename 映射；找不到则不填（前端回退为"未知文档"）。
+  //   失败不抛 —— 引用展示只是 nice-to-have，不应阻断对话。
+  if (chunks.length > 0) {
+    const docIds = [...new Set(chunks.map((c) => c.document_id).filter(Boolean))];
+    if (docIds.length > 0) {
+      try {
+        const { data: docs } = await db
+          .from("kb_documents")
+          .select("id, filename")
+          .in("id", docIds);
+        const nameById = new Map<string, string>(
+          (docs ?? []).map((d: { id: string; filename: string }) => [d.id, d.filename]),
+        );
+        for (const c of chunks) {
+          const name = nameById.get(c.document_id);
+          if (name) c.filename = name;
+        }
+      } catch (e) {
+        console.warn("[kb/retrieve] 补 filename 失败（不阻断）", e);
+      }
+    }
+  }
+
+  return chunks;
 }

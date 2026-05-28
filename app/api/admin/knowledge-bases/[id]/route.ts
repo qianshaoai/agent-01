@@ -33,7 +33,7 @@ export async function GET(
 
   const { data: documents, error: docErr } = await db
     .from("kb_documents")
-    .select("id, kb_id, filename, file_type, status, chunk_count, char_count, error_msg, created_at")
+    .select("id, kb_id, filename, file_type, status, chunk_count, total_chunks, char_count, error_msg, created_at")
     .eq("kb_id", id)
     .order("created_at", { ascending: false });
   if (docErr) {

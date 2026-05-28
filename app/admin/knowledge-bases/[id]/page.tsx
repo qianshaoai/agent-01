@@ -26,7 +26,11 @@ type KbDocument = {
   filename: string;
   file_type: string;
   status: KbDocStatus;
+  /** 已完成切片数；indexing 期间随 batch 滚动增长 */
   chunk_count: number;
+  /** 5.28up · C · 切块后写入的"总数"，给前端算进度。
+   *  老数据 / 未跑 migration_v40 → 0，前端回退为不显示分母 */
+  total_chunks: number;
   char_count: number;
   error_msg: string;
   created_at: string;
@@ -96,6 +100,16 @@ export default function KnowledgeBaseDetailPage() {
     load();
   }, [load]);
 
+  // 5.28up · A · 任意文档在 pending / indexing 期间，前端按 3s 节奏轮询列表，
+  //   直到全部落到 done / failed 终态。后台 ingest 走 next/server `after()` 异步，
+  //   POST 响应立即返回 pending，靠这条 effect 把状态最终拉齐。
+  useEffect(() => {
+    const hasActive = docs.some((d) => d.status === "pending" || d.status === "indexing");
+    if (!hasActive) return;
+    const timer = setInterval(() => { load(); }, 3000);
+    return () => clearInterval(timer);
+  }, [docs, load]);
+
   async function handleUpload(file: File) {
     setUploading(true);
     setErr("");
@@ -110,10 +124,10 @@ export default function KnowledgeBaseDetailPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "上传失败");
       const doc = json.document as KbDocument | null;
-      if (doc?.status === "failed") {
-        setErr(`「${doc.filename}」摄取失败：${doc.error_msg}`);
-      } else if (doc) {
-        setMsg(`「${doc.filename}」已上传并索引（${doc.chunk_count} 个片段）`);
+      // 5.28up · A · POST 现在异步，doc 一定是 pending 状态；不再展示「已索引 N 段」
+      //   提示，最终 done / failed 由轮询自然反映到列表里。
+      if (doc) {
+        setMsg(`「${doc.filename}」已上传，正在后台索引…（列表会自动更新）`);
       }
       await load();
     } catch (e) {
@@ -429,7 +443,12 @@ export default function KnowledgeBaseDetailPage() {
                             : doc.status === "failed"
                               ? doc.error_msg || "摄取失败"
                               : doc.status === "indexing"
-                                ? "正在索引…"
+                                ? // 5.28up · C · indexing 显示 "已索引 N/总数" 进度；
+                                  //   total_chunks > 0 才显示分母（迁移 v40 跑过 / 总数已写入），
+                                  //   否则回退为 "已索引 N 段" 不显示分母
+                                  doc.total_chunks > 0
+                                    ? `正在索引… ${doc.chunk_count}/${doc.total_chunks} 段（${Math.round((doc.chunk_count / doc.total_chunks) * 100)}%）`
+                                    : `正在索引… 已完成 ${doc.chunk_count} 段`
                                 : "等待索引"}
                         </p>
                       </div>
@@ -441,7 +460,8 @@ export default function KnowledgeBaseDetailPage() {
                       <div className="flex items-center gap-1 shrink-0">
                         <button
                           onClick={() => handleReindex(doc)}
-                          disabled={busyDoc === doc.id || doc.status === "indexing"}
+                          // 5.28up · A · async ingest 后，pending 也不能再点（否则并发跑同一文档会撞库）
+                          disabled={busyDoc === doc.id || doc.status === "indexing" || doc.status === "pending"}
                           className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-[#002FA7] px-2.5 py-1.5 rounded-[8px] hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
                           title="重建索引"
                         >

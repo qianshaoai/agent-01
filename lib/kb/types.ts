@@ -40,12 +40,25 @@ export type KbDocument = {
 /**
  * 检索结果 —— 冻结契约（「并行开发统一约束」§3.3）。
  * 方案 B 通过 lib/kb/retrieve.ts 拿到该类型；不得修改本类型定义。
+ *
+ * 5.28up · B · 加 3 个可选字段用于"引用可视化"：
+ *   - kb_id：RPC 已经在返回里有（migration_v39 的 SELECT 列表含 kb_id），只是
+ *     原 KbSearchResult 类型没声明 —— 这里声明以便 chat 路径用得到。
+ *   - filename：由 retrieve.ts 在 RPC 返回后批量查 kb_documents 补上。
+ *   - id：chunk id，RPC 同样返回，作为前端去重 key 用。
+ * 所有 3 个字段都是可选 —— 老代码读到 undefined 不影响（向后兼容）。
  */
 export type KbSearchResult = {
   content: string;
   document_id: string;
   similarity?: number;
   distance?: number;
+  /** chunk id（RPC 返回）—— 前端做 key */
+  id?: string;
+  /** chunk 所在知识库 id（RPC 返回）*/
+  kb_id?: string;
+  /** chunk 所在文档文件名（retrieve.ts 补查 kb_documents 后填）*/
+  filename?: string;
 };
 
 /** 一个切块（chunkText 的输出 / 入库前的中间结构） */

@@ -8,7 +8,7 @@ import { db } from "../db";
 import { extractForKb } from "./extract";
 import { chunkText } from "./chunk";
 import { embedTexts } from "./embed";
-import { KB_MAX_CHUNKS_PER_DOC } from "./types";
+import { KB_MAX_CHUNKS_PER_DOC, KB_EMBED_BATCH_SIZE } from "./types";
 
 /** 知识库文档存储桶下的目录前缀 */
 export const KB_STORAGE_BUCKET = "uploads";
@@ -88,26 +88,47 @@ export async function ingestDocument(documentId: string): Promise<void> {
       return;
     }
 
-    // 4. 向量化（embed.ts 内部按批；失败抛错 → 落 failed）
-    const vectors = await embedTexts(chunks.map((c) => c.content));
-    if (vectors.length !== chunks.length) {
-      await fail("向量化结果数量与切块不符");
-      return;
-    }
+    // 5.28up · C · 写下"总数"让前端轮询时能算进度（要求跑 migration_v40，
+    //   未跑则该列不存在；这里 update 一次 total_chunks=N，跑没跑都不影响后续）
+    await db
+      .from("kb_documents")
+      .update({
+        total_chunks: chunks.length,
+        chunk_count: 0, // 重置 "已完成" 计数（重建场景，旧值要清掉）
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", documentId);
 
-    // 5. 写 kb_chunks（embedding 用 pgvector 文本格式 "[..]"）
-    const rows = chunks.map((c, i) => ({
-      document_id: documentId,
-      kb_id: doc.kb_id,
-      chunk_index: c.index,
-      content: c.content,
-      token_count: c.tokenCount,
-      embedding: JSON.stringify(vectors[i]),
-    }));
-    const { error: insErr } = await db.from("kb_chunks").insert(rows);
-    if (insErr) {
-      await fail(`写入向量库失败：${insErr.message}`);
-      return;
+    // 4 + 5. 5.28up · C · 分批 embed → 分批 insert → 实时累加 chunk_count
+    //   旧实现：一次性 embedTexts(all) → 一次 insert(all)，前端只能看见 0 → 全数
+    //   新实现：按 KB_EMBED_BATCH_SIZE 切片，每批 embed+insert 后立刻 update
+    //     chunk_count，前端 3s 轮询能看到 0 → 64 → 128 → ... → N 进度
+    let completed = 0;
+    for (let i = 0; i < chunks.length; i += KB_EMBED_BATCH_SIZE) {
+      const batch = chunks.slice(i, i + KB_EMBED_BATCH_SIZE);
+      const vectors = await embedTexts(batch.map((c) => c.content));
+      if (vectors.length !== batch.length) {
+        await fail("向量化结果数量与切块不符");
+        return;
+      }
+      const rows = batch.map((c, j) => ({
+        document_id: documentId,
+        kb_id: doc.kb_id,
+        chunk_index: c.index,
+        content: c.content,
+        token_count: c.tokenCount,
+        embedding: JSON.stringify(vectors[j]),
+      }));
+      const { error: insErr } = await db.from("kb_chunks").insert(rows);
+      if (insErr) {
+        await fail(`写入向量库失败：${insErr.message}`);
+        return;
+      }
+      completed += batch.length;
+      await db
+        .from("kb_documents")
+        .update({ chunk_count: completed, updated_at: new Date().toISOString() })
+        .eq("id", documentId);
     }
 
     // 6. 完成

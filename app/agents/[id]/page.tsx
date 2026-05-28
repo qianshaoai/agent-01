@@ -71,7 +71,7 @@ function friendlyError(msg: string): string {
 }
 
 type ChatMsgProps = {
-  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean; attachedFiles?: string[]; attachedImages?: { filename: string; url: string }[]; stepReference?: string };
+  msg: { id: string; role: string; content: string; createdAt?: string; aborted?: boolean; attachedFiles?: string[]; attachedImages?: { filename: string; url: string }[]; stepReference?: string; references?: KbReference[] };
   streaming: boolean;
   onCopy: () => void;
   copied: boolean;
@@ -87,6 +87,48 @@ type ChatMsgProps = {
   canRegenerate: boolean;
   onRegenerate: () => void;
 };
+
+// 5.28up · B · 知识库引用面板（折叠 / 展开）
+function KbReferencesPanel({ refs }: { refs: KbReference[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2 pt-2 border-t border-gray-100">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="text-[11px] text-[#002FA7] hover:underline flex items-center gap-1"
+      >
+        <Library size={11} />
+        引用了 {refs.length} 个知识库片段
+        <span className="text-gray-400">{open ? "收起 ▴" : "展开 ▾"}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {refs.map((r, i) => (
+            <div
+              key={r.id ?? `${r.document_id}-${i}`}
+              className="rounded-[8px] border border-gray-100 bg-gray-50/60 px-3 py-2"
+            >
+              <div className="flex items-center gap-2 text-[11px] text-gray-600">
+                <FileText size={11} className="text-gray-400 shrink-0" />
+                <span className="font-medium truncate">{r.filename}</span>
+                {r.similarity !== null && (
+                  <span className="text-gray-400 shrink-0">
+                    相似度 {Math.round(r.similarity * 100)}%
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-[12px] text-gray-700 leading-relaxed whitespace-pre-wrap line-clamp-4">
+                {r.snippet}
+                {r.snippet.length >= 300 && "…"}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const ChatMessage = memo(function ChatMessage({
   msg,
@@ -222,6 +264,11 @@ const ChatMessage = memo(function ChatMessage({
               已停止
             </div>
           )}
+          {/* 5.28up · B · 知识库引用面板：仅 assistant 气泡 + 命中 ≥ 1 段时显示。
+              展开后列每段：文档名 · 相似度 · 片段预览（最长 300 字）。 */}
+          {isAssistant && msg.references && msg.references.length > 0 && (
+            <KbReferencesPanel refs={msg.references} />
+          )}
         </div>
         {/* hover 工具栏：复制 / 时间 / 编辑 / 重新生成 */}
         {!isEditing && (msg.content || msg.aborted) && (
@@ -286,6 +333,7 @@ import {
   Bot,
   User,
   FileText,
+  Library,
   Menu,
   Square,
   Copy,
@@ -347,6 +395,18 @@ type Message = {
    *  渲染层只用 content（已 strip）；regenerate / editAndResend 必须用 rawContent
    *  以保证带原文件块重发，否则 bot 第二次回答看不到附件内容。 */
   rawContent?: string;
+  /** 5.28up · B · 知识库引用：本轮命中并注入到 prompt 的片段。
+   *  仅 assistant 消息可能有；done 事件里带回；当前回话不持久化（刷新就丢）。 */
+  references?: KbReference[];
+};
+
+/** 5.28up · B · 知识库引用片段（chat done 事件 references 字段的元素） */
+type KbReference = {
+  id?: string;
+  document_id: string;
+  filename: string;
+  similarity: number | null;
+  snippet: string;
 };
 
 /**
@@ -972,6 +1032,14 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               );
             }
             if (obj.done && obj.conversationId) {
+              // 5.28up · B · done 带回 references；挂到当前 AI 消息上，UI 在气泡下方
+              //   渲染折叠面板。引用为空 → 不挂、UI 也不显示，与原行为一致。
+              if (Array.isArray(obj.references) && obj.references.length > 0) {
+                const refs = obj.references as KbReference[];
+                setMessages((prev) =>
+                  prev.map((m) => (m.id === aiId ? { ...m, references: refs } : m)),
+                );
+              }
               setActiveConvId(obj.conversationId);
               // Refresh conversation list
               // 5.9up bugfix：必须带 sessionId 才能保持 session 隔离，

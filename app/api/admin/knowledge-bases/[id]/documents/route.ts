@@ -1,5 +1,5 @@
 import { apiError } from "@/lib/api-error";
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { ingestDocument, KB_STORAGE_BUCKET, KB_STORAGE_PREFIX } from "@/lib/kb/ingest";
@@ -15,7 +15,7 @@ const SUPPORTED_EXT = ["pdf", "docx", "doc", "txt", "md", "csv", "xlsx", "xls", 
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB
 
 const DOC_FIELDS =
-  "id, kb_id, filename, file_type, status, chunk_count, char_count, error_msg, created_at";
+  "id, kb_id, filename, file_type, status, chunk_count, total_chunks, char_count, error_msg, created_at";
 
 export async function GET(
   _req: NextRequest,
@@ -115,14 +115,25 @@ export async function POST(
     return apiError("文档入库失败，请重试", "INTERNAL_ERROR");
   }
 
-  // D6：同步摄取（提取 → 切块 → 向量化 → 写 kb_chunks）。失败落到文档 status=failed。
-  await ingestDocument(doc.id);
+  // 5.28up · A · ingest 转后台异步：next/server `after()` 在响应发出后继续在
+  //   同进程里跑（Next 15+ 稳定 API）。upload POST 立刻返回 pending 状态，
+  //   前端轮询文档列表看 status 从 pending → indexing → done/failed。
+  //   旧 D6 同步语义：D6（同步摄取）在大文档上必超时；这条注释保留作为历史索引。
+  after(async () => {
+    try {
+      await ingestDocument(doc.id);
+    } catch (e) {
+      // ingestDocument 内部已经 try/catch 落到 status=failed；这里再兜一层防 after 上下文吞错
+      console.error("[kb documents upload · after()] ingest 异常", doc.id, e);
+    }
+  });
 
-  const { data: finalDoc } = await db
+  // 返回此刻 DB 里的 pending 行；前端据 status 轮询直到 done/failed
+  const { data: pendingDoc } = await db
     .from("kb_documents")
     .select(DOC_FIELDS)
     .eq("id", doc.id)
     .maybeSingle();
 
-  return NextResponse.json({ document: finalDoc });
+  return NextResponse.json({ document: pendingDoc });
 }

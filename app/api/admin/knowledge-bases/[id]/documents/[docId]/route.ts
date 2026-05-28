@@ -1,5 +1,5 @@
 import { apiError } from "@/lib/api-error";
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { ingestDocument, KB_STORAGE_BUCKET } from "@/lib/kb/ingest";
@@ -12,7 +12,7 @@ function denyKbAdmin(role: string): boolean {
 }
 
 const DOC_FIELDS =
-  "id, kb_id, filename, file_type, status, chunk_count, char_count, error_msg, created_at";
+  "id, kb_id, filename, file_type, status, chunk_count, total_chunks, char_count, error_msg, created_at";
 
 /** DELETE：删除文档（kb_chunks 由 FK 级联删除）+ 清存储文件 */
 export async function DELETE(
@@ -78,12 +78,25 @@ export async function POST(
   }
   if (!doc) return apiError("文档不存在", "NOT_FOUND");
 
-  await ingestDocument(docId);
+  // 5.28up · A · 重建索引也走 after() 异步（同 upload）。先把 status 翻 pending
+  // 让前端立刻看到"已排队"，再 schedule ingestDocument 后台跑。
+  await db
+    .from("kb_documents")
+    .update({ status: "pending", error_msg: "", updated_at: new Date().toISOString() })
+    .eq("id", docId);
 
-  const { data: finalDoc } = await db
+  after(async () => {
+    try {
+      await ingestDocument(docId);
+    } catch (e) {
+      console.error("[kb documents reindex · after()] ingest 异常", docId, e);
+    }
+  });
+
+  const { data: pendingDoc } = await db
     .from("kb_documents")
     .select(DOC_FIELDS)
     .eq("id", docId)
     .maybeSingle();
-  return NextResponse.json({ document: finalDoc });
+  return NextResponse.json({ document: pendingDoc });
 }

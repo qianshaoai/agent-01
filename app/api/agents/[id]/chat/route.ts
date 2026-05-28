@@ -409,6 +409,10 @@ export const POST = withRequestLog(async (
     //   这些不是知识查询，不应让 KB 拦截。命中 wfCtx 或 isMetaOrChitchatMessage
     //   则整体跳过 KB 检索（顺带省一次 embedding 调用）。
     let kbInjectText = "";
+    // 5.28up · B · 把命中的 chunks 留到响应流里返给前端（done 事件 references 字段），
+    //   前端在 AI 回答下方显示"答案引用了 N 个片段"折叠面板。检索失败 / 跳过 / 空命中
+    //   都让 retrievedChunks 保持空数组，前端就不显示面板。
+    let retrievedChunks: import("@/lib/kb/types").KbSearchResult[] = [];
     const skipKbForThisTurn = wfCtx !== null || isMetaOrChitchatMessage(message, history.length);
     if ((resolvedPlatform === "openai" || resolvedPlatform === "zhipu") && !skipKbForThisTurn) {
       try {
@@ -423,6 +427,7 @@ export const POST = withRequestLog(async (
         if (kbIds.length > 0) {
           const chunks = await retrieveKbChunks(kbIds, message);
           kbInjectText = buildKbStrictAnswerPrompt(chunks);
+          retrievedChunks = chunks; // 5.28up · B
         }
       } catch (e) {
         console.warn(
@@ -582,7 +587,16 @@ export const POST = withRequestLog(async (
           ]);
 
           // W2 补丁：done 带回本次 weight，供前端「剩余次数」计数器按权重递减（gpt-4o 扣 5 等）
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, conversationId: convId, weight })}\n\n`));
+          // 5.28up · B · done 同时带回 retrievedChunks 摘要，前端在 AI 回答下方
+          //   显示"引用了 N 个片段"折叠面板。content 截到 300 字防 SSE 帧太大。
+          const references = retrievedChunks.map((c) => ({
+            id: c.id,
+            document_id: c.document_id,
+            filename: c.filename ?? "未知文档",
+            similarity: typeof c.similarity === "number" ? Math.round(c.similarity * 100) / 100 : null,
+            snippet: (c.content ?? "").slice(0, 300),
+          }));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, conversationId: convId, weight, references })}\n\n`));
         } catch (err) {
           const rawMsg = err instanceof Error ? err.message : "AI 调用失败";
           // 5.15up · 把英文/技术性错误翻译成员工能看懂的中文
