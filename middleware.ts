@@ -10,18 +10,20 @@ import {
 
 // 需要登录才能访问的用户路由
 const USER_PROTECTED = ["/", "/agents", "/settings", "/user-agents", "/trial", "/workflows"];
-// 需要管理员才能访问的路由
-const ADMIN_PROTECTED = [
-  "/admin/dashboard",
-  "/admin/tenants",
-  "/admin/agents",
-  "/admin/workflows",
-  "/admin/notices",
-  "/admin/analytics",
-  "/admin/logs",
-  "/admin/settings",
-  "/admin/users",
-];
+
+// 5.28up R4 Fix 1 · 管理端路由保护改为"所有 /admin/* 子路径"
+//   旧实现是白名单 [/admin/dashboard, /admin/tenants, ...]，但 admin-layout 导航
+//   里还有 /admin/model-providers / agent-builder / knowledge-bases / audit-logs 等
+//   新页面没加进去，导致 firstLogin=true 的 admin 仍能直接打开这些页面壳（虽然
+//   requireAdmin 已经挡了 API、看不到数据，但页面壳能进 = 闸门没闭合）。
+//   改成 "/admin/" 开头一律保护，只排除 /admin 这个登录页本身。
+function isAdminProtectedPage(pathname: string): boolean {
+  // /admin 是登录页，不保护
+  // /admin/任意子路径 全部保护（dashboard / tenants / agents / workflows / notices /
+  //   analytics / logs / settings / users / model-providers / agent-builder /
+  //   knowledge-bases / audit-logs / ... 任何未来新增的也自动覆盖）
+  return pathname.startsWith("/admin/");
+}
 
 let reqCounter = 0;
 
@@ -49,7 +51,7 @@ export async function middleware(req: NextRequest) {
   }
 
   // ── 管理端路由保护 ────────────────────────────────────────────
-  if (ADMIN_PROTECTED.some((p) => pathname.startsWith(p))) {
+  if (isAdminProtectedPage(pathname)) {
     const token = req.cookies.get(ADMIN_COOKIE_NAME)?.value;
     const payload = token ? await verifyToken(token) : null;
     if (!payload || payload.type !== "admin") {
