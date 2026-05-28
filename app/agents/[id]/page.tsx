@@ -532,6 +532,18 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   // 跨步骤上下文：用 ref 避免触发重渲染；sent 标记保证只注入一次
   const workflowContextRef = useRef<string | null>(null);
   const workflowContextSentRef = useRef(false);
+
+  // 5.28up · B · Fix 1 · references 持久映射
+  //   起因：done 事件把 refs 挂到 tmp aiId 上，但紧接着 loadConversationMessages
+  //   会用 DB 消息重建 state，临时 aiId 被替换成 DB id 后 refs 就丢了，引用面板
+  //   一闪而过。解决：用 ref（不触发 rerender）按 content snippet 缓存 refs，
+  //   loadConversationMessages 重建消息后按 snippet 对照、把 refs 重新挂上。
+  //   不持久化 = 刷整页 / 切换会话仍然丢，但同一会话内的渲染不再被刷掉。
+  const refsBySnippetRef = useRef<Map<string, KbReference[]>>(new Map());
+  const SNIPPET_KEY_LEN = 160;
+  function snippetKey(content: string): string {
+    return content.trim().slice(0, SNIPPET_KEY_LEN);
+  }
   // 5.12up · 进度条点击带的"参考"步骤标题，用于在输入框上方显示 chip
   const [stepReferenceLabel, setStepReferenceLabel] = useState<string | null>(null);
   // outline 模式：自动请求大纲，只发一次
@@ -760,6 +772,11 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                 ? parseUserContent(m.content)
                 : { text: m.content, attachedFiles: [] as string[], attachedImages: [] as { filename: string; url: string }[], stepReference: undefined as string | undefined };
             const hasAttach = parsed.attachedFiles.length > 0 || parsed.attachedImages.length > 0;
+            // 5.28up · B · Fix 1 · DB 不存 references，按 content snippet 从 ref 缓存里回贴
+            const restoredRefs =
+              m.role === "assistant"
+                ? refsBySnippetRef.current.get(snippetKey(parsed.text))
+                : undefined;
             return {
               id: m.id,
               role: m.role,
@@ -771,6 +788,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               createdAt: new Date(m.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
               // 优先用 DB 字段；client 端临时 aborted 标记作为回退（异步 PATCH 还没回来时）
               aborted: m.aborted || abortedIds.has(m.id) ? true : undefined,
+              references: restoredRefs,
             };
           });
         });
@@ -1036,6 +1054,8 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
               //   渲染折叠面板。引用为空 → 不挂、UI 也不显示，与原行为一致。
               if (Array.isArray(obj.references) && obj.references.length > 0) {
                 const refs = obj.references as KbReference[];
+                // 同时缓存到 ref，loadConversationMessages 用 DB 数据重建时回填
+                refsBySnippetRef.current.set(snippetKey(aiContent), refs);
                 setMessages((prev) =>
                   prev.map((m) => (m.id === aiId ? { ...m, references: refs } : m)),
                 );

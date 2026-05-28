@@ -78,9 +78,13 @@ export default function KnowledgeBaseDetailPage() {
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
 
-  const load = useCallback(async () => {
+  // 5.28up · A · Fix 2 · load 加 silent 参数 —— 轮询不触发全屏 "加载中…" 闪屏。
+  //   首次挂载 / 手动操作（删除 / 编辑后刷新）走 silent=false 显示骨架屏；
+  //   轮询调用走 silent=true 静默拉数据、不动 loading 状态。
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!kbId) return;
-    setLoading(true);
+    const silent = opts?.silent === true;
+    if (!silent) setLoading(true);
     setErr("");
     try {
       const res = await fetch(`/api/admin/knowledge-bases/${kbId}`, { cache: "no-store" });
@@ -90,9 +94,11 @@ export default function KnowledgeBaseDetailPage() {
       setDocs(json.documents ?? []);
       setRefAgents(json.referencedByAgents ?? []);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "加载失败");
+      // 轮询静默失败 —— 不弹 err（避免索引途中网络抖了一下就吓人）；下一轮自然恢复。
+      //   非静默调用照常展示错误，初次加载失败用户必须知道。
+      if (!silent) setErr(e instanceof Error ? e.message : "加载失败");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [kbId]);
 
@@ -103,10 +109,11 @@ export default function KnowledgeBaseDetailPage() {
   // 5.28up · A · 任意文档在 pending / indexing 期间，前端按 3s 节奏轮询列表，
   //   直到全部落到 done / failed 终态。后台 ingest 走 next/server `after()` 异步，
   //   POST 响应立即返回 pending，靠这条 effect 把状态最终拉齐。
+  //   Fix 2 · silent=true 避免每 3s 触发 setLoading(true) 导致页面骨架屏闪屏。
   useEffect(() => {
     const hasActive = docs.some((d) => d.status === "pending" || d.status === "indexing");
     if (!hasActive) return;
-    const timer = setInterval(() => { load(); }, 3000);
+    const timer = setInterval(() => { load({ silent: true }); }, 3000);
     return () => clearInterval(timer);
   }, [docs, load]);
 

@@ -78,12 +78,25 @@ export async function POST(
   }
   if (!doc) return apiError("文档不存在", "NOT_FOUND");
 
-  // 5.28up · A · 重建索引也走 after() 异步（同 upload）。先把 status 翻 pending
-  // 让前端立刻看到"已排队"，再 schedule ingestDocument 后台跑。
-  await db
+  // 5.28up · A · 重建索引走 after() 异步。
+  // Fix 3 · 服务端并发保护：原子 UPDATE 只允许从终态 (done/failed) 翻到 pending。
+  //   多 tab / 手工 curl 并发请求时，第一条 UPDATE 成功（终态→pending），
+  //   后续 UPDATE 因 status 不在终态集而 0 行影响 → 拒绝（不重复排 ingest），
+  //   避免 ingestDocument 并发跑同一文档清旧 chunks + 互相冲掉的竞态。
+  //   .in('status', [...]) + .select() 返回受影响行；空数组 = 当前 pending/indexing 中。
+  const { data: flipped, error: flipErr } = await db
     .from("kb_documents")
     .update({ status: "pending", error_msg: "", updated_at: new Date().toISOString() })
-    .eq("id", docId);
+    .eq("id", docId)
+    .in("status", ["done", "failed"])
+    .select("id");
+  if (flipErr) {
+    console.error("[kb document reindex] 状态翻转失败", flipErr);
+    return apiError("重建排队失败，请重试", "INTERNAL_ERROR");
+  }
+  if (!flipped || flipped.length === 0) {
+    return apiError("该文档正在索引中，请等待当前索引完成后再重建", "VALIDATION_ERROR");
+  }
 
   after(async () => {
     try {

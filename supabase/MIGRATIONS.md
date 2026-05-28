@@ -53,7 +53,8 @@
 | `migration_v37_model_providers_category.sql` | **5.15up API 管理 PR-1** — `model_providers` 加 `category` 列（model/agent）+ CHECK 约束 + `(category,enabled)`、`(category,platform)` 索引；存量按 platform 归类 | ✅ 2026-05-15 |
 | `migration_v38_knowledge_base.sql` | **5.19up 知识库方案 A · PR-A1**【🔑 知识库上线必跑】启用 `pgvector`；新增 `knowledge_bases` / `kb_documents` / `kb_chunks`（`embedding vector(1024)` + HNSW 余弦索引）/ `agent_knowledge_bases` 4 表；`model_providers.category` CHECK 加 `'embedding'`（D1-2）；新增检索 RPC `match_kb_chunks(p_kb_ids, p_query, p_top_k, p_threshold)` | ☐ |
 | `migration_v39_kb_chunks_active_filter.sql` | **5.19up 方案 A 小B验收 finding 1**【🔑 知识库上线必跑】`match_kb_chunks` RPC 加 `knowledge_bases.status='active'` 过滤（停用知识库不参与检索）；签名 / 返回字段保持不变。**未跑 v39 = 后台"停用"按钮无效。** | ☐ |
-| `migration_v40_kb_doc_total_chunks.sql` | **5.28up A 阶段**【知识库进度条】`kb_documents` 加 `total_chunks INT DEFAULT 0` 列；ingest 改后台异步后，前端轮询要拿"已完成 N / 总数"做进度条；不跑此条则总数永远 0，前端回退为"已完成 N 段"无总数显示，**不影响功能正确性**。 | ☐ |
+| `migration_v40_kb_doc_total_chunks.sql` | **5.28up A 阶段**【知识库进度条 · 必跑】`kb_documents` 加 `total_chunks INT DEFAULT 0` 列；ingest 改后台异步后，前端轮询要拿"已完成 N / 总数"做进度条。⚠ 5.28up 后端 `select` 已经直接拉 `total_chunks` 字段，**不跑此条 → 知识库详情 / 文档列表 API 直接 500（缺列）**，必须先跑此 SQL 再发 5.28up 代码。 | ☐ |
+| `migration_v41_kb_chunks_unique.sql` | **5.28up Fix 3**【知识库数据完整性】`kb_chunks` 加 `(document_id, chunk_index)` UNIQUE 约束 + 一次性去重（保留 id 最大行）。reindex 服务端虽已加并发保护，UNIQUE 兜底防其它路径误插重复段（检索会拿到重复、挤占 prompt）。不跑无功能性后果，但失去 DB 层保护。 | ☐ |
 
 > v20 / v23 跳号无对应文件（v23 编号被已搁置的"组织码可改"草案占用）。
 > v28~v33 已于 5.16up 回归核查时补登 —— "跑过"列标「功能在用，推定已跑」的，
