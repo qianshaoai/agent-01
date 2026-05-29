@@ -87,8 +87,13 @@ type Draft = {
 //     GPT 推荐模型）。只在搭建器内用，不动 presets.ts 全局语义。
 //   - buildModelOptions: providers × 各自 recommendedModels → 扁平选项列表，渲染时
 //     按 groupKey 归并成 optgroup。
-//   - composeValue: 把 (provider_id, model) 反推成 select 当前值；老 draft 若 model
-//     落到自定义分支 → 由下方手填框承载。
+//   - composeValue: 把 (provider_id, model) 反推成 select 当前值；model 不在 preset
+//     列表里 → 返回空（按 placeholder 渲染，admin 需重新挑）。
+//
+// 2026-05-29 删除：自定义模型名（探针）功能已下线，原因——第三方 OpenAI 兼容中转
+//   通常 silently 路由请求 + /models 列表 ID 与 OpenAI 标称命名不一致，导致探针要么
+//   误报 ✗ 要么误报 ✓，admin 体感比"只能从预设列表挑"还糟。保留 openai-platform
+//   custom 套 openai-official 推荐列表的兜底（当前接 OpenAI 的唯一通路）。
 
 type CustomBuilderResolution = { kind: "custom"; label: string };
 type RecognizedBuilderResolution = { kind: "recognized"; preset: ProviderPreset };
@@ -126,7 +131,7 @@ type ModelOption = {
   /** 同一 provider 的 options 共用一个 groupKey → 渲染时聚成一个 <optgroup> */
   groupKey: string;
   groupLabel: string;
-  optionValue: string;     // `${provider_id}::${model_value}` 或 `${provider_id}::__custom__`
+  optionValue: string;     // `${provider_id}::${model_value}`
   optionLabel: string;
 };
 
@@ -138,11 +143,9 @@ function stripModelDesc(label: string): string {
 }
 
 function buildModelOptions(providers: Provider[]): ModelOption[] {
-  // 5.29up 调整 1 · openai-compat-custom（自定义 OpenAI 兼容 endpoint）的推荐模型
-  //   原口径："custom 就只显示手填"——但用户决策：OpenAI 兼容（自定义）当中转用，
-  //   暂时还是吃 OpenAI 的模型集（gpt-4o-mini / gpt-5.5 等）；后续接入正式 OpenAI 后
-  //   这条预设会用不到。在搭建器里给 openai platform 的 custom 一个 fallback：
-  //   去 LLM_PRESETS 里找 openai-official 的 recommendedModels 共用。
+  // OpenAI 兼容（自定义）保留兜底：套 openai-official 的 recommendedModels（gpt-4o-
+  //   mini / gpt-5.5 等）。这是当前接 OpenAI 的唯一通路，移除会让 GPT 模型无处可选。
+  //   后续接入正式 OpenAI provider 后这条兜底可去掉。
   const all = getPresetsByCategory("model");
   const openaiOfficial = all.find((p) => p.code === "openai-official");
   const openaiOfficialModels = openaiOfficial?.recommendedModels ?? [];
@@ -155,51 +158,29 @@ function buildModelOptions(providers: Provider[]): ModelOption[] {
       const groupKey = provider.id;
       const baseLabel = `${presetName}（${provider.provider_code}）`;
 
-      // openai 平台的 custom → 套 openai-official 推荐模型（5.29up 调整 1）
+      // openai 平台的 custom（典型场景：第三方中转）→ 套 openai-official 推荐模型
       if (r.kind === "custom" && provider.platform === "openai" && openaiOfficialModels.length > 0) {
-        return [
-          ...openaiOfficialModels.map((m) => ({
-            groupKey,
-            groupLabel: baseLabel,
-            optionValue: `${provider.id}::${m.value}`,
-            optionLabel: stripModelDesc(m.label),
-          })),
-          {
-            groupKey,
-            groupLabel: baseLabel,
-            optionValue: `${provider.id}::__custom__`,
-            optionLabel: "✏ 自定义模型名",
-          },
-        ];
-      }
-
-      // 其它自定义分支（非 openai 平台 / 推荐模型空）→ 仅"手填"
-      if (r.kind === "custom" || (r.preset.recommendedModels?.length ?? 0) === 0) {
-        return [
-          {
-            groupKey,
-            groupLabel: `${baseLabel} · 手填模型名`,
-            optionValue: `${provider.id}::__custom__`,
-            optionLabel: "✏ 自定义模型名",
-          },
-        ];
-      }
-
-      // recognized 分支：preset 模型 + 末尾追加"自定义"逃生口
-      return [
-        ...r.preset.recommendedModels!.map((m) => ({
+        return openaiOfficialModels.map((m) => ({
           groupKey,
           groupLabel: baseLabel,
           optionValue: `${provider.id}::${m.value}`,
           optionLabel: stripModelDesc(m.label),
-        })),
-        {
-          groupKey,
-          groupLabel: baseLabel,
-          optionValue: `${provider.id}::__custom__`,
-          optionLabel: "✏ 自定义模型名",
-        },
-      ];
+        }));
+      }
+
+      // 其它自定义分支（非 openai 平台且无 preset 匹配）→ 不出现在下拉里。
+      //   想用此类 provider 需先在 lib/model-providers/presets.ts 加 preset。
+      if (r.kind === "custom" || (r.preset.recommendedModels?.length ?? 0) === 0) {
+        return [];
+      }
+
+      // recognized 分支：仅 preset 推荐模型
+      return r.preset.recommendedModels!.map((m) => ({
+        groupKey,
+        groupLabel: baseLabel,
+        optionValue: `${provider.id}::${m.value}`,
+        optionLabel: stripModelDesc(m.label),
+      }));
     });
 }
 
@@ -207,9 +188,9 @@ function buildModelOptions(providers: Provider[]): ModelOption[] {
  * 反推 select 的当前 value。
  *   - 没选供应商 → "" （placeholder 占位）
  *   - 已选供应商 + model 在 preset 推荐列表里 → `${pid}::${model}`
- *   - 已选供应商 + model 不在推荐 / model 为空 → `${pid}::__custom__`（下方手填框接管）
- *   - 老 draft 兼容：model 缺失但 provider.default_model 仍在 preset → 用 default_model
- *     避免误落自定义触发后续空值校验
+ *   - 已选供应商 + model 不在推荐 / model 为空 → "" （popover 显示 placeholder，
+ *     admin 需重新挑；老 draft 的 model 缺失场景由 maybeSeedModelFromDefault 在
+ *     加载时补齐；orphan 的自定义 model 名会被显示为未选中状态，admin 重新挑覆盖）
  */
 function composeValue(
   providers: Provider[],
@@ -217,10 +198,10 @@ function composeValue(
   model: string | undefined,
 ): string {
   if (!providerId) return "";
+  if (!model) return "";
   const provider = providers.find((p) => p.id === providerId);
   if (!provider) return "";
   const r = resolveProviderPresetForBuilder(provider);
-  // 5.29up 调整 1 · openai 平台的 custom 也吃 openai-official 推荐模型列表
   let list: { value: string; label: string }[];
   if (r.kind === "recognized") {
     list = r.preset.recommendedModels ?? [];
@@ -228,21 +209,16 @@ function composeValue(
     const all = getPresetsByCategory("model");
     list = all.find((p) => p.code === "openai-official")?.recommendedModels ?? [];
   } else {
-    return `${providerId}::__custom__`;
+    return "";
   }
-  // 5.29up R5 Fix 1 · 移除 default_model 兜底 —— 该兜底会把"用户主动选 __custom__"
-  //   误判成"用 default 模型"，导致自定义输入框消失。老 draft 的"model 缺失但
-  //   default_model 仍合法"在 draft 加载时由 maybeSeedModelFromDefault 一次性补齐，
-  //   composeValue 在渲染期只信 draft 当下状态。
-  if (model && list.some((m) => m.value === model)) return `${providerId}::${model}`;
-  return `${providerId}::__custom__`;
+  if (list.some((m) => m.value === model)) return `${providerId}::${model}`;
+  return "";
 }
 
-// 5.29up R5 Fix 1 · 加载老 draft 时一次性把空 model 补成 provider 默认（如果默认在
-//   推荐列表里）。这样新 UI 渲染就能反推到具体模型，避免误落自定义；admin 不会被
-//   "明明没选自定义却看到自定义输入框"困扰。
-//   仅当 draft.model_params.model 为空 + provider.default_model 在 preset 列表里
-//   才生效；其它情况不动 draft，让用户明确选择。
+// 5.29up R5 Fix 1 · 加载老 draft 时一次性把空 model 补成 provider 默认模型。
+//   这样新 UI 展示的是实际运行时会用的 effective model，避免把"老 draft 依赖
+//   provider.default_model"误解成"用户主动选了自定义但没填"。
+//   注意：这里不标 dirty，只是把后端兜底值显式映射到本页状态；用户后续编辑时才保存。
 function maybeSeedModelFromDefault(
   draft: Draft,
   providers: Provider[],
@@ -253,15 +229,6 @@ function maybeSeedModelFromDefault(
   if (existing) return draft;
   const provider = providers.find((p) => p.id === draft.provider_id);
   if (!provider || !provider.default_model) return draft;
-  const r = resolveProviderPresetForBuilder(provider);
-  let list: { value: string; label: string }[] = [];
-  if (r.kind === "recognized") list = r.preset.recommendedModels ?? [];
-  else if (provider.platform === "openai") {
-    const all = getPresetsByCategory("model");
-    list = all.find((p) => p.code === "openai-official")?.recommendedModels ?? [];
-  }
-  if (!list.some((m) => m.value === provider.default_model)) return draft;
-  // 补齐：把 default_model 写进 draft.model_params.model
   return {
     ...draft,
     model_params: { ...draft.model_params, model: provider.default_model },
@@ -272,16 +239,13 @@ function maybeSeedModelFromDefault(
 //   - external 类型不校验（不依赖 provider 与 model）
 //   - chat 类型必须有 provider_id；effective model = draft.model || provider.default_model
 //   - effective model 为空才阻断（防上线后 chat 兜底 gpt-4o-mini → 非 OpenAI 厂商 404）
-//   - R5 Fix 2 · 看 effective model，不是只看 draft.model_params.model
-//     原口径只看 draft.model，"老草稿用 provider 默认" 这种 effective model 其实
-//     有值的场景会被误拦。
 function validateModelBeforeSave(draft: Draft, providers: Provider[]): string | null {
   if (draft.agent_type !== "chat") return null;
   if (!draft.provider_id) return "请先在「模型设置」选择模型";
   const model = ((draft.model_params?.model as string) ?? "").trim();
   const provider = providers.find((p) => p.id === draft.provider_id);
   const effective = model || (provider?.default_model ?? "").trim();
-  if (!effective) return "请填写模型名（或在「模型选择」里挑一个预设模型）";
+  if (!effective) return "请在「模型选择」里挑一个模型";
   return null;
 }
 
@@ -392,110 +356,6 @@ function ModelSelectPopover({
             ))
           )}
         </div>
-      )}
-    </div>
-  );
-}
-
-// ─── 5.29up Phase 2 · 自定义模型名输入 + 探针 ────────────────────────────
-// 选了 ✏ 自定义模型名 时使用。admin 输入模型 ID 后点「测试」走 /api/admin/model-
-// providers/:id/test?model=xxx 真打一次上游接口，识别失败返回原始错误。
-// 注意：test endpoint 失败时返 HTTP 200 + { success: false, error }，所以前端
-// 必须读 data.success，不能只看 res.ok（小B 复审 R2 教训）。
-type ProbeStatus =
-  | { kind: "idle" }
-  | { kind: "running" }
-  | { kind: "ok"; latencyMs: number }
-  | { kind: "fail"; error: string };
-
-function CustomModelProbeRow({
-  providerId,
-  model,
-  onModelChange,
-  placeholder,
-}: {
-  providerId: string | null;
-  model: string;
-  onModelChange: (v: string) => void;
-  placeholder: string;
-}) {
-  const [status, setStatus] = useState<ProbeStatus>({ kind: "idle" });
-
-  async function probe() {
-    if (!providerId) {
-      setStatus({ kind: "fail", error: "请先选择供应商" });
-      return;
-    }
-    const name = model.trim();
-    if (!name) {
-      setStatus({ kind: "fail", error: "请先输入模型名" });
-      return;
-    }
-    setStatus({ kind: "running" });
-    try {
-      const res = await fetch(
-        `/api/admin/model-providers/${providerId}/test?model=${encodeURIComponent(name)}`,
-        { method: "POST" },
-      );
-      const data = await res.json().catch(() => ({}));
-      // R2 教训：endpoint 失败时返 HTTP 200 + success:false，必须读 data.success
-      if (!res.ok) {
-        setStatus({ kind: "fail", error: data?.error ?? `HTTP ${res.status}` });
-      } else if (!data?.success) {
-        setStatus({ kind: "fail", error: data?.error ?? "未知错误" });
-      } else {
-        setStatus({ kind: "ok", latencyMs: data?.latency_ms ?? 0 });
-      }
-    } catch (e) {
-      setStatus({ kind: "fail", error: e instanceof Error ? e.message : "网络错误" });
-    }
-  }
-
-  // model 改变时清掉旧结果，避免 admin 改了模型名但看到旧的 ✓
-  // React 19 的 react-hooks/set-state-in-effect 规则误报 —— 这里只是清重置探针结果，
-  // 不会 cascading rerender（status 是组件局部 state，没人依赖它再触发 effect）。
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { setStatus({ kind: "idle" }); }, [model, providerId]);
-
-  return (
-    <div className="mt-2 space-y-1">
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-          placeholder={placeholder}
-          className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
-        />
-        <button
-          type="button"
-          onClick={probe}
-          disabled={status.kind === "running" || !model.trim() || !providerId}
-          className="h-9 px-3 border border-[#002FA7]/30 rounded-[8px] text-xs font-medium text-[#002FA7] hover:bg-[#002FA7]/5 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0"
-        >
-          {status.kind === "running" ? (
-            <>
-              <Loader2 size={12} className="animate-spin" />
-              测试中…
-            </>
-          ) : "测试该模型"}
-        </button>
-      </div>
-      {status.kind === "ok" && (
-        <p className="text-[11px] text-green-600 flex items-center gap-1">
-          <Check size={11} />
-          连接成功（{status.latencyMs}ms）
-        </p>
-      )}
-      {status.kind === "fail" && (
-        <p className="text-[11px] text-red-600 leading-relaxed break-all">
-          ✗ {status.error}
-        </p>
-      )}
-      {status.kind === "idle" && (
-        <p className="text-[11px] text-gray-400">
-          点「测试该模型」会真打一次供应商接口验证 model id 是否被识别。
-        </p>
       )}
     </div>
   );
@@ -1007,12 +867,15 @@ export default function AgentBuilderEditPage({
                 <SectionTitle icon={<Settings2 size={16} />} title="2. 模型设置" desc="直接挑模型，供应商自动联动。" />
                 <div className="space-y-3 mt-3">
                   {/* 5.29up · 合并模型选择 ───────────────────────────────────
-                      旧实现是两步：先选「模型供应商」select 再选「模型名称」select；
-                      新实现是一步：grouped select，按供应商分组直接挑模型，选中后
-                      自动联动 provider_id + model_params.model。下方"当前供应商"小字
-                      让 admin 在 select 关闭后仍能看到当前用的是哪家（同模型名跨多 provider）。
-                      自定义模型名（preset 没列出 / OpenAI 兼容自定义 / 豆包接入点 ID）
-                      由下方"自定义模型名"输入框承载——选中 ✏ 自定义模型名 option 时自动出现。 */}
+                      一步式 grouped select：按供应商分组直接挑模型，选中后自动
+                      联动 provider_id + model_params.model。下方"当前供应商"小字
+                      让 admin 在 select 关闭后仍能看到当前用的是哪家（同模型名跨多
+                      provider 时尤其需要）。
+                      2026-05-29 · 自定义模型名（探针）功能已删除：第三方中转的
+                      silently 路由 + /models 列表 ID 命名不一致让探针几乎必误报。
+                      要用 OpenAI 兼容自定义 endpoint → 仍可从下拉里挑 openai-
+                      official 推荐模型（gpt-4o-mini 等）。要用 preset 未覆盖的
+                      新模型 → 改 lib/model-providers/presets.ts 走代码评审。 */}
                   <Field label="模型选择 *">
                     {(() => {
                       const allOptions = buildModelOptions(enabledProviders);
@@ -1021,8 +884,6 @@ export default function AgentBuilderEditPage({
                         draft.provider_id,
                         draft.model_params.model as string | undefined,
                       );
-                      const isCustomMode = currentValue.endsWith("::__custom__");
-                      const currentModel = (draft.model_params.model as string) ?? "";
                       return (
                         <>
                           <ModelSelectPopover
@@ -1039,15 +900,13 @@ export default function AgentBuilderEditPage({
                                 }));
                                 return;
                               }
-                              const [pid, modelOrCustom] = v.split("::");
+                              const [pid, modelName] = v.split("::");
                               patchDraft((d) => ({
                                 ...d,
                                 provider_id: pid,
                                 model_params: {
                                   ...d.model_params,
-                                  // 切到具体模型 → 写新值；切到 __custom__ → 清空让手填框从空起
-                                  //   切到不同 provider 时旧 model 不会被带过去（5.29up Fix 4）
-                                  model: modelOrCustom === "__custom__" ? undefined : modelOrCustom,
+                                  model: modelName,
                                 },
                               }));
                             }}
@@ -1077,20 +936,6 @@ export default function AgentBuilderEditPage({
                               已绑定知识库时不建议使用 GLM-4-Flash：验收中该模型会用常识反驳知识库事实。
                               请改为 <code className="font-mono">glm-4-air</code> 或更高模型。
                             </p>
-                          )}
-
-                          {/* 自定义模型名输入框：选中 ✏ 自定义模型名 option 时出现
-                              Phase 2 · 旁边加「测试该模型」探针按钮 */}
-                          {isCustomMode && (
-                            <CustomModelProbeRow
-                              providerId={draft.provider_id}
-                              model={currentModel}
-                              onModelChange={(v) => patchDraft((d) => ({
-                                ...d,
-                                model_params: { ...d.model_params, model: v || undefined },
-                              }))}
-                              placeholder={selectedProvider?.default_model || "自定义模型名，如 gpt-4o-mini / ep-xxx"}
-                            />
                           )}
                         </>
                       );
