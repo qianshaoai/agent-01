@@ -2,7 +2,7 @@
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库详情（5/19 视觉重做：对齐主页布局）
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { AdminLayout } from "@/components/layout/admin-layout";
@@ -48,6 +48,14 @@ type KnowledgeBase = {
 
 type RefAgent = { id: string; name: string };
 
+// 5.30up · 当前管理员，用于前端写按钮 ownership 灰显
+type AdminMe = {
+  role: "super_admin" | "system_admin" | "org_admin";
+  tenantCode: string | null;
+};
+
+const READONLY_TITLE = "无写权限：仅本组织新建的资源可改";
+
 const STATUS_LABEL: Record<KbDocStatus, string> = {
   pending: "待索引",
   indexing: "索引中",
@@ -83,6 +91,32 @@ export default function KnowledgeBaseDetailPage() {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
+
+  // 5.30up · 拉当前管理员（给写按钮做 ownership 灰显）
+  const [me, setMe] = useState<AdminMe | null>(null);
+  useEffect(() => {
+    fetch("/api/admin/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.role) setMe({ role: d.role, tenantCode: d.tenantCode ?? null });
+      })
+      .catch(() => {});
+  }, []);
+
+  // 5.30up · 与后端 canWriteRow 完全同口径（参见 lib/scoped-access.ts）：
+  //   super/system → true
+  //   org_admin + 有 tenantCode + kb.tenant_code === admin.tenantCode → true（NULL 排除）
+  //   其它 → false
+  // 前端只做 UX 辅助；后端 canWriteRow + 双闸是真正的安全边界。
+  const canWrite = useMemo(() => {
+    if (!me || !kb) return false;
+    if (me.role === "super_admin" || me.role === "system_admin") return true;
+    if (me.role === "org_admin") {
+      if (!me.tenantCode) return false;
+      return kb.tenant_code === me.tenantCode;
+    }
+    return false;
+  }, [me, kb]);
 
   // 5.28up · A · Fix 2 · load 加 silent 参数 —— 轮询不触发全屏 "加载中…" 闪屏。
   //   首次挂载 / 手动操作（删除 / 编辑后刷新）走 silent=false 显示骨架屏；
@@ -315,7 +349,9 @@ export default function KnowledgeBaseDetailPage() {
                   <div className="flex gap-2">
                     <button
                       onClick={handleSaveEdit}
-                      className="px-4 py-2 rounded-[10px] text-sm font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors"
+                      disabled={!canWrite}
+                      title={canWrite ? undefined : READONLY_TITLE}
+                      className="px-4 py-2 rounded-[10px] text-sm font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       保存
                     </button>
@@ -337,6 +373,8 @@ export default function KnowledgeBaseDetailPage() {
                       <h1 className="text-[18px] font-semibold text-gray-900 leading-tight truncate">
                         {kb.name}
                       </h1>
+                      {/* 5.30up · 归属徽章（与列表页同款，浅色版给白底详情用）*/}
+                      <DetailOwnershipBadge kb={kb} me={me} />
                       {kb.status === "disabled" && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200 shrink-0">
                           已停用
@@ -348,21 +386,27 @@ export default function KnowledgeBaseDetailPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    {/* 5.30up · 写按钮按 ownership 灰显：org_admin 看平台公共 / 别 org 时 disabled */}
                     <button
                       onClick={() => {
                         setEditing(true);
                         setEditName(kb.name);
                         setEditDesc(kb.description);
                       }}
-                      className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-[#002FA7] px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors"
+                      disabled={!canWrite}
+                      title={canWrite ? undefined : READONLY_TITLE}
+                      className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-[#002FA7] px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-600 disabled:cursor-not-allowed"
                     >
                       <Edit size={12} /> 编辑
                     </button>
                     <button
                       onClick={toggleStatus}
-                      className="text-xs text-gray-600 hover:text-amber-600 px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors"
+                      disabled={!canWrite}
+                      className="text-xs text-gray-600 hover:text-amber-600 px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-600 disabled:cursor-not-allowed"
                       title={
-                        kb.status === "active"
+                        !canWrite
+                          ? READONLY_TITLE
+                          : kb.status === "active"
                           ? "停用检索：智能体不再命中本库，但文档与绑定关系保留（≠ 删除）"
                           : "启用检索：恢复智能体可命中本库片段"
                       }
@@ -371,7 +415,9 @@ export default function KnowledgeBaseDetailPage() {
                     </button>
                     <button
                       onClick={handleDeleteKb}
-                      className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-red-600 px-3 py-1.5 rounded-[8px] hover:bg-red-50 transition-colors"
+                      disabled={!canWrite}
+                      title={canWrite ? undefined : READONLY_TITLE}
+                      className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-red-600 px-3 py-1.5 rounded-[8px] hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-500 disabled:cursor-not-allowed"
                     >
                       <Trash2 size={12} /> 删除
                     </button>
@@ -436,7 +482,8 @@ export default function KnowledgeBaseDetailPage() {
                 />
                 <button
                   onClick={() => fileRef.current?.click()}
-                  disabled={uploading}
+                  disabled={uploading || !canWrite}
+                  title={!canWrite ? READONLY_TITLE : undefined}
                   className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-[#002FA7] hover:bg-[#1a47c0] text-white text-sm font-semibold transition-colors shadow-[0_4px_12px_rgba(0,47,167,0.25)] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Upload size={15} />
@@ -488,18 +535,24 @@ export default function KnowledgeBaseDetailPage() {
                         <button
                           onClick={() => handleReindex(doc)}
                           // 5.28up · A · async ingest 后，pending 也不能再点（否则并发跑同一文档会撞库）
-                          disabled={busyDoc === doc.id || doc.status === "indexing" || doc.status === "pending"}
+                          // 5.30up · 写按钮按 ownership 灰显
+                          disabled={
+                            !canWrite ||
+                            busyDoc === doc.id ||
+                            doc.status === "indexing" ||
+                            doc.status === "pending"
+                          }
                           className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-[#002FA7] px-2.5 py-1.5 rounded-[8px] hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
-                          title="重建索引"
+                          title={canWrite ? "重建索引" : READONLY_TITLE}
                         >
                           <RotateCcw size={12} />
                           重建
                         </button>
                         <button
                           onClick={() => handleDeleteDoc(doc)}
-                          disabled={busyDoc === doc.id}
+                          disabled={!canWrite || busyDoc === doc.id}
                           className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-red-600 px-2.5 py-1.5 rounded-[8px] hover:bg-red-50 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
-                          title="删除文档"
+                          title={canWrite ? "删除文档" : READONLY_TITLE}
                         >
                           <Trash2 size={12} />
                           删除
@@ -515,5 +568,42 @@ export default function KnowledgeBaseDetailPage() {
       </div>
       </div>
     </AdminLayout>
+  );
+}
+
+/**
+ * 5.30up · 详情页顶部归属徽章（白底版，比列表页深色卡片对比度更低）
+ *   - tenant_code IS NULL    → "平台公共"
+ *   - me 是 org_admin + tc 匹配 → "本组织"
+ *   - 其它（仅 super/system 见）→ 显示 tenant_code 值
+ */
+function DetailOwnershipBadge({
+  kb,
+  me,
+}: {
+  kb: { tenant_code: string | null };
+  me: AdminMe | null;
+}) {
+  if (kb.tenant_code === null) {
+    return (
+      <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 shrink-0">
+        平台公共
+      </span>
+    );
+  }
+  if (me?.role === "org_admin" && me.tenantCode === kb.tenant_code) {
+    return (
+      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+        本组织
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 shrink-0 max-w-[120px] truncate"
+      title={`归属组织：${kb.tenant_code}`}
+    >
+      {kb.tenant_code}
+    </span>
   );
 }
