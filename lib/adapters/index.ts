@@ -78,6 +78,9 @@ export async function* streamChat(
     case "qingyan":
       yield* qingyanStream(messages, config);
       break;
+    case "anthropic":
+      yield* anthropicStream(messages, config);
+      break;
     default:
       yield* openaiCompatibleStream(messages, config);
   }
@@ -372,6 +375,138 @@ async function* openaiCompatibleStream(
     } catch {}
     return null;
   });
+}
+
+// ─── Anthropic Messages API (Claude) ────────────────────────────────────────
+// 5.30.1 · 接入 Anthropic 原生 messages 协议（非 OpenAI 兼容）。
+//
+// 协议要点（R2 方案落地）：
+//   - endpoint: POST {apiEndpoint}（admin 配 /v1/messages 结尾，官方或中转皆可）
+//   - 必需 header: anthropic-version: 2023-06-01
+//   - 认证：官方 endpoint 用 x-api-key；非官方（中转）用 Authorization: Bearer
+//   - body: { model, messages: [无 system], max_tokens, stream:true, system?, temperature? }
+//   - SSE 事件结构（与 OpenAI 完全不同）：
+//       event: message_start  → 含 usage.input_tokens
+//       event: content_block_delta + delta.type=text_delta → yield delta.text
+//       event: message_delta  → 含 usage.output_tokens（可能多次，取最后一次）
+//       event: message_stop   → 流结束
+//       event: error          → 必须 throw 让上层落错误分支
+//
+// 不在本期范围：extended thinking / tool_use / 多模态 attachments / cache_control
+// 多模态 attachments → 直接 throw（防 silent 上线后才暴露）
+//
+// 已知限制：第三方中转可能注入隐藏 system prompt（如 Kiro），本平台代码改不了；
+//          admin 知情接受（preset hint 已显式提示）。
+
+async function* anthropicStream(
+  messages: ChatMessage[],
+  config: AdapterConfig
+): AsyncGenerator<string> {
+  // 1. attachments 暂不支持 → throw（不 silent drop）
+  if (messages.some((m) => m.attachments?.length)) {
+    throw new Error("[anthropic] 多模态 attachments 暂不支持，请先移除或换 platform");
+  }
+
+  // 2. 抽 system prompt（chat route 已把 system_prompt 塞进 messages[0].role=system，
+  //    Anthropic 用顶层 system 字段，不是 messages 里的 role=system）
+  const systemMessages = messages.filter((m) => m.role === "system");
+  const otherMessages = messages.filter((m) => m.role !== "system");
+  const systemText = systemMessages.map((m) => m.content).join("\n\n");
+
+  // 3. 构造 body
+  //    - max_tokens 不 clamp（Sonnet/Haiku 64k、Opus 4.8 128k，由上游 enforce）
+  //    - temperature 不默认塞（Opus 4.7/4.8 不支持非默认采样参数；admin 显式配置时透传）
+  const model = (config.modelParams.model as string) ?? "claude-haiku-4-5-20251001";
+  const body: Record<string, unknown> = {
+    model,
+    messages: otherMessages.map((m) => ({ role: m.role, content: m.content })),
+    max_tokens: (config.modelParams.max_tokens as number) ?? 2000,
+    stream: true,
+    ...(systemText ? { system: systemText } : {}),
+    ...(config.modelParams.temperature !== undefined
+      ? { temperature: config.modelParams.temperature }
+      : {}),
+  };
+
+  // 4. 认证 header：官方 endpoint 用 x-api-key，中转用 Authorization: Bearer
+  //    检测条件用 host 包含 "api.anthropic.com"（含 vertex/bedrock 等代理 host 也按 Bearer 算）
+  const isOfficial = config.apiEndpoint.includes("api.anthropic.com");
+  const authHeader: Record<string, string> = isOfficial
+    ? { "x-api-key": config.apiKey }
+    : { Authorization: `Bearer ${config.apiKey}` };
+
+  // 5. POST + 智能 retry：4xx 非 429 立即 break（不浪费 token）；5xx/429/网络错误才重试
+  let res: Response | null = null;
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(config.apiEndpoint, {
+        method: "POST",
+        headers: {
+          ...authHeader,
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        res = r;
+        break;
+      }
+      const errText = await r.clone().text();
+      lastErr = new Error(`Anthropic API ${r.status}: ${errText.slice(0, 300)}`);
+      // 4xx 非 429 → 立即 break 跳出循环（不重试）
+      if (r.status >= 400 && r.status < 500 && r.status !== 429) break;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+    }
+    if (attempt < 2) {
+      await new Promise((rr) => setTimeout(rr, 300 * (attempt + 1)));
+    }
+  }
+  if (!res) throw lastErr ?? new Error("[anthropic] fetch failed");
+
+  // 6. SSE 解析：input_tokens 在 message_start，output_tokens 在 message_delta（多次出现取最后）
+  //    event: error 必须 throw 让 chat route 落错误分支
+  //    try/finally 兜底：流中断 / 502 截断时仍调 onUsage 防 logs.prompt_tokens 永远 0
+  let inputTokens = 0;
+  let outputTokens = 0;
+  try {
+    yield* parseSSEStream(res, (data, event) => {
+      try {
+        const obj = JSON.parse(data);
+        if (event === "message_start") {
+          inputTokens = obj.message?.usage?.input_tokens ?? 0;
+          return null;
+        }
+        if (event === "content_block_delta" && obj.delta?.type === "text_delta") {
+          return obj.delta.text ?? null;
+        }
+        if (event === "message_delta") {
+          // message_delta 可能多次出现，output_tokens 是累计值 → 取最后一次
+          outputTokens = obj.usage?.output_tokens ?? outputTokens;
+          return null;
+        }
+        if (event === "error") {
+          throw new Error(
+            `Anthropic stream error: ${obj.error?.type ?? "unknown"} - ${obj.error?.message ?? ""}`,
+          );
+        }
+      } catch (e) {
+        // Anthropic stream error 必须冒泡；JSON parse 错误吃掉
+        if (e instanceof Error && e.message.startsWith("Anthropic stream")) throw e;
+      }
+      return null;
+    });
+  } finally {
+    if (config.onUsage && (inputTokens || outputTokens)) {
+      config.onUsage({
+        prompt_tokens: inputTokens,
+        completion_tokens: outputTokens,
+        total_tokens: inputTokens + outputTokens,
+      });
+    }
+  }
 }
 
 // ─── 智谱清言智能体 (Qingyan) ─────────────────────────────────────────────────

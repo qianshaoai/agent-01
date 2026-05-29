@@ -138,7 +138,8 @@ export async function POST(
   //   口径；test-chat 无工作流，仅 B2 闲聊豁免、不用 B3 wfCtx 豁免。
   let kbInjectText = "";
   const skipKbForThisTurn = isMetaOrChitchatMessage(message, history.length);
-  if ((provider.platform === "openai" || provider.platform === "zhipu") && !skipKbForThisTurn) {
+  // 5.30.1 · anthropic 加入 KB 检索白名单（与 chat route 同口径）
+  if ((provider.platform === "openai" || provider.platform === "zhipu" || provider.platform === "anthropic") && !skipKbForThisTurn) {
     const draftKbField = (builderConfig as Record<string, unknown>).knowledge_base_ids;
     const rawKbIds = Array.isArray(draftKbField)
       ? [...new Set((draftKbField as unknown[]).filter((x): x is string => typeof x === "string" && !!x))]

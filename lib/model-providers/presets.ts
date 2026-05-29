@@ -27,7 +27,7 @@ export type ProviderPreset = {
   /** 下拉显示文案 */
   label: string;
   /** 对应 lib/adapters/index.ts 分发的 platform 值（入 model_providers.platform）*/
-  platform: "openai" | "zhipu" | "coze" | "dify" | "yuanqi" | "qingyan";
+  platform: "openai" | "zhipu" | "coze" | "dify" | "yuanqi" | "qingyan" | "anthropic";
   category: PresetCategory;
   /** 默认 api_endpoint（admin 可在表单里改）*/
   endpoint: string;
@@ -187,6 +187,22 @@ export const LLM_PRESETS: ProviderPreset[] = [
       { value: "hunyuan-pro",      label: "hunyuan-pro" },
       { value: "hunyuan-standard", label: "hunyuan-standard" },
       { value: "hunyuan-lite",     label: "hunyuan-lite（便宜）" },
+    ],
+  },
+  // 5.30.1 · Anthropic Claude（原生 messages 协议，非 OpenAI 兼容）
+  {
+    code: "anthropic-official",
+    label: "Anthropic Claude（官方 / 中转 · Opus 4.8 / Sonnet 4.6 / Haiku 4.5）",
+    platform: "anthropic",
+    category: "model",
+    endpoint: "",
+    defaultModel: "claude-haiku-4-5-20251001",
+    defaultParams: {},
+    hint: "官方端点：https://api.anthropic.com/v1/messages（key 自动用 x-api-key 头）；如使用第三方中转请填中转的 /v1/messages URL（key 自动用 Authorization: Bearer 头）。⚠️ 部分中转会在请求转发前注入隐藏 system prompt（如把 Claude 包装成「Kiro 开发助手」等其它产品），导致 admin 人设被污染、token 隐性消耗，请向中转方确认。",
+    recommendedModels: [
+      { value: "claude-opus-4-8",            label: "Claude Opus 4.8（2026-05-28 GA · 最强）" },
+      { value: "claude-sonnet-4-6",          label: "Claude Sonnet 4.6（平衡主力）" },
+      { value: "claude-haiku-4-5-20251001",  label: "Claude Haiku 4.5（最快最省 · default）" },
     ],
   },
 ];

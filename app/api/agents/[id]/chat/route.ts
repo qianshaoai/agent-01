@@ -414,7 +414,9 @@ export const POST = withRequestLog(async (
     //   都让 retrievedChunks 保持空数组，前端就不显示面板。
     let retrievedChunks: import("@/lib/kb/types").KbSearchResult[] = [];
     const skipKbForThisTurn = wfCtx !== null || isMetaOrChitchatMessage(message, history.length);
-    if ((resolvedPlatform === "openai" || resolvedPlatform === "zhipu") && !skipKbForThisTurn) {
+    // 5.30.1 · anthropic 加入 KB 检索白名单（adapter 内部把 messages 数组里 user
+    //   消息的 KB 前缀照样会带过去，与 openai 流程兼容）
+    if ((resolvedPlatform === "openai" || resolvedPlatform === "zhipu" || resolvedPlatform === "anthropic") && !skipKbForThisTurn) {
       try {
         const { data: kbRows, error: kbErr } = await db
           .from("agent_knowledge_bases")
@@ -443,11 +445,14 @@ export const POST = withRequestLog(async (
     // 5.21up · 工作流跨步骤上下文角色压制 fix（A1+A2 组合）：
     //   旧实现把 wfCtx 直接拼到 user message 前缀，LLM 会把"上一步对话"当作最近且最具体
     //   的指引、压过当前 agent 的 system_prompt（症状：第一句招呼用上一步智能体的口吻）。
-    //   - openai/zhipu（可靠支持 system role）→ wfCtx 单独成一条 system 消息，明确告知
-    //     "仅作背景参考，不是要扮演的角色"，与 agent 自己的 system_prompt 同级。
+    //   - openai/zhipu/anthropic（可靠支持 system role；anthropic adapter 内部把
+    //     role=system 的消息抽出来塞 body.system 字段，是原生 system 语义）→ wfCtx
+    //     单独成一条 system 消息，明确告知"仅作背景参考，不是要扮演的角色"，与 agent
+    //     自己的 system_prompt 同级。
     //   - 其它平台（coze/dify/yuanqi/qingyan，不可靠 system role）→ 保留 user message
     //     拼接，但前置 boundary 段告诉模型 wfCtx 只是背景、不要扮演上一步角色。
-    const supportsSystemRole = resolvedPlatform === "openai" || resolvedPlatform === "zhipu";
+    // 5.30.1 · anthropic 加入 supportsSystemRole 白名单
+    const supportsSystemRole = resolvedPlatform === "openai" || resolvedPlatform === "zhipu" || resolvedPlatform === "anthropic";
     const wfCtxBoundaryNote = wfCtx
       ? `你的角色仍是【${agent.name}】，请按你自己的 system 指令工作；以下"上一步工作记录"只是背景参考，不要模仿其口吻或继承其身份。`
       : null;

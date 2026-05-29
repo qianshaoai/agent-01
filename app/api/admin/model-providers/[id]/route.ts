@@ -23,11 +23,12 @@ import {
 //          R2 §4 转让 tenant_code 走零引用阻断（scanReferences）
 //   DELETE 写白名单：super + org_admin；canWriteRow；保留现有引用阻断（与 R2 §4 共用 scanReferences）
 
-const ALLOWED_PLATFORMS = ["openai", "coze", "dify", "yuanqi", "qingyan", "zhipu"];
+const ALLOWED_PLATFORMS = ["openai", "coze", "dify", "yuanqi", "qingyan", "zhipu", "anthropic"];
 
 // 5.15up API 管理模块 · category ↔ platform 映射
 const CATEGORY_PLATFORMS: Record<string, string[]> = {
-  model: ["openai", "zhipu"],
+  // 5.30.1 · anthropic 加进 model 类目
+  model: ["openai", "zhipu", "anthropic"],
   agent: ["coze", "dify", "yuanqi", "qingyan"],
   // 5.19up D1-2：知识库 embedding 配置并进 API 管理
   embedding: ["zhipu"],

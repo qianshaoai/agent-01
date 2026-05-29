@@ -20,12 +20,13 @@ import {
 //          · R2 §3 · embedding category 强制平台公共，三种身份都拦
 //          · R2 §6 · 显式 tenant_code 先 validateTenantCode 校验存在性
 
-const ALLOWED_PLATFORMS = ["openai", "coze", "dify", "yuanqi", "qingyan", "zhipu"];
+const ALLOWED_PLATFORMS = ["openai", "coze", "dify", "yuanqi", "qingyan", "zhipu", "anthropic"];
 
 // 5.15up API 管理模块 · category ↔ platform 映射
 //   model = 大模型 API，agent = 智能体 API
 const CATEGORY_PLATFORMS: Record<string, string[]> = {
-  model: ["openai", "zhipu"],
+  // 5.30.1 · anthropic 加进 model 类目（Anthropic Messages API · Claude 系列）
+  model: ["openai", "zhipu", "anthropic"],
   agent: ["coze", "dify", "yuanqi", "qingyan"],
   // 5.19up D1-2：知识库 embedding 配置并进 API 管理（lib/kb/embed.ts 从这里取配置）
   embedding: ["zhipu"],

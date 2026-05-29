@@ -145,10 +145,14 @@ function stripModelDesc(label: string): string {
 function buildModelOptions(providers: Provider[]): ModelOption[] {
   // OpenAI 兼容（自定义）保留兜底：套 openai-official 的 recommendedModels（gpt-4o-
   //   mini / gpt-5.5 等）。这是当前接 OpenAI 的唯一通路，移除会让 GPT 模型无处可选。
-  //   后续接入正式 OpenAI provider 后这条兜底可去掉。
+  // 5.30.1 · 同样口径加 anthropic 兜底：anthropic platform 的 custom endpoint（典型
+  //   场景：第三方 Claude 中转，如 claude.redcodeai.cn）需套 anthropic-official 的
+  //   recommendedModels 让 admin 能在下拉里挑 Opus 4.8 / Sonnet 4.6 / Haiku 4.5。
   const all = getPresetsByCategory("model");
   const openaiOfficial = all.find((p) => p.code === "openai-official");
   const openaiOfficialModels = openaiOfficial?.recommendedModels ?? [];
+  const anthropicOfficial = all.find((p) => p.code === "anthropic-official");
+  const anthropicOfficialModels = anthropicOfficial?.recommendedModels ?? [];
 
   return providers
     .filter((p) => p.enabled && p.has_api_key)
@@ -168,7 +172,17 @@ function buildModelOptions(providers: Provider[]): ModelOption[] {
         }));
       }
 
-      // 其它自定义分支（非 openai 平台且无 preset 匹配）→ 不出现在下拉里。
+      // 5.30.1 · anthropic 平台的 custom（典型场景：第三方 Claude 中转）→ 套 anthropic-official 推荐模型
+      if (r.kind === "custom" && provider.platform === "anthropic" && anthropicOfficialModels.length > 0) {
+        return anthropicOfficialModels.map((m) => ({
+          groupKey,
+          groupLabel: baseLabel,
+          optionValue: `${provider.id}::${m.value}`,
+          optionLabel: stripModelDesc(m.label),
+        }));
+      }
+
+      // 其它自定义分支（非 openai/anthropic 平台且无 preset 匹配）→ 不出现在下拉里。
       //   想用此类 provider 需先在 lib/model-providers/presets.ts 加 preset。
       if (r.kind === "custom" || (r.preset.recommendedModels?.length ?? 0) === 0) {
         return [];
@@ -208,6 +222,10 @@ function composeValue(
   } else if (provider.platform === "openai") {
     const all = getPresetsByCategory("model");
     list = all.find((p) => p.code === "openai-official")?.recommendedModels ?? [];
+  } else if (provider.platform === "anthropic") {
+    // 5.30.1 · anthropic 平台的 custom endpoint 与 openai 同口径，套 anthropic-official 推荐
+    const all = getPresetsByCategory("model");
+    list = all.find((p) => p.code === "anthropic-official")?.recommendedModels ?? [];
   } else {
     return "";
   }
