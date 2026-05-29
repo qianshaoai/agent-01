@@ -1,12 +1,12 @@
 "use client";
-import { useState, useEffect, useCallback, use } from "react";
+import { useState, useEffect, useCallback, useRef, use } from "react";
 import Link from "next/link";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, CheckCircle2, Save, Send, MessageSquare,
-  Settings2, Bot, Sparkles, ChevronRight, Loader2, X, Eraser, Rocket, ExternalLink, HelpCircle,
-  Library,
+  Settings2, Bot, Sparkles, ChevronRight, ChevronDown, Loader2, X, Eraser, Rocket, ExternalLink, HelpCircle,
+  Library, Check,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
@@ -131,6 +131,15 @@ type ModelOption = {
 };
 
 function buildModelOptions(providers: Provider[]): ModelOption[] {
+  // 5.29up 调整 1 · openai-compat-custom（自定义 OpenAI 兼容 endpoint）的推荐模型
+  //   原口径："custom 就只显示手填"——但用户决策：OpenAI 兼容（自定义）当中转用，
+  //   暂时还是吃 OpenAI 的模型集（gpt-4o-mini / gpt-5.5 等）；后续接入正式 OpenAI 后
+  //   这条预设会用不到。在搭建器里给 openai platform 的 custom 一个 fallback：
+  //   去 LLM_PRESETS 里找 openai-official 的 recommendedModels 共用。
+  const all = getPresetsByCategory("model");
+  const openaiOfficial = all.find((p) => p.code === "openai-official");
+  const openaiOfficialModels = openaiOfficial?.recommendedModels ?? [];
+
   return providers
     .filter((p) => p.enabled && p.has_api_key)
     .flatMap((provider) => {
@@ -139,7 +148,25 @@ function buildModelOptions(providers: Provider[]): ModelOption[] {
       const groupKey = provider.id;
       const baseLabel = `${presetName}（${provider.provider_code}）`;
 
-      // 自定义分支（custom 或 recognized 但无 recommendedModels）→ 仅一条"自定义模型名"
+      // openai 平台的 custom → 套 openai-official 推荐模型（5.29up 调整 1）
+      if (r.kind === "custom" && provider.platform === "openai" && openaiOfficialModels.length > 0) {
+        return [
+          ...openaiOfficialModels.map((m) => ({
+            groupKey,
+            groupLabel: baseLabel,
+            optionValue: `${provider.id}::${m.value}`,
+            optionLabel: m.label,
+          })),
+          {
+            groupKey,
+            groupLabel: baseLabel,
+            optionValue: `${provider.id}::__custom__`,
+            optionLabel: "✏ 自定义模型名",
+          },
+        ];
+      }
+
+      // 其它自定义分支（非 openai 平台 / 推荐模型空）→ 仅"手填"
       if (r.kind === "custom" || (r.preset.recommendedModels?.length ?? 0) === 0) {
         return [
           {
@@ -186,14 +213,134 @@ function composeValue(
   const provider = providers.find((p) => p.id === providerId);
   if (!provider) return "";
   const r = resolveProviderPresetForBuilder(provider);
-  if (r.kind !== "recognized") return `${providerId}::__custom__`;
-  const list = r.preset.recommendedModels ?? [];
+  // 5.29up 调整 1 · openai 平台的 custom 也吃 openai-official 推荐模型列表
+  let list: { value: string; label: string }[];
+  if (r.kind === "recognized") {
+    list = r.preset.recommendedModels ?? [];
+  } else if (provider.platform === "openai") {
+    const all = getPresetsByCategory("model");
+    list = all.find((p) => p.code === "openai-official")?.recommendedModels ?? [];
+  } else {
+    return `${providerId}::__custom__`;
+  }
   if (model && list.some((m) => m.value === model)) return `${providerId}::${model}`;
   // 老 draft 兼容：model 缺失但 provider.default_model 仍在推荐列表
   if (!model && provider.default_model && list.some((m) => m.value === provider.default_model)) {
     return `${providerId}::${provider.default_model}`;
   }
   return `${providerId}::__custom__`;
+}
+
+// ─── 5.29up · 模型选择 popover ────────────────────────────────────────────
+// 替换原生 <select> 为可控浮层：固定可视高度（约 5-6 行）+ 滚轮滑动 + 分组 sticky 标题。
+// 解决原生 select 在 Windows 上展开过高/视觉割裂的问题。
+//
+//   - 点击触发按钮 → 浮层开关
+//   - 点击外部 / Esc → 关闭
+//   - 选中后立即关闭并触发 onChange
+//   - 当前选中项高亮 + ✓
+//   - 分组标题做 sticky，滚动时仍能看见当前在哪组
+type GroupedOptions = { groupKey: string; groupLabel: string; opts: ModelOption[] };
+
+function groupModelOptions(options: ModelOption[]): GroupedOptions[] {
+  const map = new Map<string, GroupedOptions>();
+  for (const o of options) {
+    const existing = map.get(o.groupKey);
+    if (existing) existing.opts.push(o);
+    else map.set(o.groupKey, { groupKey: o.groupKey, groupLabel: o.groupLabel, opts: [o] });
+  }
+  return Array.from(map.values());
+}
+
+function ModelSelectPopover({
+  value,
+  options,
+  onChange,
+  placeholder,
+  disabled,
+}: {
+  value: string;
+  options: ModelOption[];
+  onChange: (v: string) => void;
+  placeholder: string;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [open]);
+
+  const grouped = groupModelOptions(options);
+  const current = options.find((o) => o.optionValue === value);
+  const buttonLabel = current?.optionLabel ?? placeholder;
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className={`w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm flex items-center justify-between hover:border-[#002FA7] focus:outline-none focus:border-[#002FA7] transition-colors disabled:bg-gray-50 disabled:cursor-not-allowed ${open ? "border-[#002FA7]" : ""}`}
+      >
+        <span className={current ? "text-gray-900 truncate" : "text-gray-400 truncate"}>
+          {buttonLabel}
+        </span>
+        <ChevronDown size={14} className={`text-gray-400 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        // 5-6 行可视高度：每行 ~36px → max-h-[220px] 给 6 行；超出滚轮滑动
+        <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-[10px] shadow-[0_10px_30px_rgba(0,0,0,0.12)] max-h-[220px] overflow-y-auto py-1">
+          {options.length === 0 ? (
+            <p className="px-3 py-3 text-xs text-gray-400">暂无可选模型</p>
+          ) : (
+            grouped.map((g) => (
+              <div key={g.groupKey}>
+                <div className="sticky top-0 z-10 px-3 py-1 text-[11px] font-medium text-gray-500 bg-gray-50 border-b border-gray-100">
+                  {g.groupLabel}
+                </div>
+                {g.opts.map((o) => {
+                  const isCurrent = o.optionValue === value;
+                  return (
+                    <button
+                      key={o.optionValue}
+                      type="button"
+                      onClick={() => {
+                        onChange(o.optionValue);
+                        setOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between transition-colors ${
+                        isCurrent
+                          ? "bg-[#002FA7]/8 text-[#002FA7] font-medium"
+                          : "text-gray-800 hover:bg-gray-50"
+                      }`}
+                    >
+                      <span className="truncate">{o.optionLabel}</span>
+                      {isCurrent && <Check size={13} className="text-[#002FA7] shrink-0 ml-2" />}
+                    </button>
+                  );
+                })}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function defaultBuilderConfig(): BuilderConfig {
@@ -692,12 +839,6 @@ export default function AgentBuilderEditPage({
                   <Field label="模型选择 *">
                     {(() => {
                       const allOptions = buildModelOptions(enabledProviders);
-                      const grouped = new Map<string, { label: string; opts: ModelOption[] }>();
-                      for (const o of allOptions) {
-                        const existing = grouped.get(o.groupKey);
-                        if (existing) existing.opts.push(o);
-                        else grouped.set(o.groupKey, { label: o.groupLabel, opts: [o] });
-                      }
                       const currentValue = composeValue(
                         enabledProviders,
                         draft.provider_id,
@@ -707,12 +848,13 @@ export default function AgentBuilderEditPage({
                       const currentModel = (draft.model_params.model as string) ?? "";
                       return (
                         <>
-                          <select
+                          <ModelSelectPopover
                             value={currentValue}
-                            onChange={(e) => {
-                              const v = e.target.value;
+                            options={allOptions}
+                            placeholder="请选择模型…"
+                            disabled={enabledProviders.length === 0}
+                            onChange={(v) => {
                               if (!v) {
-                                // 占位 / 选回"请选择" → 清空两个字段
                                 patchDraft((d) => ({
                                   ...d,
                                   provider_id: null,
@@ -726,25 +868,13 @@ export default function AgentBuilderEditPage({
                                 provider_id: pid,
                                 model_params: {
                                   ...d.model_params,
-                                  // 切到具体模型 → 写新值；切到 __custom__ → 显式清空让手填框从空起
-                                  //   切到不同 provider 时，旧 model 不会被带过去（5.29up Fix 4）
+                                  // 切到具体模型 → 写新值；切到 __custom__ → 清空让手填框从空起
+                                  //   切到不同 provider 时旧 model 不会被带过去（5.29up Fix 4）
                                   model: modelOrCustom === "__custom__" ? undefined : modelOrCustom,
                                 },
                               }));
                             }}
-                            className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
-                          >
-                            <option value="">请选择模型…</option>
-                            {Array.from(grouped.values()).map((g) => (
-                              <optgroup key={g.opts[0].groupKey} label={g.label}>
-                                {g.opts.map((o) => (
-                                  <option key={o.optionValue} value={o.optionValue}>
-                                    {o.optionLabel}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            ))}
-                          </select>
+                          />
 
                           {/* 没可用供应商 → 引导去 API 管理新建 */}
                           {enabledProviders.length === 0 && (
