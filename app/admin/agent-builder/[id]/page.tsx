@@ -230,24 +230,58 @@ function composeValue(
   } else {
     return `${providerId}::__custom__`;
   }
+  // 5.29up R5 Fix 1 · 移除 default_model 兜底 —— 该兜底会把"用户主动选 __custom__"
+  //   误判成"用 default 模型"，导致自定义输入框消失。老 draft 的"model 缺失但
+  //   default_model 仍合法"在 draft 加载时由 maybeSeedModelFromDefault 一次性补齐，
+  //   composeValue 在渲染期只信 draft 当下状态。
   if (model && list.some((m) => m.value === model)) return `${providerId}::${model}`;
-  // 老 draft 兼容：model 缺失但 provider.default_model 仍在推荐列表
-  if (!model && provider.default_model && list.some((m) => m.value === provider.default_model)) {
-    return `${providerId}::${provider.default_model}`;
-  }
   return `${providerId}::__custom__`;
+}
+
+// 5.29up R5 Fix 1 · 加载老 draft 时一次性把空 model 补成 provider 默认（如果默认在
+//   推荐列表里）。这样新 UI 渲染就能反推到具体模型，避免误落自定义；admin 不会被
+//   "明明没选自定义却看到自定义输入框"困扰。
+//   仅当 draft.model_params.model 为空 + provider.default_model 在 preset 列表里
+//   才生效；其它情况不动 draft，让用户明确选择。
+function maybeSeedModelFromDefault(
+  draft: Draft,
+  providers: Provider[],
+): Draft {
+  if (draft.agent_type !== "chat") return draft;
+  if (!draft.provider_id) return draft;
+  const existing = (draft.model_params?.model as string | undefined)?.trim();
+  if (existing) return draft;
+  const provider = providers.find((p) => p.id === draft.provider_id);
+  if (!provider || !provider.default_model) return draft;
+  const r = resolveProviderPresetForBuilder(provider);
+  let list: { value: string; label: string }[] = [];
+  if (r.kind === "recognized") list = r.preset.recommendedModels ?? [];
+  else if (provider.platform === "openai") {
+    const all = getPresetsByCategory("model");
+    list = all.find((p) => p.code === "openai-official")?.recommendedModels ?? [];
+  }
+  if (!list.some((m) => m.value === provider.default_model)) return draft;
+  // 补齐：把 default_model 写进 draft.model_params.model
+  return {
+    ...draft,
+    model_params: { ...draft.model_params, model: provider.default_model },
+  };
 }
 
 // 5.29up Phase 2.3 · 保存/发布前的模型字段校验
 //   - external 类型不校验（不依赖 provider 与 model）
-//   - chat 类型必须有 provider_id；model_params.model 可以选择具体模型 或 走自定义
-//   - custom 模式下 model 必须非空——否则上线 chat 会兜底 gpt-4o-mini，非 OpenAI
-//     兼容厂商必 404
-function validateModelBeforeSave(draft: Draft): string | null {
+//   - chat 类型必须有 provider_id；effective model = draft.model || provider.default_model
+//   - effective model 为空才阻断（防上线后 chat 兜底 gpt-4o-mini → 非 OpenAI 厂商 404）
+//   - R5 Fix 2 · 看 effective model，不是只看 draft.model_params.model
+//     原口径只看 draft.model，"老草稿用 provider 默认" 这种 effective model 其实
+//     有值的场景会被误拦。
+function validateModelBeforeSave(draft: Draft, providers: Provider[]): string | null {
   if (draft.agent_type !== "chat") return null;
   if (!draft.provider_id) return "请先在「模型设置」选择模型";
   const model = ((draft.model_params?.model as string) ?? "").trim();
-  if (!model) return "请填写模型名（或在「模型选择」里挑一个预设模型）";
+  const provider = providers.find((p) => p.id === draft.provider_id);
+  const effective = model || (provider?.default_model ?? "").trim();
+  if (!effective) return "请填写模型名（或在「模型选择」里挑一个预设模型）";
   return null;
 }
 
@@ -601,8 +635,11 @@ export default function AgentBuilderEditPage({
           .filter((kid) => validKb.has(kid));
       }
 
-      setDraft(d);
-      setProviders((provData.data ?? []) as Provider[]);
+      const loadedProviders = (provData.data ?? []) as Provider[];
+      // 5.29up R5 Fix 1 · 加载老 draft 时把空 model 补成 provider 默认（如果默认在
+      //   推荐列表里），避免新 UI 误把 "用户主动选自定义" 跟 "老 draft 空 model" 混淆。
+      setDraft(maybeSeedModelFromDefault(d, loadedProviders));
+      setProviders(loadedProviders);
       setKnowledgeBases(kbList);
       setAdminRole(role);
       // 5.19up · 仅 super/system 需要组织列表（org_admin 只发"本组织可见"、无多选）
@@ -629,7 +666,7 @@ export default function AgentBuilderEditPage({
     //   迭代不丢字）。custom 模式下 model 必填——否则上线后 chat 兜底 gpt-4o-mini，
     //   非 OpenAI 兼容厂商会 404，体感像智能体坏了。
     if (!opts?.auto) {
-      const err = validateModelBeforeSave(draft);
+      const err = validateModelBeforeSave(draft, providers);
       if (err) {
         toast(err, "error");
         return;
@@ -804,7 +841,7 @@ export default function AgentBuilderEditPage({
   async function doPublish() {
     if (!draft) return;
     // 5.29up Phase 2.3 · 发布前空值校验（与 save 同口径）
-    const err = validateModelBeforeSave(draft);
+    const err = validateModelBeforeSave(draft, providers);
     if (err) {
       toast(err, "error");
       return;

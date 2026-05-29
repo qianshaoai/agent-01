@@ -230,6 +230,21 @@ export async function POST(
     mergedModelParams.model = provider.default_model;
   }
 
+  // 5.29up R5 Fix 3 · 服务端兜底校验：effective model 仍为空就拒绝发布
+  //   旧逻辑：draft.model 与 provider.default_model 都为空时静默继续 → 上线后 chat
+  //     兜底 gpt-4o-mini → 非 OpenAI 厂商必 404，体感像智能体坏了。
+  //   新逻辑：chat 类型 effective model 为空 → 直接 VALIDATION_ERROR 拒发布，
+  //     提示 admin 必须填模型名（前端 UI 同口径校验，这是双保险）。
+  if (
+    draft.agent_type === "chat" &&
+    !(typeof mergedModelParams.model === "string" && (mergedModelParams.model as string).trim())
+  ) {
+    return apiError(
+      "请先在「模型设置」选择具体模型；当前未填写、供应商也没有默认模型",
+      "VALIDATION_ERROR",
+    );
+  }
+
   // 5.20up · 知识库验收收口：glm-4-flash 会反驳知识库里的强事实，不能发布为知识库智能体。
   // UI 已提示，这里后端兜底，避免绕过前端或供应商默认模型仍是 flash。
   if (
