@@ -56,6 +56,7 @@
 | `migration_v40_kb_doc_total_chunks.sql` | **5.28up A 阶段**【知识库进度条 · 必跑】`kb_documents` 加 `total_chunks INT DEFAULT 0` 列；ingest 改后台异步后，前端轮询要拿"已完成 N / 总数"做进度条。⚠ 5.28up 后端 `select` 已经直接拉 `total_chunks` 字段，**不跑此条 → 知识库详情 / 文档列表 API 直接 500（缺列）**，必须先跑此 SQL 再发 5.28up 代码。 | ☐ |
 | `migration_v41_kb_chunks_unique.sql` | **5.28up Fix 3**【知识库数据完整性】`kb_chunks` 加 `(document_id, chunk_index)` UNIQUE 约束 + 一次性去重（保留 id 最大行）。reindex 服务端虽已加并发保护，UNIQUE 兜底防其它路径误插重复段（检索会拿到重复、挤占 prompt）。不跑无功能性后果，但失去 DB 层保护。 | ☐ |
 | `migration_v42_match_kb_chunks_done_filter.sql` | **5.28up 小B 复审 Fix 1**【🔑 知识库数据正确性】`match_kb_chunks` RPC 加 `kb_documents.status='done'` 过滤；签名 / 返回字段保持冻结契约不变。⚠ 5.28up A 分批 insert 后中途失败的"半截文档"也会有 chunks 落库，**不跑此条 → 失败 / 索引中文档的部分片段可能被 chat 引用**。代码层 ingest.ts 内 fail() 主动清理已 insert chunks（双保险），但 RPC 层这条仍是必跑（防其它路径产生半截数据）。 | ☐ |
+| `migration_v43_scoped_ownership.sql` | **5.30up · 组织级 ownership 基建**【🔑 RBAC 必跑】`model_providers` + `knowledge_bases` 各加 `tenant_code TEXT NULL` + 单列 BTREE 索引。语义：NULL = 平台公共（super/system 建），非 NULL = 某 org 建。存量行回填默认 NULL（与现有行为兼容）。⚠ 5.30up 后端 list / canReadRow / canWriteRow / resolveCreateOwnership 都依赖 `tenant_code` 字段，**不跑此条 → API 管理 + 知识库管理 list/CRUD 5xx（缺列）**。必须先跑 SQL 再发 5.30up 代码。 | ☐ |
 
 > v20 / v23 跳号无对应文件（v23 编号被已搁置的"组织码可改"草案占用）。
 > v28~v33 已于 5.16up 回归核查时补登 —— "跑过"列标「功能在用，推定已跑」的，

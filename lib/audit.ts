@@ -8,10 +8,14 @@ export type AuditResourceType =
   | "notice" | "tenant" | "user"
   | "department" | "team" | "user_group"
   | "settings" | "resource_permission"
-  // 5.14up PR-A · 平台级模型供应商（model_providers 表，无组织归属）
+  // 5.14up PR-A · 模型供应商（model_providers 表）
+  // 5.30up · 加 tenant_code 后已具组织归属，resolveResourceTenantCode 走 case "model_provider"
   | "model_provider"
   // 5.14up PR-B · 智能体草稿（搭建器使用）
-  | "agent_draft";
+  | "agent_draft"
+  // 5.30up · 知识库（knowledge_bases 表）
+  // KB 各写路径（POST/PATCH/DELETE/文档上传/删除/重建索引）共用此 type
+  | "knowledge_base";
 
 /**
  * 5.11up · 写时反查资源所属的组织 code
@@ -71,6 +75,25 @@ export async function resolveResourceTenantCode(
           .select("tenant_code")
           .eq("agent_id", resourceId)
           .limit(1)
+          .maybeSingle();
+        return data?.tenant_code ?? null;
+      }
+      // 5.30up · model_providers 加 tenant_code 后直接读
+      case "model_provider": {
+        const { data } = await db
+          .from("model_providers")
+          .select("tenant_code")
+          .eq("id", resourceId)
+          .maybeSingle();
+        return data?.tenant_code ?? null;
+      }
+      // 5.30up · knowledge_bases 加 tenant_code 后直接读
+      // 文档相关写审计 resourceId 仍记 kb_id（DELETE 仍要先 await 缓存）
+      case "knowledge_base": {
+        const { data } = await db
+          .from("knowledge_bases")
+          .select("tenant_code")
+          .eq("id", resourceId)
           .maybeSingle();
         return data?.tenant_code ?? null;
       }
