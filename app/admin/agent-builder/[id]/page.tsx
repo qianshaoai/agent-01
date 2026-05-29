@@ -130,6 +130,13 @@ type ModelOption = {
   optionLabel: string;
 };
 
+// 5.29up · 模型显示文案：去掉 preset label 里的括号描述（"gpt-5.5（2026/04 旗舰）"
+//   → "gpt-5.5"）。原始 label 在 API 管理页继续展示，搭建器下拉里只显示纯模型名，
+//   admin 看着更干净。分组标题保留括号（那是 provider_code，必须留）。
+function stripModelDesc(label: string): string {
+  return label.replace(/\s*[（(].*?[）)]\s*$/g, "").trim();
+}
+
 function buildModelOptions(providers: Provider[]): ModelOption[] {
   // 5.29up 调整 1 · openai-compat-custom（自定义 OpenAI 兼容 endpoint）的推荐模型
   //   原口径："custom 就只显示手填"——但用户决策：OpenAI 兼容（自定义）当中转用，
@@ -184,7 +191,7 @@ function buildModelOptions(providers: Provider[]): ModelOption[] {
           groupKey,
           groupLabel: baseLabel,
           optionValue: `${provider.id}::${m.value}`,
-          optionLabel: m.label,
+          optionLabel: stripModelDesc(m.label),
         })),
         {
           groupKey,
