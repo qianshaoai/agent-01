@@ -3,10 +3,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { canReadRow } from "@/lib/scoped-access";
 
 // 5.14up PR-B · 智能体草稿列表 + 新增
 // 权限：super_admin + system_admin 可见 / 创建；org_admin 不可
 // 默认可见性：owner_only（小A D-3 推荐，发布时由 super_admin 在 UI 扩大范围）
+//
+// 5.30up · R1 §2 草稿链路 RBAC 收口：
+//   POST 时校验入参 provider_id + builder_config.knowledge_base_ids 全部 canReadRow，
+//   任一不可见 → 422 + 列出。防 org_admin 在草稿层塞别 org 的资源 id 绕过 publish 校验。
 
 type DraftRow = {
   id: string;
@@ -56,14 +61,57 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const name = String(body.name ?? "未命名智能体").trim() || "未命名智能体";
 
+  const providerId =
+    typeof body.provider_id === "string" && body.provider_id.length > 0
+      ? body.provider_id
+      : null;
+  const builderConfig: Record<string, unknown> =
+    body.builder_config && typeof body.builder_config === "object"
+      ? (body.builder_config as Record<string, unknown>)
+      : {};
+  const kbIdsRaw = builderConfig.knowledge_base_ids;
+  const kbIds: string[] = Array.isArray(kbIdsRaw)
+    ? (kbIdsRaw as unknown[]).filter((x): x is string => typeof x === "string" && x.length > 0)
+    : [];
+
+  // 5.30up · R1 §2 · 草稿引用资源 RBAC 校验（硬阻断口径）
+  //   POST/PATCH 时入参 provider_id + KB ids 全部 canReadRow，任一不可见 → 422
+  //   防 org_admin 在草稿层塞别 org 资源 id 绕过 publish 校验
+  if (providerId) {
+    const { data: prov } = await db
+      .from("model_providers")
+      .select("id, tenant_code")
+      .eq("id", providerId)
+      .maybeSingle();
+    if (!prov) return apiError("引用的供应商不存在", "VALIDATION_ERROR");
+    if (!canReadRow(admin, prov as { tenant_code: string | null })) {
+      return apiError("引用的供应商不存在或无权访问", "VALIDATION_ERROR");
+    }
+  }
+  if (kbIds.length > 0) {
+    const { data: kbRows } = await db
+      .from("knowledge_bases")
+      .select("id, tenant_code")
+      .in("id", kbIds);
+    const rows = (kbRows ?? []) as { id: string; tenant_code: string | null }[];
+    const visibleIds = new Set(rows.filter((r) => canReadRow(admin, r)).map((r) => r.id));
+    const invisible = kbIds.filter((id) => !visibleIds.has(id));
+    if (invisible.length > 0) {
+      return apiError(
+        `引用的知识库${invisible.length} 个不存在或无权访问（${invisible.slice(0, 3).join("、")}${invisible.length > 3 ? "…" : ""}）`,
+        "VALIDATION_ERROR",
+      );
+    }
+  }
+
   const payload = {
     name,
     description: String(body.description ?? ""),
     category_ids: Array.isArray(body.category_ids) ? body.category_ids : [],
-    provider_id: typeof body.provider_id === "string" ? body.provider_id : null,
+    provider_id: providerId,
     agent_type: body.agent_type === "external" ? "external" : "chat",
     external_url: String(body.external_url ?? ""),
-    builder_config: body.builder_config && typeof body.builder_config === "object" ? body.builder_config : {},
+    builder_config: builderConfig,
     model_params: body.model_params && typeof body.model_params === "object" ? body.model_params : {},
     visibility_config:
       body.visibility_config && typeof body.visibility_config === "object"

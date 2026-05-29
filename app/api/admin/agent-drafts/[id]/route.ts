@@ -3,9 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { canReadRow } from "@/lib/scoped-access";
 
 // 5.14up PR-B · 智能体草稿详情 / 保存 / 删除
 // 权限：super_admin + system_admin 可所有；org_admin 不可
+//
+// 5.30up · R1 §2 草稿链路 RBAC 收口：
+//   PATCH 时若入参带 provider_id / builder_config.knowledge_base_ids，全部 canReadRow，
+//   任一不可见 → 422（硬阻断，与 POST 同口径）
 
 export async function GET(
   _req: NextRequest,
@@ -65,6 +70,41 @@ export async function PATCH(
   if (typeof body.external_url === "string") patch.external_url = body.external_url;
   if (body.builder_config && typeof body.builder_config === "object") {
     patch.builder_config = body.builder_config;
+  }
+
+  // 5.30up · R1 §2 · 草稿引用资源 RBAC 校验（硬阻断口径，与 POST 同）
+  //   仅当 patch 实际带 provider_id / builder_config 时才校验，避免无谓 DB 查询
+  if (typeof patch.provider_id === "string" && patch.provider_id) {
+    const { data: prov } = await db
+      .from("model_providers")
+      .select("id, tenant_code")
+      .eq("id", patch.provider_id as string)
+      .maybeSingle();
+    if (!prov) return apiError("引用的供应商不存在", "VALIDATION_ERROR");
+    if (!canReadRow(admin, prov as { tenant_code: string | null })) {
+      return apiError("引用的供应商不存在或无权访问", "VALIDATION_ERROR");
+    }
+  }
+  if (patch.builder_config && typeof patch.builder_config === "object") {
+    const kbIdsRaw = (patch.builder_config as Record<string, unknown>).knowledge_base_ids;
+    const kbIds: string[] = Array.isArray(kbIdsRaw)
+      ? (kbIdsRaw as unknown[]).filter((x): x is string => typeof x === "string" && x.length > 0)
+      : [];
+    if (kbIds.length > 0) {
+      const { data: kbRows } = await db
+        .from("knowledge_bases")
+        .select("id, tenant_code")
+        .in("id", kbIds);
+      const rows = (kbRows ?? []) as { id: string; tenant_code: string | null }[];
+      const visibleIds = new Set(rows.filter((r) => canReadRow(admin, r)).map((r) => r.id));
+      const invisible = kbIds.filter((kid) => !visibleIds.has(kid));
+      if (invisible.length > 0) {
+        return apiError(
+          `引用的知识库${invisible.length} 个不存在或无权访问（${invisible.slice(0, 3).join("、")}${invisible.length > 3 ? "…" : ""}）`,
+          "VALIDATION_ERROR",
+        );
+      }
+    }
   }
   if (body.model_params && typeof body.model_params === "object") {
     patch.model_params = body.model_params;

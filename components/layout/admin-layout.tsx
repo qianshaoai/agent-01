@@ -33,8 +33,12 @@ type AdminRole = "super_admin" | "system_admin" | "org_admin";
 
 const ALL_ROLES: AdminRole[] = ["super_admin", "system_admin", "org_admin"];
 const SUPER_ONLY: AdminRole[] = ["super_admin"];
-// 5.14up PR-A · 模型接入：super_admin 全部操作；system_admin 仅查看 + 测试连通性
-const SS_ROLES: AdminRole[] = ["super_admin", "system_admin"];
+// 5.30up · org_admin 也能进入但按 ownership 看子集（API 管理 / 知识库管理 等）
+// 未来若加新"按 ownership 过滤"的资源页面，复用此常量；区分语义于 ALL_ROLES（全员全见）
+// 历史 SS_ROLES（仅 super + system）已废弃 —— 5.14up 的 API 管理 + 5.19up 的知识库
+//   原本独占 super + system，5.30up 放权 org_admin 后两个菜单都切到 RBAC_SCOPED_ROLES，
+//   无其它消费方，按 lint 要求删除以保持代码清洁。
+const RBAC_SCOPED_ROLES: AdminRole[] = ["super_admin", "system_admin", "org_admin"];
 
 const navGroups: NavGroup[] = [
   {
@@ -54,9 +58,9 @@ const navGroups: NavGroup[] = [
   {
     label: "内容",
     items: [
-      { href: "/admin/model-providers", label: "API 管理",   icon: Plug,      allowedRoles: SS_ROLES },
+      { href: "/admin/model-providers", label: "API 管理",   icon: Plug,      allowedRoles: RBAC_SCOPED_ROLES },
       { href: "/admin/agent-builder",   label: "智能体搭建", icon: Hammer,    allowedRoles: ALL_ROLES },
-      { href: "/admin/knowledge-bases", label: "知识库管理", icon: BookOpen,  allowedRoles: SS_ROLES },
+      { href: "/admin/knowledge-bases", label: "知识库管理", icon: BookOpen,  allowedRoles: RBAC_SCOPED_ROLES },
       { href: "/admin/agents",          label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES },
       { href: "/admin/workflows",       label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES },
       { href: "/admin/notices",         label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES },

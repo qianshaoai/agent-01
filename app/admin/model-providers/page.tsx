@@ -37,9 +37,23 @@ type Provider = {
   default_params: Record<string, unknown>;
   enabled: boolean;
   has_api_key: boolean;
+  // 5.30up · 组织归属（NULL = 平台公共；非 NULL = 某 org 建）
+  tenant_code: string | null;
   created_at: string;
   updated_at: string;
 };
+
+// 5.30up · 当前管理员信息（用于前端 ownership 徽章 / 按钮灰显 / embedding 隐藏新增）
+type MeInfo = { role: "super_admin" | "system_admin" | "org_admin"; tenantCode: string | null };
+
+// 5.30up · 计算行的归属类别 —— platform / own / other
+type Ownership = "platform" | "own" | "other";
+function ownershipOf(p: Provider, me: MeInfo | null): Ownership {
+  if (p.tenant_code === null) return "platform";
+  if (me?.role === "org_admin" && me.tenantCode && p.tenant_code === me.tenantCode) return "own";
+  if ((me?.role === "super_admin" || me?.role === "system_admin")) return "own"; // super/system 视所有 owned 为可管
+  return "other";
+}
 
 const CATEGORY_LABEL: Record<ApiCategory, string> = {
   model: "大模型 API",
@@ -67,6 +81,13 @@ type FormState = {
   default_model: string;
   default_params_json: string;
   enabled: boolean;
+  /**
+   * 5.30up · 归属组织。提交时映射：
+   *   - "" → null（平台公共）
+   *   - "ORG-X" → "ORG-X"（赋给某 org）
+   *   仅 super/system 在弹窗里能改；org_admin 强制本组织（后端会再 sanitize）
+   */
+  tenant_code: string;
 };
 
 // 按 category 造一份空表单：默认取该类首个 preset 的 endpoint / 模型 / 参数
@@ -78,7 +99,7 @@ function emptyFormFor(category: ApiCategory): FormState {
     return {
       provider_code: "", name: "", preset_code: "", platform: "openai", category,
       api_endpoint: "", api_key: "", default_model: "",
-      default_params_json: "{}", enabled: true,
+      default_params_json: "{}", enabled: true, tenant_code: "",
     };
   }
   return formFromPreset(first, { provider_code: "", name: "", api_key: "", enabled: true });
@@ -101,6 +122,7 @@ function formFromPreset(
     default_params_json: preset.defaultParams
       ? JSON.stringify(preset.defaultParams, null, 2)
       : "{}",
+    tenant_code: "", // 默认平台公共（NULL）；super/system 可在表单里改
   };
 }
 
@@ -112,6 +134,10 @@ export default function ModelProvidersPage() {
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   // 5.15up · 大模型 API / 智能体 API 两 tab
   const [activeTab, setActiveTab] = useState<ApiCategory>("model");
+
+  // 5.30up · 当前管理员 + 组织列表（弹窗"归属组织"下拉）
+  const [me, setMe] = useState<MeInfo | null>(null);
+  const [tenants, setTenants] = useState<{ code: string; name: string }[]>([]);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -151,6 +177,26 @@ export default function ModelProvidersPage() {
 
   useEffect(() => { loadList(); }, [loadList]);
 
+  // 5.30up · 拉当前 admin 角色（弹窗 UI + 列表按钮灰显都依赖）
+  useEffect(() => {
+    fetch("/api/admin/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (j?.role) setMe({ role: j.role, tenantCode: j.tenantCode ?? null }); })
+      .catch(() => { /* 后端会再 sanitize；前端 me 缺失只影响 UX 不影响安全 */ });
+  }, []);
+
+  // 5.30up · super/system 才需要"归属组织"下拉；org_admin 强制本组织所以不拉
+  useEffect(() => {
+    if (!me || me.role === "org_admin") return;
+    fetch("/api/admin/tenants?page=1&pageSize=100", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        const arr = Array.isArray(j) ? j : (j?.data ?? []);
+        setTenants((arr as { code: string; name: string }[]).filter((t) => t.code));
+      })
+      .catch(() => { /* 拉不到 → 弹窗只能选"平台公共"，不影响主流程 */ });
+  }, [me]);
+
   function openCreate() {
     setEditingId(null);
     setForm(emptyFormFor(activeTab));
@@ -177,6 +223,8 @@ export default function ModelProvidersPage() {
       default_model: p.default_model || inferred.defaultModel,
       default_params_json: JSON.stringify(p.default_params ?? {}, null, 2),
       enabled: p.enabled,
+      // 5.30up · 读出当前归属（NULL → ""）
+      tenant_code: p.tenant_code ?? "",
     });
     setEditorOpen(true);
   }
@@ -209,6 +257,11 @@ export default function ModelProvidersPage() {
         };
         // api_key 仅在非空时提交（编辑场景留空 = 不改）
         if (form.api_key) payload.api_key = form.api_key;
+        // 5.30up · super/system 才能在前端改 tenant_code；org_admin 后端会 sanitize 剥离
+        //   "" → null（平台公共）；非空 → 字符串
+        if (me?.role === "super_admin" || me?.role === "system_admin") {
+          payload.tenant_code = form.tenant_code === "" ? null : form.tenant_code;
+        }
 
         let res: Response;
         if (editingId) {
@@ -318,9 +371,12 @@ export default function ModelProvidersPage() {
           title="API 管理"
           subtitle="集中管理大模型 / 智能体平台的接入地址、API Key、默认参数"
           actions={
-            <Button onClick={openCreate} className="flex items-center gap-1.5">
-              <Plus size={16} /> 新增{CATEGORY_LABEL[activeTab]}
-            </Button>
+            // 5.30up · embedding tab 对 org_admin 隐藏新增按钮（基建仅平台可建）
+            !(activeTab === "embedding" && me?.role === "org_admin") && (
+              <Button onClick={openCreate} className="flex items-center gap-1.5">
+                <Plus size={16} /> 新增{CATEGORY_LABEL[activeTab]}
+              </Button>
+            )
           }
         />
 
@@ -367,6 +423,7 @@ export default function ModelProvidersPage() {
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">名称 / 编号</th>
                   <th className="px-4 py-3 text-left font-medium">厂商</th>
+                  <th className="px-4 py-3 text-left font-medium">归属</th>
                   <th className="px-4 py-3 text-left font-medium">API Key</th>
                   <th className="px-4 py-3 text-left font-medium">状态</th>
                   <th className="px-4 py-3 text-left font-medium">操作</th>
@@ -375,6 +432,9 @@ export default function ModelProvidersPage() {
               <tbody className="divide-y divide-gray-100">
                 {visible.map((p) => {
                   const tr = testResults[p.id];
+                  // 5.30up · 归属类别决定按钮是否灰显（"other" = 别 org 资源、仅可见不可改）
+                  const ownership = ownershipOf(p, me);
+                  const canEdit = ownership !== "other";
                   return (
                     <tr key={p.id} className={p.enabled ? "" : "opacity-50"}>
                       <td className="px-4 py-3">
@@ -385,6 +445,25 @@ export default function ModelProvidersPage() {
                         {/* 5.27up · 按 endpoint 反查厂商预设，显示真实厂商名（DeepSeek/Kimi/通义...）
                             而不是统一显示 "OpenAI"（多家厂商共享 platform="openai"）*/}
                         {inferPresetFromExisting(p.platform, p.api_endpoint, catOf(p.category)).label.split("（")[0]}
+                      </td>
+                      {/* 5.30up · 归属徽章列 */}
+                      <td className="px-4 py-3">
+                        {ownership === "platform" ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700">
+                            平台公共
+                          </span>
+                        ) : ownership === "own" ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-green-50 text-green-700">
+                            {me?.role === "org_admin" ? "本组织" : (p.tenant_code ?? "—")}
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-500"
+                            title={`归属组织：${p.tenant_code}`}
+                          >
+                            其他组织
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         {p.has_api_key ? (
@@ -417,13 +496,15 @@ export default function ModelProvidersPage() {
                         <div className="flex items-center gap-2">
                           {/* 「测试」是发一条真实对话验证连通，只对大模型 API 有意义；
                               智能体 API（Coze 等）需 bot_id 才能对话，bot_id 在智能体上、
-                              不在凭证里，无法在此层测试 —— 故仅大模型 API 显示「测试」 */}
+                              不在凭证里，无法在此层测试 —— 故仅大模型 API 显示「测试」
+                              5.30up · 测试白名单后端含 system_admin，但 org_admin 仅可测自己组织
+                              的（canWriteRow），所以"other"归属灰显（与编辑/删除口径一致） */}
                           {activeTab === "model" && (
                             <button
                               onClick={() => testConnect(p)}
-                              disabled={!p.enabled || !p.has_api_key || testingId === p.id}
+                              disabled={!p.enabled || !p.has_api_key || testingId === p.id || !canEdit}
                               className="text-xs text-[#002FA7] hover:underline disabled:text-gray-300 disabled:no-underline disabled:cursor-not-allowed inline-flex items-center gap-1"
-                              title="测试连通性"
+                              title={canEdit ? "测试连通性" : "其他组织资源，无权测试"}
                             >
                               {testingId === p.id
                                 ? <Loader2 size={12} className="animate-spin" />
@@ -433,28 +514,35 @@ export default function ModelProvidersPage() {
                           )}
                           <button
                             onClick={() => openEdit(p)}
-                            className="text-xs text-gray-600 hover:text-[#002FA7] inline-flex items-center gap-1"
+                            disabled={!canEdit}
+                            className="text-xs text-gray-600 hover:text-[#002FA7] disabled:text-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                            title={canEdit ? "" : "其他组织资源，仅可见不可编辑"}
                           >
                             <Edit size={12} /> 编辑
                           </button>
                           <button
                             onClick={() => toggleEnabled(p)}
-                            className="text-xs text-gray-600 hover:text-amber-600"
+                            disabled={!canEdit}
+                            className="text-xs text-gray-600 hover:text-amber-600 disabled:text-gray-300 disabled:cursor-not-allowed"
+                            title={canEdit ? "" : "其他组织资源，无权操作"}
                           >
                             {p.enabled ? "禁用" : "启用"}
                           </button>
                           {p.has_api_key && (
                             <button
                               onClick={() => clearKey(p)}
-                              className="text-xs text-gray-500 hover:text-orange-600"
-                              title="清空 API Key"
+                              disabled={!canEdit}
+                              className="text-xs text-gray-500 hover:text-orange-600 disabled:text-gray-300 disabled:cursor-not-allowed"
+                              title={canEdit ? "清空 API Key" : "其他组织资源，无权操作"}
                             >
                               清空Key
                             </button>
                           )}
                           <button
                             onClick={() => remove(p)}
-                            className="text-xs text-gray-500 hover:text-red-600 inline-flex items-center gap-1"
+                            disabled={!canEdit}
+                            className="text-xs text-gray-500 hover:text-red-600 disabled:text-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                            title={canEdit ? "" : "其他组织资源，无权删除"}
                           >
                             <Trash2 size={12} /> 删除
                           </button>
@@ -564,6 +652,32 @@ export default function ModelProvidersPage() {
                   ) : null;
                 })()}
               </div>
+
+              {/* 5.30up · 归属组织下拉：仅 super/system 可见。
+                  - 平台公共（""）/ 各 tenant
+                  - embedding category 强制平台公共（与后端 R2 §3 同口径），下拉禁选其他
+                  - org_admin 隐藏整段，后端强制本组织 */}
+              {(me?.role === "super_admin" || me?.role === "system_admin") && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-gray-500">
+                    归属组织 {form.category === "embedding" && <span className="text-gray-400">（Embedding 必须平台公共）</span>}
+                  </label>
+                  <select
+                    value={form.tenant_code}
+                    onChange={(e) => setForm({ ...form, tenant_code: e.target.value })}
+                    disabled={form.category === "embedding"}
+                    className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] disabled:bg-gray-50 disabled:text-gray-500"
+                  >
+                    <option value="">平台公共（全员可见 / 仅 super 可改）</option>
+                    {tenants.map((t) => (
+                      <option key={t.code} value={t.code}>{t.name}（{t.code}）</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-400">
+                    赋给某组织后，该组织管理员可见可改；编辑时改归属属于「转让」，后端会检查是否被引用。
+                  </p>
+                </div>
+              )}
 
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs text-gray-500">接口地址 *</label>

@@ -5,9 +5,14 @@ import { db } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { streamChat, ChatMessage } from "@/lib/adapters";
 import { writeAuditLog } from "@/lib/audit";
+import { canReadRow, canWriteRow, requireWriteAccess } from "@/lib/scoped-access";
 
 // 5.14up PR-A · 模型供应商连通性测试
-// 权限：super_admin + system_admin 都可测试（不返回 key 明文）
+// 权限：
+//   - 5.30up · A 半 RBAC：test 写白名单含 system_admin（与 POST/PATCH/DELETE 不同口径，
+//     test 不修改资源仅是只读探针，对 system_admin 沿用 5.14up 现状的"仅查/测"权限）
+//   - org_admin 仅可测自己 org 的（canWriteRow 判归属）
+//   不返回 key 明文。
 //
 // 行为：用最小 messages 发一次流式对话，限制 10 秒超时，
 // 返回 { success, latency_ms, sample_text? , error? }，错误信息脱敏（不带 Authorization / key）
@@ -33,6 +38,8 @@ type ProviderRow = {
   default_model: string;
   default_params: Record<string, unknown>;
   enabled: boolean;
+  // 5.30up · 归属字段（canReadRow / canWriteRow 用）
+  tenant_code: string | null;
 };
 
 function maskError(msg: string): string {
@@ -50,9 +57,9 @@ export async function POST(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权测试模型供应商", "FORBIDDEN");
-  }
+  // 5.30up · R2 §1 双闸：test 白名单含 system_admin（仅查/测口径沿用）
+  const gate = requireWriteAccess(admin, ["super_admin", "system_admin", "org_admin"]);
+  if (gate) return gate;
 
   const { id } = await params;
   const { data: row, error: loadError } = await db
@@ -67,6 +74,13 @@ export async function POST(
   }
   const provider = row as (ProviderRow & { category?: string }) | null;
   if (!provider) return apiError("供应商不存在", "NOT_FOUND");
+
+  // 5.30up · 归属判定：org_admin 不可见 → 404 屏蔽；可见但非 own → 403（仅 own 可测）
+  if (!canReadRow(admin, provider)) return apiError("供应商不存在", "NOT_FOUND");
+  if (!canWriteRow(admin, provider)) {
+    return apiError("无权测试该供应商（仅可测自己组织的）", "FORBIDDEN");
+  }
+
   if (!provider.enabled) return apiError("供应商已禁用，无法测试", "VALIDATION_ERROR");
   if (!provider.api_key_enc) return apiError("供应商未配置 API Key", "VALIDATION_ERROR");
   // 5.15up · 智能体 API 是平台凭证，对话需 bot_id（在智能体上、不在凭证里），

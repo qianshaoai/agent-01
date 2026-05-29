@@ -8,9 +8,15 @@ import { writeAuditLog } from "@/lib/audit";
 import { retrieveKbChunks } from "@/lib/kb/retrieve";
 import { buildKbStrictAnswerPrompt, buildKbUnavailablePrompt } from "@/lib/kb/prompt";
 import { isMetaOrChitchatMessage } from "@/lib/kb/intent";
+import { canReadRow } from "@/lib/scoped-access";
 
 // 5.14up PR-C · 草稿测试聊天（SSE 流式，不入 messages 表，不扣额度）
 // 权限：super_admin + system_admin 可（system_admin 看不到 key 明文，调用通过后端代理）
+//
+// 5.30up · R1 §2 草稿链路 RBAC 收口（差异化口径）：
+//   - provider canReadRow 失败 → 403（无 provider 无法对话，硬阻断）
+//   - KB ids 中不可见的 → 静默从 kbIds 过滤（不阻断对话；与 publish 的硬阻断不同
+//     因为测试聊天是 admin 试用、KB 不可见时降级为"无 KB 的对话"比直接拒绝体验好）
 
 const FIRST_BYTE_TIMEOUT_MS = 30_000;
 
@@ -31,6 +37,8 @@ type ProviderRow = {
   default_model: string;
   default_params: Record<string, unknown>;
   enabled: boolean;
+  // 5.30up · 归属字段（canReadRow 判定用）
+  tenant_code: string | null;
 };
 
 function maskError(msg: string): string {
@@ -90,6 +98,10 @@ export async function POST(
   }
   const provider = providerRow as ProviderRow | null;
   if (!provider) return apiError("绑定的模型供应商已删除", "VALIDATION_ERROR");
+  // 5.30up · R1 §2 · provider 不可见 → 403 硬阻断（无 provider 无法对话）
+  if (!canReadRow(admin, provider)) {
+    return apiError("无权使用该模型供应商（请重新选择）", "FORBIDDEN");
+  }
   if (!provider.enabled) return apiError("绑定的模型供应商已禁用", "VALIDATION_ERROR");
   if (!provider.api_key_enc) return apiError("绑定的模型供应商未配置 API Key", "VALIDATION_ERROR");
 
@@ -128,9 +140,26 @@ export async function POST(
   const skipKbForThisTurn = isMetaOrChitchatMessage(message, history.length);
   if ((provider.platform === "openai" || provider.platform === "zhipu") && !skipKbForThisTurn) {
     const draftKbField = (builderConfig as Record<string, unknown>).knowledge_base_ids;
-    const kbIds = Array.isArray(draftKbField)
+    const rawKbIds = Array.isArray(draftKbField)
       ? [...new Set((draftKbField as unknown[]).filter((x): x is string => typeof x === "string" && !!x))]
       : [];
+    // 5.30up · R1 §2 · KB ids 中不可见的静默过滤（不阻断对话）
+    let kbIds: string[] = rawKbIds;
+    if (rawKbIds.length > 0) {
+      const { data: kbRows } = await db
+        .from("knowledge_bases")
+        .select("id, tenant_code")
+        .in("id", rawKbIds);
+      const rows = (kbRows ?? []) as { id: string; tenant_code: string | null }[];
+      const visibleSet = new Set(rows.filter((r) => canReadRow(admin, r)).map((r) => r.id));
+      kbIds = rawKbIds.filter((kid) => visibleSet.has(kid));
+      if (kbIds.length < rawKbIds.length) {
+        console.info(
+          `[draft test-chat] KB 过滤：${rawKbIds.length} 个引用中 ${kbIds.length} 个可见，` +
+          `${rawKbIds.length - kbIds.length} 个不可见已剥离（admin=${admin.adminId}, draft=${draft.id}）`,
+        );
+      }
+    }
     if (kbIds.length > 0) {
       try {
         const chunks = await retrieveKbChunks(kbIds, message);

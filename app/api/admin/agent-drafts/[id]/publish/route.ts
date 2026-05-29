@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { canReadRow } from "@/lib/scoped-access";
 
 // 5.14up PR-C · 把草稿发布到正式 agents 表
 //
@@ -37,6 +38,8 @@ type ProviderRow = {
   enabled: boolean;
   default_model: string;
   default_params: Record<string, unknown>;
+  // 5.30up · 归属字段（R1 §2 publish canReadRow 校验用）
+  tenant_code: string | null;
 };
 
 function isZhipuFlashModel(model: unknown): boolean {
@@ -161,13 +164,28 @@ export async function POST(
     } else {
       const { data: kbRows, error: kbErr } = await db
         .from("knowledge_bases")
-        .select("id, name, status")
+        .select("id, name, status, tenant_code")
         .in("id", kbIds);
       if (kbErr) {
         console.error("[draft publish validate knowledge_bases]", kbErr);
         return apiError("校验知识库失败，请重试：" + kbErr.message, "INTERNAL_ERROR");
       }
-      const rows = (kbRows ?? []) as { id: string; name: string; status: "active" | "disabled" }[];
+      const rows = (kbRows ?? []) as {
+        id: string;
+        name: string;
+        status: "active" | "disabled";
+        tenant_code: string | null;
+      }[];
+      // 5.30up · R1 §2 · publish 时 KB canReadRow 失败 → 403 硬阻断
+      //   org_admin 不能发布引用别 org KB 的 agent；与 test-chat 的静默过滤不同
+      const invisible = rows.filter((r) => !canReadRow(admin, r));
+      if (invisible.length > 0) {
+        const names = invisible.map((r) => `「${r.name}」`).join("、");
+        return apiError(
+          `无权使用知识库${names}，请重新选择或解除绑定后再发布`,
+          "FORBIDDEN",
+        );
+      }
       const disabled = rows.filter((r) => r.status === "disabled");
       if (disabled.length > 0) {
         const names = disabled.map((r) => `「${r.name}」`).join("、");
@@ -195,6 +213,10 @@ export async function POST(
     }
     provider = pRow as ProviderRow | null;
     if (!provider) return apiError("绑定的模型供应商已删除", "VALIDATION_ERROR");
+    // 5.30up · R1 §2 · publish 时 provider canReadRow 失败 → 403（org_admin 不能发布引用别 org provider 的 agent）
+    if (!canReadRow(admin, provider)) {
+      return apiError("无权使用该模型供应商，请重新选择", "FORBIDDEN");
+    }
     if (!provider.enabled) {
       return apiError("绑定的模型供应商已禁用，请先启用或更换", "VALIDATION_ERROR");
     }
