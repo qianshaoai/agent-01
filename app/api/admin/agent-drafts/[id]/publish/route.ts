@@ -204,7 +204,9 @@ export async function POST(
   if (draft.agent_type === "chat" && draft.provider_id) {
     const { data: pRow, error: pErr } = await db
       .from("model_providers")
-      .select("id, platform, api_endpoint, enabled, default_model, default_params")
+      // 5.30up R4 #1 · 必须 select tenant_code，否则下方 canReadRow 拿到 undefined
+      //   导致 org_admin 即使用本组织 / 平台公共 provider 也被误判 403
+      .select("id, platform, api_endpoint, enabled, default_model, default_params, tenant_code")
       .eq("id", draft.provider_id)
       .maybeSingle();
     if (pErr) {

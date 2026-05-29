@@ -54,8 +54,26 @@ export async function POST(
   }
   if (!src) return apiError("源草稿不存在", "NOT_FOUND");
   // 5.19up · org_admin 只能复制自己创建的草稿
-  if (admin.role === "org_admin" && (src as { created_by?: string }).created_by !== admin.adminId) {
-    return apiError("无权复制该草稿", "FORBIDDEN");
+  // 5.30up R4 #2 · 放宽：org_admin 也可复制 super/system 创建的草稿（视为"平台模板/demo"）
+  //   方案 R1 §2 软降级语义要求 —— 复制 demo agent 是高频路径；不可见的 provider/KB 已由
+  //   下方剥离机制托底。但仍禁止复制别 org_admin 的草稿（隐私 + 越权）。
+  if (admin.role === "org_admin") {
+    const srcCreatedBy = (src as { created_by?: string }).created_by;
+    if (srcCreatedBy !== admin.adminId) {
+      // 查 created_by 的角色：先 admins 表，再 users 表（5.28up · 后台账号可能在 users 表）
+      let creatorRole: string | null = null;
+      const { data: a1 } = await db
+        .from("admins").select("role").eq("id", srcCreatedBy).maybeSingle();
+      if (a1?.role) creatorRole = a1.role;
+      else {
+        const { data: u1 } = await db
+          .from("users").select("role").eq("id", srcCreatedBy).maybeSingle();
+        if (u1?.role) creatorRole = u1.role;
+      }
+      if (creatorRole !== "super_admin" && creatorRole !== "system_admin") {
+        return apiError("无权复制该草稿", "FORBIDDEN");
+      }
+    }
   }
 
   const source = src as DraftRow;

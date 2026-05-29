@@ -46,13 +46,45 @@ type Provider = {
 // 5.30up · 当前管理员信息（用于前端 ownership 徽章 / 按钮灰显 / embedding 隐藏新增）
 type MeInfo = { role: "super_admin" | "system_admin" | "org_admin"; tenantCode: string | null };
 
-// 5.30up · 计算行的归属类别 —— platform / own / other
+// 5.30up · 行归属类别（纯描述，不掺杂"我能不能改"）—— platform / own / other
 type Ownership = "platform" | "own" | "other";
 function ownershipOf(p: Provider, me: MeInfo | null): Ownership {
   if (p.tenant_code === null) return "platform";
   if (me?.role === "org_admin" && me.tenantCode && p.tenant_code === me.tenantCode) return "own";
-  if ((me?.role === "super_admin" || me?.role === "system_admin")) return "own"; // super/system 视所有 owned 为可管
+  // super/system 视角下也用 "other" 表示"某 org 的非平台公共"（具体能不能改由 canWrite 判定）
   return "other";
+}
+
+/**
+ * 5.30up R4 #3 · 写权限判定（与后端 API 写白名单口径同步）
+ *   - super_admin → 全可写
+ *   - system_admin → API 管理写全部禁（后端 requireWriteAccess 排了 system_admin）
+ *   - org_admin → 仅 own（tenant_code === 自己 tenantCode）
+ *
+ * 不混淆 ownershipOf —— 那是"资源归属"的描述；这个是"我能改吗"的判断。
+ */
+function canWriteProvider(p: Provider, me: MeInfo | null): boolean {
+  if (!me) return false;
+  if (me.role === "super_admin") return true;
+  if (me.role === "system_admin") return false; // API 写排 system_admin
+  if (me.role === "org_admin") {
+    return !!me.tenantCode && p.tenant_code === me.tenantCode;
+  }
+  return false;
+}
+
+/**
+ * 5.30up R4 #3 · 测试权限（与后端 test 路由白名单同步：含 system_admin）
+ *   - super/system → 可测任何
+ *   - org_admin → 仅 own
+ */
+function canTestProvider(p: Provider, me: MeInfo | null): boolean {
+  if (!me) return false;
+  if (me.role === "super_admin" || me.role === "system_admin") return true;
+  if (me.role === "org_admin") {
+    return !!me.tenantCode && p.tenant_code === me.tenantCode;
+  }
+  return false;
 }
 
 const CATEGORY_LABEL: Record<ApiCategory, string> = {
@@ -432,9 +464,10 @@ export default function ModelProvidersPage() {
               <tbody className="divide-y divide-gray-100">
                 {visible.map((p) => {
                   const tr = testResults[p.id];
-                  // 5.30up · 归属类别决定按钮是否灰显（"other" = 别 org 资源、仅可见不可改）
+                  // 5.30up · 归属徽章用 ownershipOf，按钮可写 / 可测分开判定（R4 #3）
                   const ownership = ownershipOf(p, me);
-                  const canEdit = ownership !== "other";
+                  const canWrite = canWriteProvider(p, me);
+                  const canTest = canTestProvider(p, me);
                   return (
                     <tr key={p.id} className={p.enabled ? "" : "opacity-50"}>
                       <td className="px-4 py-3">
@@ -497,14 +530,18 @@ export default function ModelProvidersPage() {
                           {/* 「测试」是发一条真实对话验证连通，只对大模型 API 有意义；
                               智能体 API（Coze 等）需 bot_id 才能对话，bot_id 在智能体上、
                               不在凭证里，无法在此层测试 —— 故仅大模型 API 显示「测试」
-                              5.30up · 测试白名单后端含 system_admin，但 org_admin 仅可测自己组织
-                              的（canWriteRow），所以"other"归属灰显（与编辑/删除口径一致） */}
+                              5.30up R4 #3 · 测试白名单后端含 system_admin，但 org_admin 仅可测 own；
+                              用 canTest 单独判（区别于其它写按钮的 canWrite） */}
                           {activeTab === "model" && (
                             <button
                               onClick={() => testConnect(p)}
-                              disabled={!p.enabled || !p.has_api_key || testingId === p.id || !canEdit}
+                              disabled={!p.enabled || !p.has_api_key || testingId === p.id || !canTest}
                               className="text-xs text-[#002FA7] hover:underline disabled:text-gray-300 disabled:no-underline disabled:cursor-not-allowed inline-flex items-center gap-1"
-                              title={canEdit ? "测试连通性" : "其他组织资源，无权测试"}
+                              title={
+                                canTest ? "测试连通性"
+                                : ownership === "other" ? "非本组织资源，无权测试"
+                                : "无权测试"
+                              }
                             >
                               {testingId === p.id
                                 ? <Loader2 size={12} className="animate-spin" />
@@ -512,37 +549,53 @@ export default function ModelProvidersPage() {
                               测试
                             </button>
                           )}
+                          {/* 编辑 / 启停 / 清空Key / 删除 都按 canWrite 判（API 写白名单后端排 system_admin） */}
                           <button
                             onClick={() => openEdit(p)}
-                            disabled={!canEdit}
+                            disabled={!canWrite}
                             className="text-xs text-gray-600 hover:text-[#002FA7] disabled:text-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1"
-                            title={canEdit ? "" : "其他组织资源，仅可见不可编辑"}
+                            title={
+                              canWrite ? ""
+                              : me?.role === "system_admin" ? "系统管理员仅可查看 / 测试，不可编辑 API 配置"
+                              : ownership === "platform" ? "平台公共资源，仅超级管理员可改"
+                              : "非本组织资源，仅可见不可编辑"
+                            }
                           >
                             <Edit size={12} /> 编辑
                           </button>
                           <button
                             onClick={() => toggleEnabled(p)}
-                            disabled={!canEdit}
+                            disabled={!canWrite}
                             className="text-xs text-gray-600 hover:text-amber-600 disabled:text-gray-300 disabled:cursor-not-allowed"
-                            title={canEdit ? "" : "其他组织资源，无权操作"}
+                            title={
+                              canWrite ? ""
+                              : me?.role === "system_admin" ? "系统管理员无权启停"
+                              : ownership === "platform" ? "平台公共资源，仅超级管理员可改"
+                              : "非本组织资源，无权操作"
+                            }
                           >
                             {p.enabled ? "禁用" : "启用"}
                           </button>
                           {p.has_api_key && (
                             <button
                               onClick={() => clearKey(p)}
-                              disabled={!canEdit}
+                              disabled={!canWrite}
                               className="text-xs text-gray-500 hover:text-orange-600 disabled:text-gray-300 disabled:cursor-not-allowed"
-                              title={canEdit ? "清空 API Key" : "其他组织资源，无权操作"}
+                              title={canWrite ? "清空 API Key" : "无权操作"}
                             >
                               清空Key
                             </button>
                           )}
                           <button
                             onClick={() => remove(p)}
-                            disabled={!canEdit}
+                            disabled={!canWrite}
                             className="text-xs text-gray-500 hover:text-red-600 disabled:text-gray-300 disabled:cursor-not-allowed inline-flex items-center gap-1"
-                            title={canEdit ? "" : "其他组织资源，无权删除"}
+                            title={
+                              canWrite ? ""
+                              : me?.role === "system_admin" ? "系统管理员无权删除"
+                              : ownership === "platform" ? "平台公共资源，仅超级管理员可删"
+                              : "非本组织资源，无权删除"
+                            }
                           >
                             <Trash2 size={12} /> 删除
                           </button>
