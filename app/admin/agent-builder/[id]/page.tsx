@@ -162,7 +162,7 @@ function buildModelOptions(providers: Provider[]): ModelOption[] {
             groupKey,
             groupLabel: baseLabel,
             optionValue: `${provider.id}::${m.value}`,
-            optionLabel: m.label,
+            optionLabel: stripModelDesc(m.label),
           })),
           {
             groupKey,
@@ -236,6 +236,19 @@ function composeValue(
     return `${providerId}::${provider.default_model}`;
   }
   return `${providerId}::__custom__`;
+}
+
+// 5.29up Phase 2.3 · 保存/发布前的模型字段校验
+//   - external 类型不校验（不依赖 provider 与 model）
+//   - chat 类型必须有 provider_id；model_params.model 可以选择具体模型 或 走自定义
+//   - custom 模式下 model 必须非空——否则上线 chat 会兜底 gpt-4o-mini，非 OpenAI
+//     兼容厂商必 404
+function validateModelBeforeSave(draft: Draft): string | null {
+  if (draft.agent_type !== "chat") return null;
+  if (!draft.provider_id) return "请先在「模型设置」选择模型";
+  const model = ((draft.model_params?.model as string) ?? "").trim();
+  if (!model) return "请填写模型名（或在「模型选择」里挑一个预设模型）";
+  return null;
 }
 
 // ─── 5.29up · 模型选择 popover ────────────────────────────────────────────
@@ -345,6 +358,110 @@ function ModelSelectPopover({
             ))
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 5.29up Phase 2 · 自定义模型名输入 + 探针 ────────────────────────────
+// 选了 ✏ 自定义模型名 时使用。admin 输入模型 ID 后点「测试」走 /api/admin/model-
+// providers/:id/test?model=xxx 真打一次上游接口，识别失败返回原始错误。
+// 注意：test endpoint 失败时返 HTTP 200 + { success: false, error }，所以前端
+// 必须读 data.success，不能只看 res.ok（小B 复审 R2 教训）。
+type ProbeStatus =
+  | { kind: "idle" }
+  | { kind: "running" }
+  | { kind: "ok"; latencyMs: number }
+  | { kind: "fail"; error: string };
+
+function CustomModelProbeRow({
+  providerId,
+  model,
+  onModelChange,
+  placeholder,
+}: {
+  providerId: string | null;
+  model: string;
+  onModelChange: (v: string) => void;
+  placeholder: string;
+}) {
+  const [status, setStatus] = useState<ProbeStatus>({ kind: "idle" });
+
+  async function probe() {
+    if (!providerId) {
+      setStatus({ kind: "fail", error: "请先选择供应商" });
+      return;
+    }
+    const name = model.trim();
+    if (!name) {
+      setStatus({ kind: "fail", error: "请先输入模型名" });
+      return;
+    }
+    setStatus({ kind: "running" });
+    try {
+      const res = await fetch(
+        `/api/admin/model-providers/${providerId}/test?model=${encodeURIComponent(name)}`,
+        { method: "POST" },
+      );
+      const data = await res.json().catch(() => ({}));
+      // R2 教训：endpoint 失败时返 HTTP 200 + success:false，必须读 data.success
+      if (!res.ok) {
+        setStatus({ kind: "fail", error: data?.error ?? `HTTP ${res.status}` });
+      } else if (!data?.success) {
+        setStatus({ kind: "fail", error: data?.error ?? "未知错误" });
+      } else {
+        setStatus({ kind: "ok", latencyMs: data?.latency_ms ?? 0 });
+      }
+    } catch (e) {
+      setStatus({ kind: "fail", error: e instanceof Error ? e.message : "网络错误" });
+    }
+  }
+
+  // model 改变时清掉旧结果，避免 admin 改了模型名但看到旧的 ✓
+  // React 19 的 react-hooks/set-state-in-effect 规则误报 —— 这里只是清重置探针结果，
+  // 不会 cascading rerender（status 是组件局部 state，没人依赖它再触发 effect）。
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setStatus({ kind: "idle" }); }, [model, providerId]);
+
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={model}
+          onChange={(e) => onModelChange(e.target.value)}
+          placeholder={placeholder}
+          className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
+        />
+        <button
+          type="button"
+          onClick={probe}
+          disabled={status.kind === "running" || !model.trim() || !providerId}
+          className="h-9 px-3 border border-[#002FA7]/30 rounded-[8px] text-xs font-medium text-[#002FA7] hover:bg-[#002FA7]/5 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0"
+        >
+          {status.kind === "running" ? (
+            <>
+              <Loader2 size={12} className="animate-spin" />
+              测试中…
+            </>
+          ) : "测试该模型"}
+        </button>
+      </div>
+      {status.kind === "ok" && (
+        <p className="text-[11px] text-green-600 flex items-center gap-1">
+          <Check size={11} />
+          连接成功（{status.latencyMs}ms）
+        </p>
+      )}
+      {status.kind === "fail" && (
+        <p className="text-[11px] text-red-600 leading-relaxed break-all">
+          ✗ {status.error}
+        </p>
+      )}
+      {status.kind === "idle" && (
+        <p className="text-[11px] text-gray-400">
+          点「测试该模型」会真打一次供应商接口验证 model id 是否被识别。
+        </p>
       )}
     </div>
   );
@@ -508,6 +625,16 @@ export default function AgentBuilderEditPage({
 
   async function save(opts?: { auto?: boolean }) {
     if (!draft) return;
+    // 5.29up Phase 2.3 · 手动保存 / 发布前的空值校验（auto-save 跳过，让 admin 安心
+    //   迭代不丢字）。custom 模式下 model 必填——否则上线后 chat 兜底 gpt-4o-mini，
+    //   非 OpenAI 兼容厂商会 404，体感像智能体坏了。
+    if (!opts?.auto) {
+      const err = validateModelBeforeSave(draft);
+      if (err) {
+        toast(err, "error");
+        return;
+      }
+    }
     setSaving(true);
     try {
       // suggested_questions 文本框 → 数组
@@ -676,6 +803,12 @@ export default function AgentBuilderEditPage({
   // ─── PR-C · 发布 ───────────────────────────────────────────
   async function doPublish() {
     if (!draft) return;
+    // 5.29up Phase 2.3 · 发布前空值校验（与 save 同口径）
+    const err = validateModelBeforeSave(draft);
+    if (err) {
+      toast(err, "error");
+      return;
+    }
     // 5.16up · 自动保存：发布前刷盘（publish 接口读 DB 里的草稿）
     if (dirty) await save({ auto: true });
     await publishGuard.submit(async (idempotencyKey) => {
@@ -909,24 +1042,18 @@ export default function AgentBuilderEditPage({
                             </p>
                           )}
 
-                          {/* 自定义模型名输入框：选中 ✏ 自定义模型名 option 时出现 */}
+                          {/* 自定义模型名输入框：选中 ✏ 自定义模型名 option 时出现
+                              Phase 2 · 旁边加「测试该模型」探针按钮 */}
                           {isCustomMode && (
-                            <div className="mt-2 space-y-1">
-                              <input
-                                type="text"
-                                value={currentModel}
-                                onChange={(e) => patchDraft((d) => ({
-                                  ...d,
-                                  model_params: { ...d.model_params, model: e.target.value || undefined },
-                                }))}
-                                placeholder={selectedProvider?.default_model || "自定义模型名，如 gpt-4o-mini / ep-xxx"}
-                                className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
-                              />
-                              {/* Phase 2 这里会加「测试该模型」按钮，本期先放 placeholder 提示 */}
-                              <p className="text-[11px] text-gray-400">
-                                Phase 2 将加入「测试该模型」按钮自动验证 model id 是否被供应商识别。
-                              </p>
-                            </div>
+                            <CustomModelProbeRow
+                              providerId={draft.provider_id}
+                              model={currentModel}
+                              onModelChange={(v) => patchDraft((d) => ({
+                                ...d,
+                                model_params: { ...d.model_params, model: v || undefined },
+                              }))}
+                              placeholder={selectedProvider?.default_model || "自定义模型名，如 gpt-4o-mini / ep-xxx"}
+                            />
                           )}
                         </>
                       );

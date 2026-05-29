@@ -37,7 +37,7 @@ function maskError(msg: string): string {
 }
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const admin = await requireAdmin();
@@ -47,6 +47,12 @@ export async function POST(
   }
 
   const { id } = await params;
+  // 5.29up Phase 2 · 可选 ?model=xxx 覆盖：搭建器里 admin 手填的自定义模型名
+  //   通过这个 query 参数验证是否被供应商识别。不传则仍走 provider 默认模型（API
+  //   管理页"测试"按钮行为完全不变）。简单 sanitize：截 100 字符 + trim，避免极端
+  //   输入塞进上游请求。
+  const overrideModelRaw = req.nextUrl.searchParams.get("model");
+  const overrideModel = overrideModelRaw ? overrideModelRaw.trim().slice(0, 100) : "";
   const { data: row, error: loadError } = await db
     .from("model_providers")
     .select("*")
@@ -80,7 +86,8 @@ export async function POST(
   if (!apiKey) return apiError("API Key 解密为空，请重新配置", "INTERNAL_ERROR");
 
   const startTime = Date.now();
-  const model = (provider.default_params?.model as string) || provider.default_model || "";
+  // 5.29up Phase 2 · ?model= 优先级最高（用于搭建器自定义模型探针）
+  const model = overrideModel || (provider.default_params?.model as string) || provider.default_model || "";
 
   const messages: ChatMessage[] = [
     { role: "user", content: TEST_PROMPT },
