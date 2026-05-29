@@ -2,13 +2,28 @@ import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
+import {
+  canReadRow,
+  canWriteRow,
+  sanitizeUpdatePatch,
+  requireWriteAccess,
+  validateTenantCode,
+  scanReferences,
+} from "@/lib/scoped-access";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库详情 / 更新 / 删除
-// 权限（D2）：仅 super_admin / system_admin
+// 5.30up · B 半 RBAC 改造（R2 通过）：
+//   - GET：先 load → canReadRow → 404 屏蔽别 org/不存在
+//          R1 §4：org_admin 不返 referencedByAgents 名单，仅返计数（防 agent 名跨组织泄漏）
+//   - PATCH：requireWriteAccess + canWriteRow + sanitizeUpdatePatch
+//            R2 §6：显式 tenant_code 调 validateTenantCode
+//            R2 §4：转让 tenant_code 必须零引用（scanReferences）
+//            R2 §5：补 writeAuditLog
+//   - DELETE：requireWriteAccess + canWriteRow + scanReferences（扩展扫 draft JSON）+ 审计
+//             DELETE 前先 resolveResourceTenantCode 缓存以避免审计 tenant_code 丢失
 
-function denyKbAdmin(role: string): boolean {
-  return role !== "super_admin" && role !== "system_admin";
-}
+const KB_WRITE_ROLES = ["super_admin", "system_admin", "org_admin"] as const;
 
 /** GET：知识库详情 + 文档列表 + 「被哪些智能体引用」反查 */
 export async function GET(
@@ -17,7 +32,6 @@ export async function GET(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (denyKbAdmin(admin.role)) return apiError("无权访问知识库", "FORBIDDEN");
 
   const { id } = await params;
   const { data: kb, error } = await db
@@ -29,7 +43,9 @@ export async function GET(
     console.error("[knowledge-bases get]", error);
     return apiError("获取知识库详情失败", "INTERNAL_ERROR");
   }
+  // 5.30up · 404 屏蔽：不存在 / 不在可见范围 → 一视同仁返 404（防 id 探测枚举别 org 资源）
   if (!kb) return apiError("知识库不存在", "NOT_FOUND");
+  if (!canReadRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
 
   const { data: documents, error: docErr } = await db
     .from("kb_documents")
@@ -42,6 +58,8 @@ export async function GET(
   }
 
   // 反查：被哪些智能体引用
+  // 5.30up · R1 §4：org_admin 不返 agent name 列表（防 agent 名跨组织泄漏）；
+  //                 仅返计数，UI 文案改为"被 N 个智能体引用（含本组织外）"
   const { data: links, error: linkErr } = await db
     .from("agent_knowledge_bases")
     .select("agent_id")
@@ -50,8 +68,19 @@ export async function GET(
     console.error("[knowledge-bases get] 引用反查失败", linkErr);
     return apiError("引用反查失败", "INTERNAL_ERROR");
   }
-  let referencedByAgents: { id: string; name: string }[] = [];
   const agentIds = (links ?? []).map((l: { agent_id: string }) => l.agent_id);
+
+  if (admin.role === "org_admin") {
+    // 仅返计数（含本组织外）
+    return NextResponse.json({
+      knowledgeBase: kb,
+      documents: documents ?? [],
+      referencedByAgentCount: agentIds.length,
+    });
+  }
+
+  // super / system → 完整名单
+  let referencedByAgents: { id: string; name: string }[] = [];
   if (agentIds.length > 0) {
     const { data: agents } = await db
       .from("agents")
@@ -67,37 +96,107 @@ export async function GET(
   });
 }
 
-/** PATCH：改名 / 改描述 / 启停 */
+/** PATCH：改名 / 改描述 / 启停 / （super/system）转让归属 */
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (denyKbAdmin(admin.role)) return apiError("无权修改知识库", "FORBIDDEN");
+
+  // 5.30up · R2 §1 双闸门：角色白名单 + org_admin tenantCode 非空兜底
+  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
+  if (gate) return gate;
 
   const { id } = await params;
+
+  // 先 load row 判归属（404 屏蔽别 org / 不存在）
+  const { data: existing, error: loadErr } = await db
+    .from("knowledge_bases")
+    .select("id, tenant_code")
+    .eq("id", id)
+    .maybeSingle();
+  if (loadErr) {
+    console.error("[knowledge-bases update] load 失败", loadErr);
+    return apiError("加载知识库失败", "INTERNAL_ERROR");
+  }
+  if (!existing) return apiError("知识库不存在", "NOT_FOUND");
+  if (!canWriteRow(admin, existing)) {
+    // org_admin 试图改别 org / 平台公共 → 404 屏蔽
+    return apiError("知识库不存在", "NOT_FOUND");
+  }
+
+  // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 表存在
+  if (admin.role === "org_admin" && admin.tenantCode) {
+    const ok = await validateTenantCode(admin.tenantCode);
+    if (!ok) return apiError("您所属的组织不存在或已失效，请联系平台管理员", "FORBIDDEN");
+  }
+
   const body = await req.json();
-  const patch: Record<string, unknown> = {};
+  const rawPatch: Record<string, unknown> = {};
 
   if (typeof body.name === "string") {
     const name = body.name.trim();
     if (!name) return apiError("知识库名称不能为空", "VALIDATION_ERROR");
     if (name.length > 100) return apiError("知识库名称过长（上限 100 字）", "VALIDATION_ERROR");
-    patch.name = name;
+    rawPatch.name = name;
   }
   if (typeof body.description === "string") {
-    patch.description = body.description.trim();
+    rawPatch.description = body.description.trim();
   }
   if (typeof body.status === "string") {
     if (body.status !== "active" && body.status !== "disabled") {
       return apiError("状态只能是 active / disabled", "VALIDATION_ERROR");
     }
-    patch.status = body.status;
+    rawPatch.status = body.status;
   }
+  // super/system 可改 tenant_code（转让归属）；org_admin 后面会被 sanitizeUpdatePatch 剥离
+  if ("tenant_code" in body) {
+    const raw = body.tenant_code;
+    if (raw === null) {
+      rawPatch.tenant_code = null;
+    } else if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      rawPatch.tenant_code = trimmed === "" ? null : trimmed;
+    } else {
+      return apiError("tenant_code 字段格式错误", "VALIDATION_ERROR");
+    }
+  }
+
+  // 5.30up · 剥离 org_admin 的 tenant_code（防越权转让）
+  const patch = sanitizeUpdatePatch(admin, rawPatch);
+
   if (Object.keys(patch).length === 0) {
     return apiError("没有可更新的字段", "VALIDATION_ERROR");
   }
+
+  // 5.30up · R2 §6：super/system 转让到某 org → 先校验 tenants.code 存在性
+  if (
+    (admin.role === "super_admin" || admin.role === "system_admin") &&
+    "tenant_code" in patch &&
+    typeof patch.tenant_code === "string" &&
+    patch.tenant_code !== existing.tenant_code
+  ) {
+    const ok = await validateTenantCode(patch.tenant_code as string);
+    if (!ok) {
+      return apiError(
+        `目标组织代码「${patch.tenant_code}」不存在或已失效`,
+        "VALIDATION_ERROR"
+      );
+    }
+  }
+
+  // 5.30up · R2 §4：转让 tenant_code 必须零引用（含 NULL→某 org / 某 org→NULL / 某 org→另一 org）
+  if ("tenant_code" in patch && patch.tenant_code !== existing.tenant_code) {
+    const refs = await scanReferences("knowledge_base", id);
+    if (refs.totalCount > 0) {
+      return apiError(
+        `知识库被 ${refs.totalCount} 处引用（${refs.byPlace.join(" / ")}），转让前请先解绑`,
+        "VALIDATION_ERROR"
+      );
+    }
+  }
+
   patch.updated_at = new Date().toISOString();
 
   const { data, error } = await db
@@ -111,6 +210,20 @@ export async function PATCH(
     return apiError("更新知识库失败", "INTERNAL_ERROR");
   }
 
+  // 5.30up · R2 §5 · 补审计（原 KB PATCH 路由无审计）
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role,
+    adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode: (data as { tenant_code: string | null }).tenant_code,
+    action: "update",
+    resourceType: "knowledge_base",
+    resourceId: id,
+    resourceName: (data as { name: string }).name,
+    detail: { fields: Object.keys(patch).filter((k) => k !== "updated_at") },
+  });
+
   return NextResponse.json(data);
 }
 
@@ -121,32 +234,44 @@ export async function DELETE(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (denyKbAdmin(admin.role)) return apiError("无权删除知识库", "FORBIDDEN");
+
+  // 5.30up · R2 §1 双闸门
+  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
+  if (gate) return gate;
 
   const { id } = await params;
 
-  // 引用检查：被智能体绑定时禁止删除
-  const { count: refCount, error: refErr } = await db
-    .from("agent_knowledge_bases")
-    .select("agent_id", { count: "exact", head: true })
-    .eq("kb_id", id);
-  if (refErr) {
-    console.error("[knowledge-bases delete] 引用检查失败", refErr);
-    return apiError("引用检查失败，请重试", "INTERNAL_ERROR");
+  // 先 load row 判归属
+  const { data: existing, error: loadErr } = await db
+    .from("knowledge_bases")
+    .select("id, name, tenant_code")
+    .eq("id", id)
+    .maybeSingle();
+  if (loadErr) {
+    console.error("[knowledge-bases delete] load 失败", loadErr);
+    return apiError("加载知识库失败", "INTERNAL_ERROR");
   }
-  if (refCount && refCount > 0) {
+  if (!existing) return apiError("知识库不存在", "NOT_FOUND");
+  if (!canWriteRow(admin, existing)) return apiError("知识库不存在", "NOT_FOUND");
+
+  // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 表存在
+  if (admin.role === "org_admin" && admin.tenantCode) {
+    const ok = await validateTenantCode(admin.tenantCode);
+    if (!ok) return apiError("您所属的组织不存在或已失效，请联系平台管理员", "FORBIDDEN");
+  }
+
+  // 5.30up · R2 §4 · 引用扫描：原 KB DELETE 只扫 agent_knowledge_bases，扩展为 scanReferences
+  //                （含 agent_knowledge_bases + agent_drafts.builder_config.knowledge_base_ids JSON）
+  const refs = await scanReferences("knowledge_base", id);
+  if (refs.totalCount > 0) {
     return apiError(
-      `该知识库被 ${refCount} 个智能体引用，请先在搭建器解除绑定`,
-      "VALIDATION_ERROR",
+      `该知识库被 ${refs.totalCount} 处引用（${refs.byPlace.join(" / ")}），请先在搭建器解除绑定`,
+      "VALIDATION_ERROR"
     );
   }
 
-  const { data: kb } = await db
-    .from("knowledge_bases")
-    .select("name")
-    .eq("id", id)
-    .maybeSingle();
-  if (!kb) return apiError("知识库不存在", "NOT_FOUND");
+  // 5.30up · R2 §5 · DELETE 前先缓存 tenant_code（删除后反查就拿不到了）
+  const cachedTenantCode = await resolveResourceTenantCode("knowledge_base", id);
 
   // 删除存储里的文档文件（DB 行由 FK 级联删除）
   const { data: docs } = await db
@@ -166,6 +291,20 @@ export async function DELETE(
     console.error("[knowledge-bases delete]", error);
     return apiError("删除知识库失败", "INTERNAL_ERROR");
   }
+
+  // 5.30up · R2 §5 · 补审计
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role,
+    adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode: cachedTenantCode,
+    action: "delete",
+    resourceType: "knowledge_base",
+    resourceId: id,
+    resourceName: existing.name,
+    detail: {},
+  });
 
   return NextResponse.json({ ok: true });
 }

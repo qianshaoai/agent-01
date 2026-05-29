@@ -20,6 +20,13 @@ type KnowledgeBase = {
   status: "active" | "disabled";
   document_count: number;
   created_at: string;
+  // 5.30up · 组织级 ownership：NULL = 平台公共；非空 = 某 org 建
+  tenant_code: string | null;
+};
+
+type AdminMe = {
+  role: "super_admin" | "system_admin" | "org_admin";
+  tenantCode: string | null;
 };
 
 export default function KnowledgeBasesPage() {
@@ -31,6 +38,16 @@ export default function KnowledgeBasesPage() {
   const [newDesc, setNewDesc] = useState("");
   // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
   const createGuard = useSubmitGuard();
+  // 5.30up · 读当前管理员角色与 tenantCode，给卡片打"平台公共 / 本组织 / 某 org"徽章
+  const [me, setMe] = useState<AdminMe | null>(null);
+  useEffect(() => {
+    fetch("/api/admin/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.role) setMe({ role: d.role, tenantCode: d.tenantCode ?? null });
+      })
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -157,11 +174,15 @@ export default function KnowledgeBasesPage() {
                   <div className="w-12 h-12 rounded-[14px] flex items-center justify-center bg-white/15 border border-white/20 backdrop-blur shadow-[0_4px_16px_rgba(0,0,0,0.08)]">
                     <BookOpen size={22} className="text-white" />
                   </div>
-                  {kb.status === "disabled" && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/15 text-white/85 border border-white/20 shrink-0">
-                      已停用
-                    </span>
-                  )}
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    {/* 5.30up · 归属徽章：平台公共 / 本组织 / 某 org（仅 super/system 会见到第三种）*/}
+                    <OwnershipBadge kb={kb} me={me} />
+                    {kb.status === "disabled" && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/15 text-white/85 border border-white/20">
+                        已停用
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="relative flex-1 min-h-0">
@@ -235,5 +256,36 @@ export default function KnowledgeBasesPage() {
       )}
       </div>
     </AdminLayout>
+  );
+}
+
+/**
+ * 5.30up · 归属徽章
+ *   - tenant_code IS NULL    → "平台公共"
+ *   - me 是 org_admin + tc 等于我 → "本组织"
+ *   - 其他（仅 super/system 会见到）→ 显示 tenant_code 值
+ */
+function OwnershipBadge({ kb, me }: { kb: KnowledgeBase; me: AdminMe | null }) {
+  if (kb.tenant_code === null) {
+    return (
+      <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/15 text-white/85 border border-white/20">
+        平台公共
+      </span>
+    );
+  }
+  if (me?.role === "org_admin" && me.tenantCode === kb.tenant_code) {
+    return (
+      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-400/25 text-emerald-50 border border-emerald-300/30">
+        本组织
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-[10px] px-2 py-0.5 rounded-full bg-amber-400/25 text-amber-50 border border-amber-300/30 max-w-[120px] truncate"
+      title={`归属组织：${kb.tenant_code}`}
+    >
+      {kb.tenant_code}
+    </span>
   );
 }

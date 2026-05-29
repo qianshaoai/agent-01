@@ -3,13 +3,20 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { ingestDocument, KB_STORAGE_BUCKET, KB_STORAGE_PREFIX } from "@/lib/kb/ingest";
+import { writeAuditLog } from "@/lib/audit";
+import {
+  canReadRow,
+  canWriteRow,
+  requireWriteAccess,
+  validateTenantCode,
+} from "@/lib/scoped-access";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库文档 列表 + 上传
-// 权限（D2）：仅 super_admin / system_admin
+// 5.30up · B 半 RBAC 改造（R2 通过）：
+//   - GET：父 KB load → canReadRow（404 屏蔽）
+//   - POST：requireWriteAccess + canWriteRow（404 屏蔽）+ 审计
 
-function denyKbAdmin(role: string): boolean {
-  return role !== "super_admin" && role !== "system_admin";
-}
+const KB_WRITE_ROLES = ["super_admin", "system_admin", "org_admin"] as const;
 
 const SUPPORTED_EXT = ["pdf", "docx", "doc", "txt", "md", "csv", "xlsx", "xls", "pptx"];
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20MB
@@ -23,9 +30,22 @@ export async function GET(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (denyKbAdmin(admin.role)) return apiError("无权访问知识库", "FORBIDDEN");
 
   const { id } = await params;
+
+  // 5.30up · 父 KB load → canReadRow → 404 屏蔽
+  const { data: kb, error: kbErr } = await db
+    .from("knowledge_bases")
+    .select("id, tenant_code")
+    .eq("id", id)
+    .maybeSingle();
+  if (kbErr) {
+    console.error("[kb documents list] 父 KB 查询失败", kbErr);
+    return apiError("加载知识库失败", "INTERNAL_ERROR");
+  }
+  if (!kb) return apiError("知识库不存在", "NOT_FOUND");
+  if (!canReadRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
+
   const { data, error } = await db
     .from("kb_documents")
     .select(DOC_FIELDS)
@@ -44,20 +64,31 @@ export async function POST(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (denyKbAdmin(admin.role)) return apiError("无权上传文档", "FORBIDDEN");
+
+  // 5.30up · R2 §1 双闸门
+  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
+  if (gate) return gate;
 
   const { id: kbId } = await params;
 
+  // 5.30up · 父 KB load → canWriteRow → 404 屏蔽（防 org_admin 把文档塞到别 org 的 KB）
   const { data: kb, error: kbErr } = await db
     .from("knowledge_bases")
-    .select("id")
+    .select("id, tenant_code")
     .eq("id", kbId)
     .maybeSingle();
   if (kbErr) {
-    console.error("[kb documents upload] 知识库查询失败", kbErr);
+    console.error("[kb documents upload] 父 KB 查询失败", kbErr);
     return apiError("加载知识库失败，请重试", "INTERNAL_ERROR");
   }
   if (!kb) return apiError("知识库不存在", "NOT_FOUND");
+  if (!canWriteRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
+
+  // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 存在
+  if (admin.role === "org_admin" && admin.tenantCode) {
+    const ok = await validateTenantCode(admin.tenantCode);
+    if (!ok) return apiError("您所属的组织不存在或已失效，请联系平台管理员", "FORBIDDEN");
+  }
 
   let form: FormData;
   try {
@@ -114,6 +145,19 @@ export async function POST(
     await db.storage.from(KB_STORAGE_BUCKET).remove([storagePath]);
     return apiError("文档入库失败，请重试", "INTERNAL_ERROR");
   }
+
+  // 5.30up · R2 §5 · 文档上传审计：资源记父 KB（含 tenant_code），detail 带 document_id + filename
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role,
+    adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode: kb.tenant_code,
+    action: "create",
+    resourceType: "knowledge_base",
+    resourceId: kbId,
+    detail: { document_id: doc.id, filename, file_type: ext },
+  });
 
   // 5.28up · A · ingest 转后台异步：next/server `after()` 在响应发出后继续在
   //   同进程里跑（Next 15+ 稳定 API）。upload POST 立刻返回 pending 状态，

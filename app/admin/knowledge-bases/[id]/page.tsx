@@ -42,6 +42,8 @@ type KnowledgeBase = {
   description: string;
   status: "active" | "disabled";
   created_at: string;
+  // 5.30up · 归属字段：NULL = 平台公共
+  tenant_code: string | null;
 };
 
 type RefAgent = { id: string; name: string };
@@ -67,6 +69,10 @@ export default function KnowledgeBaseDetailPage() {
   const [kb, setKb] = useState<KnowledgeBase | null>(null);
   const [docs, setDocs] = useState<KbDocument[]>([]);
   const [refAgents, setRefAgents] = useState<RefAgent[]>([]);
+  // 5.30up · R1 §4：org_admin 后端只返计数（防 agent 名跨组织泄漏）；super/system 仍返完整 refAgents
+  const [refCount, setRefCount] = useState<number>(0);
+  /** 后端是否返了完整名单：true = super/system，false = org_admin */
+  const [hasRefNames, setHasRefNames] = useState<boolean>(true);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -92,7 +98,16 @@ export default function KnowledgeBaseDetailPage() {
       if (!res.ok) throw new Error(json?.error ?? "加载失败");
       setKb(json.knowledgeBase);
       setDocs(json.documents ?? []);
-      setRefAgents(json.referencedByAgents ?? []);
+      // 5.30up · 兼容两种返回：org_admin 走 referencedByAgentCount；super/system 走 referencedByAgents
+      if (Array.isArray(json.referencedByAgents)) {
+        setRefAgents(json.referencedByAgents);
+        setRefCount(json.referencedByAgents.length);
+        setHasRefNames(true);
+      } else {
+        setRefAgents([]);
+        setRefCount(Number(json.referencedByAgentCount ?? 0));
+        setHasRefNames(false);
+      }
     } catch (e) {
       // 轮询静默失败 —— 不弹 err（避免索引途中网络抖了一下就吓人）；下一轮自然恢复。
       //   非静默调用照常展示错误，初次加载失败用户必须知道。
@@ -380,14 +395,19 @@ export default function KnowledgeBaseDetailPage() {
             )}
 
             {/* 引用反查 */}
+            {/* 5.30up · R1 §4：org_admin 只返计数，文案带"含本组织外"提示；super/system 仍展示完整名单 */}
             <div className="flex items-center gap-2 px-1 text-[13px] text-gray-500">
               <Bot size={14} className="text-gray-400" />
-              {refAgents.length === 0 ? (
+              {refCount === 0 ? (
                 <span>暂未被任何智能体引用</span>
-              ) : (
+              ) : hasRefNames ? (
                 <span>
                   被 <span className="text-[#002FA7] font-medium">{refAgents.length}</span> 个智能体引用：
                   {refAgents.map((a) => a.name).join("、")}
+                </span>
+              ) : (
+                <span>
+                  被 <span className="text-[#002FA7] font-medium">{refCount}</span> 个智能体引用（含本组织外）
                 </span>
               )}
             </div>

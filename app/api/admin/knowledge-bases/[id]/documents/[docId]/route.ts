@@ -3,13 +3,18 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { ingestDocument, KB_STORAGE_BUCKET } from "@/lib/kb/ingest";
+import { writeAuditLog } from "@/lib/audit";
+import {
+  canWriteRow,
+  requireWriteAccess,
+  validateTenantCode,
+} from "@/lib/scoped-access";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库文档 删除 / 重建索引
-// 权限（D2）：仅 super_admin / system_admin
+// 5.30up · B 半 RBAC 改造（R2 通过）：
+//   - DELETE / POST(reindex)：requireWriteAccess + 父 KB load → canWriteRow（404 屏蔽）+ 审计
 
-function denyKbAdmin(role: string): boolean {
-  return role !== "super_admin" && role !== "system_admin";
-}
+const KB_WRITE_ROLES = ["super_admin", "system_admin", "org_admin"] as const;
 
 const DOC_FIELDS =
   "id, kb_id, filename, file_type, status, chunk_count, total_chunks, char_count, error_msg, created_at";
@@ -21,13 +26,35 @@ export async function DELETE(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (denyKbAdmin(admin.role)) return apiError("无权删除文档", "FORBIDDEN");
+
+  // 5.30up · R2 §1 双闸门
+  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
+  if (gate) return gate;
 
   // 小B finding 3：必须校验 docId 属于 URL 里的 kbId，否则错误 URL 可操作别库的文档
   const { id, docId } = await params;
+
+  // 5.30up · 父 KB load → canWriteRow → 404 屏蔽（防 org_admin 删别 org KB 的文档）
+  const { data: kb, error: kbErr } = await db
+    .from("knowledge_bases")
+    .select("id, tenant_code")
+    .eq("id", id)
+    .maybeSingle();
+  if (kbErr) {
+    console.error("[kb document delete] 父 KB 查询失败", kbErr);
+    return apiError("加载知识库失败", "INTERNAL_ERROR");
+  }
+  if (!kb) return apiError("知识库不存在", "NOT_FOUND");
+  if (!canWriteRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
+
+  if (admin.role === "org_admin" && admin.tenantCode) {
+    const ok = await validateTenantCode(admin.tenantCode);
+    if (!ok) return apiError("您所属的组织不存在或已失效，请联系平台管理员", "FORBIDDEN");
+  }
+
   const { data: doc, error } = await db
     .from("kb_documents")
-    .select("id, storage_path")
+    .select("id, filename, storage_path")
     .eq("id", docId)
     .eq("kb_id", id)
     .maybeSingle();
@@ -52,6 +79,20 @@ export async function DELETE(
       .remove([doc.storage_path]);
     if (rmErr) console.error("[kb document delete] 清存储文件失败（不阻断）", rmErr);
   }
+
+  // 5.30up · R2 §5 · 文档删除审计：资源仍记父 KB（KB 还在，无需缓存 tenant_code）
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role,
+    adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode: kb.tenant_code,
+    action: "delete",
+    resourceType: "knowledge_base",
+    resourceId: id,
+    detail: { document_id: docId, filename: doc.filename },
+  });
+
   return NextResponse.json({ ok: true });
 }
 
@@ -62,13 +103,35 @@ export async function POST(
 ) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (denyKbAdmin(admin.role)) return apiError("无权重建索引", "FORBIDDEN");
+
+  // 5.30up · R2 §1 双闸门
+  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
+  if (gate) return gate;
 
   // 小B finding 3：校验 docId 属于 URL 里的 kbId
   const { id, docId } = await params;
+
+  // 5.30up · 父 KB load → canWriteRow → 404 屏蔽
+  const { data: kb, error: kbErr } = await db
+    .from("knowledge_bases")
+    .select("id, tenant_code")
+    .eq("id", id)
+    .maybeSingle();
+  if (kbErr) {
+    console.error("[kb document reindex] 父 KB 查询失败", kbErr);
+    return apiError("加载知识库失败", "INTERNAL_ERROR");
+  }
+  if (!kb) return apiError("知识库不存在", "NOT_FOUND");
+  if (!canWriteRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
+
+  if (admin.role === "org_admin" && admin.tenantCode) {
+    const ok = await validateTenantCode(admin.tenantCode);
+    if (!ok) return apiError("您所属的组织不存在或已失效，请联系平台管理员", "FORBIDDEN");
+  }
+
   const { data: doc, error } = await db
     .from("kb_documents")
-    .select("id")
+    .select("id, filename")
     .eq("id", docId)
     .eq("kb_id", id)
     .maybeSingle();
@@ -98,6 +161,19 @@ export async function POST(
     // 5.28up · 小B 复审 Fix 4 · 状态冲突应为 409 不是 400；CONFLICT 已映到 409
     return apiError("该文档正在索引中，请等待当前索引完成后再重建", "CONFLICT");
   }
+
+  // 5.30up · R2 §5 · 重建索引审计：action=update，detail 标记 reindex=true
+  await writeAuditLog({
+    adminId: admin.adminId,
+    adminUsername: admin.username,
+    adminRole: admin.role,
+    adminTenantCode: admin.tenantCode ?? null,
+    resourceTenantCode: kb.tenant_code,
+    action: "update",
+    resourceType: "knowledge_base",
+    resourceId: id,
+    detail: { document_id: docId, filename: doc.filename, reindex: true },
+  });
 
   after(async () => {
     try {
