@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
-import { inferPresetFromExisting } from "@/lib/model-providers/presets";
+import { getPresetsByCategory, type ProviderPreset } from "@/lib/model-providers/presets";
 
 type TestMsg = { role: "user" | "assistant"; content: string };
 
@@ -22,6 +22,8 @@ type TestMsg = { role: "user" | "assistant"; content: string };
 type Provider = {
   id: string;
   name: string;
+  /** 5.29up · 合并模型选择下拉需要 provider_code 做分组标题 + 当前供应商小字 */
+  provider_code: string;
   platform: string;
   api_endpoint: string; // 5.27up · 反查厂商预设需要 endpoint host
   default_model: string;
@@ -78,6 +80,121 @@ type Draft = {
 // 这里按厂商（不是 platform）查 —— 修复"新加 DeepSeek/千问/豆包 等 OpenAI 兼容厂商
 // 后下拉仍显示 GPT 列表"的 bug（同 platform="openai" 但模型完全不同）。
 // 5.20up 验收的「绑 KB 智能体最低 glm-4-air」标注仍在 zhipu-glm preset 里。
+//
+// ─── 5.29up · 模型选择融合 helpers ────────────────────────────
+//   - resolveProviderPresetForBuilder: 比 inferPresetFromExisting 更严格 —— host 找
+//     不到时不回落到该 platform 第一个 preset（避免 OpenAI 兼容自定义 endpoint 错套
+//     GPT 推荐模型）。只在搭建器内用，不动 presets.ts 全局语义。
+//   - buildModelOptions: providers × 各自 recommendedModels → 扁平选项列表，渲染时
+//     按 groupKey 归并成 optgroup。
+//   - composeValue: 把 (provider_id, model) 反推成 select 当前值；老 draft 若 model
+//     落到自定义分支 → 由下方手填框承载。
+
+type CustomBuilderResolution = { kind: "custom"; label: string };
+type RecognizedBuilderResolution = { kind: "recognized"; preset: ProviderPreset };
+type BuilderResolution = RecognizedBuilderResolution | CustomBuilderResolution;
+
+function customProviderLabel(provider: Provider): string {
+  if (provider.platform === "openai") return "OpenAI 兼容（自定义）";
+  // 防御：未来若 category=model 支持非 openai/zhipu 或 zhipu 代理 endpoint，
+  // 不要误标成 OpenAI 兼容。
+  return `${provider.name || provider.platform}（自定义）`;
+}
+
+function resolveProviderPresetForBuilder(provider: Provider): BuilderResolution {
+  const ep = (provider.api_endpoint ?? "").trim().toLowerCase();
+  if (!ep) return { kind: "custom", label: customProviderLabel(provider) };
+
+  const all = getPresetsByCategory("model");
+  const exact = all.find((p) => p.endpoint.toLowerCase() === ep);
+  if (exact) return { kind: "recognized", preset: exact };
+
+  try {
+    const host = new URL(provider.api_endpoint).host.toLowerCase();
+    const byHost = all.find((p) => {
+      if (!p.endpoint) return false;
+      try { return new URL(p.endpoint).host.toLowerCase() === host; } catch { return false; }
+    });
+    if (byHost) return { kind: "recognized", preset: byHost };
+  } catch { /* endpoint 非合法 URL，落自定义 */ }
+
+  // 关键：host 没匹配上 → 视为自定义端点，不回落到该 platform 的第一个 preset
+  return { kind: "custom", label: customProviderLabel(provider) };
+}
+
+type ModelOption = {
+  /** 同一 provider 的 options 共用一个 groupKey → 渲染时聚成一个 <optgroup> */
+  groupKey: string;
+  groupLabel: string;
+  optionValue: string;     // `${provider_id}::${model_value}` 或 `${provider_id}::__custom__`
+  optionLabel: string;
+};
+
+function buildModelOptions(providers: Provider[]): ModelOption[] {
+  return providers
+    .filter((p) => p.enabled && p.has_api_key)
+    .flatMap((provider) => {
+      const r = resolveProviderPresetForBuilder(provider);
+      const presetName = r.kind === "recognized" ? r.preset.label.split("（")[0] : r.label;
+      const groupKey = provider.id;
+      const baseLabel = `${presetName}（${provider.provider_code}）`;
+
+      // 自定义分支（custom 或 recognized 但无 recommendedModels）→ 仅一条"自定义模型名"
+      if (r.kind === "custom" || (r.preset.recommendedModels?.length ?? 0) === 0) {
+        return [
+          {
+            groupKey,
+            groupLabel: `${baseLabel} · 手填模型名`,
+            optionValue: `${provider.id}::__custom__`,
+            optionLabel: "✏ 自定义模型名",
+          },
+        ];
+      }
+
+      // recognized 分支：preset 模型 + 末尾追加"自定义"逃生口
+      return [
+        ...r.preset.recommendedModels!.map((m) => ({
+          groupKey,
+          groupLabel: baseLabel,
+          optionValue: `${provider.id}::${m.value}`,
+          optionLabel: m.label,
+        })),
+        {
+          groupKey,
+          groupLabel: baseLabel,
+          optionValue: `${provider.id}::__custom__`,
+          optionLabel: "✏ 自定义模型名",
+        },
+      ];
+    });
+}
+
+/**
+ * 反推 select 的当前 value。
+ *   - 没选供应商 → "" （placeholder 占位）
+ *   - 已选供应商 + model 在 preset 推荐列表里 → `${pid}::${model}`
+ *   - 已选供应商 + model 不在推荐 / model 为空 → `${pid}::__custom__`（下方手填框接管）
+ *   - 老 draft 兼容：model 缺失但 provider.default_model 仍在 preset → 用 default_model
+ *     避免误落自定义触发后续空值校验
+ */
+function composeValue(
+  providers: Provider[],
+  providerId: string | null,
+  model: string | undefined,
+): string {
+  if (!providerId) return "";
+  const provider = providers.find((p) => p.id === providerId);
+  if (!provider) return "";
+  const r = resolveProviderPresetForBuilder(provider);
+  if (r.kind !== "recognized") return `${providerId}::__custom__`;
+  const list = r.preset.recommendedModels ?? [];
+  if (model && list.some((m) => m.value === model)) return `${providerId}::${model}`;
+  // 老 draft 兼容：model 缺失但 provider.default_model 仍在推荐列表
+  if (!model && provider.default_model && list.some((m) => m.value === provider.default_model)) {
+    return `${providerId}::${provider.default_model}`;
+  }
+  return `${providerId}::__custom__`;
+}
 
 function defaultBuilderConfig(): BuilderConfig {
   return {
@@ -563,95 +680,116 @@ export default function AgentBuilderEditPage({
             {/* 分区 2：模型设置（仅对话型显示） */}
             {draft.agent_type === "chat" && (
               <section className="card p-5">
-                <SectionTitle icon={<Settings2 size={16} />} title="2. 模型设置" desc="选择由哪个供应商、哪个模型来驱动这个智能体。" />
+                <SectionTitle icon={<Settings2 size={16} />} title="2. 模型设置" desc="直接挑模型，供应商自动联动。" />
                 <div className="space-y-3 mt-3">
-                  <Field label="模型供应商 *">
-                    <select
-                      value={draft.provider_id ?? ""}
-                      onChange={(e) => patchDraft((d) => ({ ...d, provider_id: e.target.value || null }))}
-                      className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
-                    >
-                      <option value="">请选择已启用的供应商…</option>
-                      {enabledProviders.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} （{p.platform} · {p.default_model || "无默认模型"}）
-                        </option>
-                      ))}
-                    </select>
-                    {enabledProviders.length === 0 && (
-                      <p className="text-[11px] text-amber-600 mt-1">
-                        当前没有可用供应商。请先去
-                        <Link href="/admin/model-providers" className="underline mx-1">模型接入</Link>
-                        添加并启用。
-                      </p>
-                    )}
-                    {selectedProvider && (
-                      <p className="text-[11px] text-gray-400 mt-1">
-                        默认模型：<code className="font-mono">{selectedProvider.default_model || "未设置"}</code>
-                      </p>
-                    )}
-                    {isKnowledgeBaseFlashModel && (
-                      <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
-                        已绑定知识库时不建议使用 GLM-4-Flash：验收中该模型会用常识反驳知识库事实。
-                        请在下方改为 <code className="font-mono">glm-4-air</code> 或更高模型。
-                      </p>
-                    )}
-                  </Field>
-
-                  <Field label="模型名称（不选用供应商默认）">
+                  {/* 5.29up · 合并模型选择 ───────────────────────────────────
+                      旧实现是两步：先选「模型供应商」select 再选「模型名称」select；
+                      新实现是一步：grouped select，按供应商分组直接挑模型，选中后
+                      自动联动 provider_id + model_params.model。下方"当前供应商"小字
+                      让 admin 在 select 关闭后仍能看到当前用的是哪家（同模型名跨多 provider）。
+                      自定义模型名（preset 没列出 / OpenAI 兼容自定义 / 豆包接入点 ID）
+                      由下方"自定义模型名"输入框承载——选中 ✏ 自定义模型名 option 时自动出现。 */}
+                  <Field label="模型选择 *">
                     {(() => {
-                      // 5.27up · 按厂商预设（不是 platform）查推荐模型清单；DeepSeek / 千问 /
-                      //   豆包 / 文心 / 混元 都是 platform="openai" 但要各自的模型清单。
-                      //   反查规则：endpoint host 匹配 → 找不到落到该 platform 首个预设
-                      //   （如 openai-official 给出 GPT 全套；openai-compat-custom 给空）。
-                      const matchedPreset = selectedProvider
-                        ? inferPresetFromExisting(selectedProvider.platform, selectedProvider.api_endpoint, "model")
-                        : null;
-                      const presets = matchedPreset?.recommendedModels ?? [];
+                      const allOptions = buildModelOptions(enabledProviders);
+                      const grouped = new Map<string, { label: string; opts: ModelOption[] }>();
+                      for (const o of allOptions) {
+                        const existing = grouped.get(o.groupKey);
+                        if (existing) existing.opts.push(o);
+                        else grouped.set(o.groupKey, { label: o.groupLabel, opts: [o] });
+                      }
+                      const currentValue = composeValue(
+                        enabledProviders,
+                        draft.provider_id,
+                        draft.model_params.model as string | undefined,
+                      );
+                      const isCustomMode = currentValue.endsWith("::__custom__");
                       const currentModel = (draft.model_params.model as string) ?? "";
-                      const isCustom = currentModel && !presets.find((p) => p.value === currentModel);
-                      const selectValue = !currentModel ? "" : isCustom ? "__custom__" : currentModel;
                       return (
                         <>
-                          {presets.length > 0 ? (
-                            <select
-                              value={selectValue}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                if (v === "__custom__") return; // 切到自定义时不动 model，让下方 input 接管
+                          <select
+                            value={currentValue}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (!v) {
+                                // 占位 / 选回"请选择" → 清空两个字段
                                 patchDraft((d) => ({
                                   ...d,
-                                  model_params: { ...d.model_params, model: v || undefined },
+                                  provider_id: null,
+                                  model_params: { ...d.model_params, model: undefined },
                                 }));
-                              }}
-                              className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
-                            >
-                              <option value="">使用供应商默认（{selectedProvider?.default_model || "未设置"}）</option>
-                              {presets.map((m) => (
-                                <option key={m.value} value={m.value}>
-                                  {m.label}
-                                </option>
-                              ))}
-                              <option value="__custom__">自定义模型名（手填）</option>
-                            </select>
-                          ) : (
-                            <p className="text-[11px] text-gray-400 mb-1">
-                              {selectedProvider
-                                ? `该厂商没有预设模型清单${matchedPreset?.code === "doubao-ark" ? "（豆包用接入点 ID ep-xxx，不是固定模型名）" : ""}，下方手填模型名。`
-                                : "请先选择供应商"}
+                                return;
+                              }
+                              const [pid, modelOrCustom] = v.split("::");
+                              patchDraft((d) => ({
+                                ...d,
+                                provider_id: pid,
+                                model_params: {
+                                  ...d.model_params,
+                                  // 切到具体模型 → 写新值；切到 __custom__ → 显式清空让手填框从空起
+                                  //   切到不同 provider 时，旧 model 不会被带过去（5.29up Fix 4）
+                                  model: modelOrCustom === "__custom__" ? undefined : modelOrCustom,
+                                },
+                              }));
+                            }}
+                            className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
+                          >
+                            <option value="">请选择模型…</option>
+                            {Array.from(grouped.values()).map((g) => (
+                              <optgroup key={g.opts[0].groupKey} label={g.label}>
+                                {g.opts.map((o) => (
+                                  <option key={o.optionValue} value={o.optionValue}>
+                                    {o.optionLabel}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ))}
+                          </select>
+
+                          {/* 没可用供应商 → 引导去 API 管理新建 */}
+                          {enabledProviders.length === 0 && (
+                            <p className="text-[11px] text-amber-600 mt-1">
+                              当前没有可用供应商。请先去
+                              <Link href="/admin/model-providers" className="underline mx-1">模型接入</Link>
+                              添加并启用。
                             </p>
                           )}
-                          {(isCustom || selectValue === "__custom__" || presets.length === 0) && (
-                            <input
-                              type="text"
-                              value={currentModel}
-                              onChange={(e) => patchDraft((d) => ({
-                                ...d,
-                                model_params: { ...d.model_params, model: e.target.value || undefined },
-                              }))}
-                              placeholder={selectedProvider?.default_model || "自定义模型名，如 gpt-4o-mini"}
-                              className="w-full h-9 px-3 mt-2 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
-                            />
+
+                          {/* 5.29up Fix 5 · 当前供应商小字：原生 select 关闭后看不到 optgroup，
+                              admin 需要在气泡下方明确"当前用的是哪家"，特别是同模型名跨多 provider 时 */}
+                          {selectedProvider && (
+                            <p className="text-[11px] text-gray-500 mt-1">
+                              当前供应商：
+                              <code className="font-mono">{selectedProvider.name}（{selectedProvider.provider_code}）</code>
+                            </p>
+                          )}
+
+                          {/* KB + flash 仍保留 5.20up 锁定的提示 */}
+                          {isKnowledgeBaseFlashModel && (
+                            <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
+                              已绑定知识库时不建议使用 GLM-4-Flash：验收中该模型会用常识反驳知识库事实。
+                              请改为 <code className="font-mono">glm-4-air</code> 或更高模型。
+                            </p>
+                          )}
+
+                          {/* 自定义模型名输入框：选中 ✏ 自定义模型名 option 时出现 */}
+                          {isCustomMode && (
+                            <div className="mt-2 space-y-1">
+                              <input
+                                type="text"
+                                value={currentModel}
+                                onChange={(e) => patchDraft((d) => ({
+                                  ...d,
+                                  model_params: { ...d.model_params, model: e.target.value || undefined },
+                                }))}
+                                placeholder={selectedProvider?.default_model || "自定义模型名，如 gpt-4o-mini / ep-xxx"}
+                                className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] font-mono"
+                              />
+                              {/* Phase 2 这里会加「测试该模型」按钮，本期先放 placeholder 提示 */}
+                              <p className="text-[11px] text-gray-400">
+                                Phase 2 将加入「测试该模型」按钮自动验证 model id 是否被供应商识别。
+                              </p>
+                            </div>
                           )}
                         </>
                       );
