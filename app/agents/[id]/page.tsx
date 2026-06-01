@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect, use, memo, Fragment } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, use, memo, Fragment } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -146,6 +146,20 @@ const ChatMessage = memo(function ChatMessage({
   onRegenerate,
 }: ChatMsgProps) {
   const isAssistant = msg.role === "assistant";
+  // 2026-06-01 UI · 编辑用户消息 textarea 高度自适应（不滚轮、550px 封顶）
+  //   textarea 默认遇长文本会出滚轮，对"参考: XXX 萃取经验"这类编辑场景体验差。
+  //   useLayoutEffect 每次 editValue / isEditing 变化时把高度设成 scrollHeight，
+  //   550px 封顶（约 28 行）—— 超过封顶才允许 overflow-y-auto 出滚轮兜底，防极端长文本顶屏。
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  useLayoutEffect(() => {
+    if (!isEditing) return;
+    const el = editTextareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const target = Math.min(el.scrollHeight, 550);
+    el.style.height = `${target}px`;
+    el.style.overflowY = el.scrollHeight > 550 ? "auto" : "hidden";
+  }, [editValue, isEditing]);
   return (
     <div className={`group/bubble flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-[#002FA7] text-white" : "bg-gray-100 text-gray-600"}`}>
@@ -224,8 +238,11 @@ const ChatMessage = memo(function ChatMessage({
             ) : null
           ) : isEditing ? (
             // P1：编辑用户消息内联 textarea
-            <div className="flex flex-col gap-2 min-w-[260px]">
+            // 2026-06-01 UI 微调 · 整体放大一档（用户反馈太小）
+            //   + 高度自适应（含 550px 封顶，超出才出滚轮，详见 ChatMessage 顶部 editTextareaRef）
+            <div className="flex flex-col gap-2 min-w-[360px]">
               <textarea
+                ref={editTextareaRef}
                 autoFocus
                 value={editValue}
                 onChange={(e) => onChangeEdit(e.target.value)}
@@ -235,19 +252,19 @@ const ChatMessage = memo(function ChatMessage({
                     onCancelEdit();
                   }
                 }}
-                rows={Math.min(8, Math.max(2, editValue.split("\n").length))}
-                className="w-full bg-white text-gray-800 rounded-[10px] px-2 py-1.5 outline-none border border-white/40 focus:border-white text-[14px] resize-none"
+                rows={3}
+                className="w-full bg-white text-gray-800 rounded-[10px] px-2 py-1.5 outline-none border border-white/40 focus:border-white text-[15px] resize-none"
               />
               <div className="flex justify-end gap-1.5">
                 <button
                   onClick={onCancelEdit}
-                  className="text-[11px] px-2 py-1 rounded-[6px] bg-white/15 hover:bg-white/25 text-white/90"
+                  className="text-[12px] px-3 py-1.5 rounded-[6px] bg-white/15 hover:bg-white/25 text-white/90"
                 >
                   取消
                 </button>
                 <button
                   onClick={onSaveEdit}
-                  className="text-[11px] px-2 py-1 rounded-[6px] bg-white text-[#002FA7] hover:bg-white/90 font-medium"
+                  className="text-[12px] px-3 py-1.5 rounded-[6px] bg-white text-[#002FA7] hover:bg-white/90 font-medium"
                 >
                   保存并重发
                 </button>
