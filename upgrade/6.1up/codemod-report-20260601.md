@@ -1,7 +1,7 @@
 # 6.1up · Phase 0 · 响应式 codemod 扫描报告（2026-06-01）
 
 > 由 [`scripts/responsive-codemod.mjs`](../../scripts/responsive-codemod.mjs) 自动产出。
-> 扫 `app/` + `components/` 下 .tsx/.ts，按 R1.1 方案 D1 节 8 类规则识别。
+> 扫 `app/` + `components/` 下 .tsx/.ts，按 R1.1 方案 D1 节 9 类规则识别。
 > **不自动改文件**，本报告仅作改造依据。
 
 ---
@@ -10,7 +10,7 @@
 
 - 扫描文件数：**130**
 - 命中文件数：**38**
-- 命中条目数：**1082**
+- 命中条目数：**1089**
 - 关键文件命中数：**10** / C4 名单 10 文件
 
 ## 按规则统计
@@ -25,12 +25,13 @@
 | 6 | w-N / h-N 文字数字预设 | D | 35 | 若用于侧栏 / 容器宽度，改 var(--sidebar-w) 或加 responsive prefix；图标固定尺寸保留 |
 | 7 | max-w 大尺寸预设 | D | 19 | 改 max-w-[var(--content-max-w)] |
 | 8 | 内联 style 含 px/calc | D | 2 | 逐 case 评估，可能要换 grid / flex / token |
+| 9 | 布局间距 / 偏移类 | D | 7 | 负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估 |
 
 ## 按风险等级统计
 
 - 低（可直接 apply）: **292**
 - 中（关键页面 / 慎改字号）: **591**
-- 高（layout / 架构讨论）: **199**
+- 高（layout / 架构讨论）: **206**
 
 ---
 
@@ -413,7 +414,7 @@
 | 1487 | C | 中 | #4 任意值圆角 | `rounded-[10px]` | 改 var(--radius-sm) / var(--radius-lg) token |
 | 989 | D | 高 | #6 w-N / h-N 文字数字预设 | `h-48` | 若用于侧栏 / 容器宽度，改 var(--sidebar-w) 或加 responsive prefix；图标固定尺寸保留 |
 
-### `app/admin/workflows/page.tsx` 🔑 关键 · 108 条命中
+### `app/admin/workflows/page.tsx` 🔑 关键 · 109 条命中
 
 | 行 | 类别 | 风险 | 规则 | 匹配 | 改造方向 |
 |---|---|---|---|---|---|
@@ -525,8 +526,9 @@
 | 1304 | D | 高 | #6 w-N / h-N 文字数字预设 | `h-60` | 若用于侧栏 / 容器宽度，改 var(--sidebar-w) 或加 responsive prefix；图标固定尺寸保留 |
 | 1368 | D | 高 | #6 w-N / h-N 文字数字预设 | `h-72` | 若用于侧栏 / 容器宽度，改 var(--sidebar-w) 或加 responsive prefix；图标固定尺寸保留 |
 | 1619 | D | 高 | #8 内联 style 含 px/calc | `style={{ minHeight: "150px" }}` | 逐 case 评估，可能要换 grid / flex / token |
+| 1597 | D | 高 | #9 布局间距 / 偏移类 | `-mx-1` | 负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估 |
 
-### `app/agents/[id]/page.tsx` 🔑 关键 · 93 条命中
+### `app/agents/[id]/page.tsx` 🔑 关键 · 94 条命中
 
 | 行 | 类别 | 风险 | 规则 | 匹配 | 改造方向 |
 |---|---|---|---|---|---|
@@ -623,8 +625,9 @@
 | 2363 | C | 中 | #4 任意值圆角 | `rounded-[10px]` | 改 var(--radius-sm) / var(--radius-lg) token |
 | 1834 | D | 高 | #6 w-N / h-N 文字数字预设 | `w-64` | 若用于侧栏 / 容器宽度，改 var(--sidebar-w) 或加 responsive prefix；图标固定尺寸保留 |
 | 2136 | D | 高 | #7 max-w 大尺寸预设 | `max-w-4xl` | 改 max-w-[var(--content-max-w)] |
+| 1977 | D | 高 | #9 布局间距 / 偏移类 | `-mb-2` | 负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估 |
 
-### `components/layout/admin-layout.tsx` 🔑 关键 · 18 条命中
+### `components/layout/admin-layout.tsx` 🔑 关键 · 19 条命中
 
 | 行 | 类别 | 风险 | 规则 | 匹配 | 改造方向 |
 |---|---|---|---|---|---|
@@ -646,6 +649,7 @@
 | 223 | D | 高 | #6 w-N / h-N 文字数字预设 | `w-60` | 若用于侧栏 / 容器宽度，改 var(--sidebar-w) 或加 responsive prefix；图标固定尺寸保留 |
 | 231 | D | 高 | #6 w-N / h-N 文字数字预设 | `w-60` | 若用于侧栏 / 容器宽度，改 var(--sidebar-w) 或加 responsive prefix；图标固定尺寸保留 |
 | 256 | D | 高 | #7 max-w 大尺寸预设 | `max-w-[1600px]` | 改 max-w-[var(--content-max-w)] |
+| 241 | D | 高 | #9 布局间距 / 偏移类 | `ml-60` | 负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估 |
 
 ### `components/ui/page-header.tsx` 🔑 关键 · 1 条命中
 
@@ -883,7 +887,7 @@
 |---|---|---|---|---|---|
 | 8 | C | 低 | #4 任意值圆角 | `rounded-[20px]` | 改 var(--radius-sm) / var(--radius-lg) token |
 
-### `app/page.tsx` · 97 条命中
+### `app/page.tsx` · 98 条命中
 
 | 行 | 类别 | 风险 | 规则 | 匹配 | 改造方向 |
 |---|---|---|---|---|---|
@@ -984,6 +988,7 @@
 | 443 | D | 高 | #7 max-w 大尺寸预设 | `max-w-[1600px]` | 改 max-w-[var(--content-max-w)] |
 | 634 | D | 高 | #7 max-w 大尺寸预设 | `max-w-[1600px]` | 改 max-w-[var(--content-max-w)] |
 | 1082 | D | 高 | #7 max-w 大尺寸预设 | `max-w-[1600px]` | 改 max-w-[var(--content-max-w)] |
+| 962 | D | 高 | #9 布局间距 / 偏移类 | `left-[15px]` | 负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估 |
 
 ### `app/register/page.tsx` · 11 条命中
 
@@ -1034,7 +1039,7 @@
 | 360 | C | 低 | #4 任意值圆角 | `rounded-[10px]` | 改 var(--radius-sm) / var(--radius-lg) token |
 | 367 | C | 低 | #4 任意值圆角 | `rounded-[10px]` | 改 var(--radius-sm) / var(--radius-lg) token |
 
-### `app/trial/page.tsx` · 106 条命中
+### `app/trial/page.tsx` · 109 条命中
 
 | 行 | 类别 | 风险 | 规则 | 匹配 | 改造方向 |
 |---|---|---|---|---|---|
@@ -1144,6 +1149,9 @@
 | 1409 | D | 中 | #6 w-N / h-N 文字数字预设 | `w-64` | 若用于侧栏 / 容器宽度，改 var(--sidebar-w) 或加 responsive prefix；图标固定尺寸保留 |
 | 1145 | D | 高 | #7 max-w 大尺寸预设 | `max-w-[1480px]` | 改 max-w-[var(--content-max-w)] |
 | 1197 | D | 高 | #7 max-w 大尺寸预设 | `max-w-[1480px]` | 改 max-w-[var(--content-max-w)] |
+| 1146 | D | 高 | #9 布局间距 / 偏移类 | `-ml-[52px]` | 负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估 |
+| 1218 | D | 高 | #9 布局间距 / 偏移类 | `-ml-16` | 负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估 |
+| 1636 | D | 高 | #9 布局间距 / 偏移类 | `-ml-1` | 负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估 |
 
 ### `app/user-agents/[id]/page.tsx` · 11 条命中
 

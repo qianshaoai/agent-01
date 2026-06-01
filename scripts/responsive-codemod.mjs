@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 6.1up Phase 0 · 响应式 codemod 扫描工具
-// 扫 app/ + components/ 下 .tsx / .ts，按 R1.1 方案 D1 节 8 类规则识别硬编码。
+// 扫 app/ + components/ 下 .tsx / .ts，按 R1.1 方案 D1 节 9 类规则识别硬编码。
 // 不自动改文件，只产 markdown 报告。
 // 用法：node scripts/responsive-codemod.mjs
 
@@ -87,6 +87,18 @@ const RULES = [
     category: "D",
     pattern: /style=\{\{[^}]*?(?:\d+px|calc\([^)]*\))[^}]*?\}\}/g,
     advice: "逐 case 评估，可能要换 grid / flex / token",
+    risk: "高",
+  },
+  {
+    // R1.2 补 · 小B P0 验收漏项 · 布局间距 / 偏移类
+    //   匹配：负 margin（含文字数字 + 任意值）/ 正 margin 任意值或 ≥10 文字数字
+    //   / 绝对定位 top/right/bottom/left 任意值 / gap 任意值
+    //   过滤：m-0 / mt-1 等小值正 margin（noise 大、多为合法）
+    id: 9,
+    name: "布局间距 / 偏移类",
+    category: "D",
+    pattern: /(?:-m[trblxy]?-(?:\d+|\[[^\]]+\]))|(?:\bm[trblxy]?-(?:\[[^\]]+\]|\d{2,}\b))|(?:\b(?:top|right|bottom|left)-\[[^\]]+\])|(?:\bgap-\[[^\]]+\])/g,
+    advice: "负 margin / 绝对定位偏移 / 任意值 gap 与容器对齐相关，调容器尺寸时要同步；逐 case 评估",
     risk: "高",
   },
 ];
@@ -177,7 +189,7 @@ function main() {
   out.push("# 6.1up · Phase 0 · 响应式 codemod 扫描报告（2026-06-01）");
   out.push("");
   out.push("> 由 [`scripts/responsive-codemod.mjs`](../../scripts/responsive-codemod.mjs) 自动产出。");
-  out.push("> 扫 `app/` + `components/` 下 .tsx/.ts，按 R1.1 方案 D1 节 8 类规则识别。");
+  out.push("> 扫 `app/` + `components/` 下 .tsx/.ts，按 R1.1 方案 D1 节 9 类规则识别。");
   out.push("> **不自动改文件**，本报告仅作改造依据。");
   out.push("");
   out.push("---");
