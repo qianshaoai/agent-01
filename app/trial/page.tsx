@@ -1142,7 +1142,7 @@ export default function TrialPage() {
 
       {/* ── 顶部导航（深色保留） ─────────────────────────────── */}
       <header className="relative z-10 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-b border-white/10 shadow-[0_4px_20px_rgba(0,47,167,0.12)]">
-        <div className="max-w-[1480px] mx-auto px-5 sm:px-8 lg:pl-8 lg:pr-20 h-16 flex items-center justify-between">
+        <div className="max-w-[var(--content-max-w)] mx-auto px-5 sm:px-8 lg:pl-8 lg:pr-20 h-16 flex items-center justify-between">
           <div className={`flex items-center gap-3 ${activeAgent ? "" : "lg:-ml-[52px]"}`}>
             {activeAgent ? (
               <button
@@ -1194,7 +1194,7 @@ export default function TrialPage() {
         </div>
       </header>
 
-      <main className="relative z-10 flex-1 max-w-[1480px] mx-auto w-full px-5 sm:px-8 lg:pl-8 lg:pr-20 py-8 flex flex-col">
+      <main className="relative z-10 flex-1 max-w-[var(--content-max-w)] mx-auto w-full px-5 sm:px-8 lg:pl-8 lg:pr-20 py-8 flex flex-col">
         {loadErr && !activeAgent && (
           <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-600 rounded-[12px] text-sm">
             {loadErr}

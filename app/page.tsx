@@ -440,7 +440,7 @@ export default function HomePage() {
       <div className="absolute bottom-0 left-1/4 w-[420px] h-[420px] rounded-full bg-[#a4b8ff]/40 blur-[140px] pointer-events-none" />
 
       <header className="relative z-40 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-b border-white/10 sticky top-0 shadow-[0_4px_20px_rgba(0,47,167,0.12)]">
-        <div className="max-w-[1600px] mx-auto px-5 sm:px-8 h-20 flex items-center justify-between">
+        <div className="max-w-[var(--content-max-w)] mx-auto px-5 sm:px-8 h-20 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
               className="lg:hidden p-2 rounded-[10px] hover:bg-white/10"
@@ -631,7 +631,7 @@ export default function HomePage() {
         </div>
       </header>
 
-      <div className="relative z-10 flex-1 max-w-[1600px] mx-auto w-full px-5 sm:px-8 py-6 flex gap-7">
+      <div className="relative z-10 flex-1 max-w-[var(--content-max-w)] mx-auto w-full px-5 sm:px-8 py-6 flex gap-7">
         {/* 4.30up 阶段一：左侧改为"我的工作流" */}
         <aside
           className={`fixed inset-y-0 left-0 z-50 w-60 bg-white shadow-xl p-6 flex flex-col gap-4 transform transition-transform duration-200 lg:static lg:z-auto lg:w-56 lg:shadow-none lg:bg-transparent lg:p-0 lg:translate-x-0 ${
@@ -1079,7 +1079,7 @@ export default function HomePage() {
       </div>
 
       <footer className="relative z-10 border-t border-white/40 bg-white/60 backdrop-blur-sm mt-auto">
-        <div className="max-w-[1600px] mx-auto px-5 sm:px-8 py-4 flex items-center justify-between">
+        <div className="max-w-[var(--content-max-w)] mx-auto px-5 sm:px-8 py-4 flex items-center justify-between">
           <p className="text-xs text-gray-400">© 2026 前哨科技（QianShao.AI）保留所有权利</p>
           <div className="flex items-center gap-4">
             <button
