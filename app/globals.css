@@ -46,6 +46,37 @@
   --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.04), 0 1px 3px rgba(17, 24, 39, 0.06);
   --shadow-md: 0 4px 12px rgba(17, 24, 39, 0.06), 0 2px 4px rgba(17, 24, 39, 0.04);
   --shadow-lg: 0 10px 28px rgba(17, 24, 39, 0.10), 0 4px 10px rgba(17, 24, 39, 0.05);
+
+  /* ─ 6.1up Phase 1 · 容器响应式 token（C1 节默认值 = 1440-1919 段）────────
+     扩展现有 token 体系，不重造。下方 @media 块覆盖 1366 段 / 2K+ 段。
+     具体 token 用法见 R1.1 C2/C3 节 · 1366 不能靠 lg: 单独表达，必须用 token 或 lg:max-[1439px]: */
+  --sidebar-w: 240px;        /* admin 侧栏宽度（admin-layout aside + main margin） */
+  --content-max-w: 1600px;   /* 主内容容器宽度上限 */
+  --page-px: 24px;           /* 页面左右内边距 */
+  --gap-card: 16px;          /* 卡片网格 / 列表间距 */
+  --table-dense: 0;          /* 1366 表格紧凑模式开关（1 = 紧凑），表格组件读取 */
+}
+
+/* 6.1up · 1366 段（1024-1439px；1440 不含，归 default 段）*/
+@media (max-width: 1439px) {
+  :root {
+    --sidebar-w: 200px;
+    --content-max-w: none;
+    --page-px: 16px;
+    --gap-card: 12px;
+    --table-dense: 1;
+  }
+}
+
+/* 6.1up · 2K+ 段（≥ 1920px）*/
+@media (min-width: 1920px) {
+  :root {
+    --sidebar-w: 260px;
+    --content-max-w: 1900px;
+    --page-px: 32px;
+    --gap-card: 20px;
+    --table-dense: 0;
+  }
 }
 
 @theme inline {
