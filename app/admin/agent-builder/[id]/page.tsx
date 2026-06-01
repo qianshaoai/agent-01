@@ -848,8 +848,10 @@ export default function AgentBuilderEditPage({
           </div>
         )}
 
-        {/* 左右两栏：左 = 配置；右 = 测试聊天（占位） */}
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-4">
+        {/* 左右两栏：左 = 配置；右 = 测试聊天（占位）
+            6.1up Phase 2C · 1fr_400px → 三档响应（C4 节核心改造）
+            1366 段 1fr_320px（左主栏 ~720px 不挤）/ 1440-1919 段 1fr_400px / 2K+ 段 1fr_440px */}
+        <div className="grid grid-cols-1 lg:max-[1439px]:grid-cols-[1fr_320px] lg:min-[1440px]:grid-cols-[1fr_400px] lg:min-[1920px]:grid-cols-[1fr_440px] gap-4">
           {/* 左侧：配置表单 */}
           <div className="space-y-4">
             {/* 分区 1：基础信息 */}
