@@ -138,7 +138,18 @@ export async function POST(
       }
     }
     const normalizedSample = sample.replace(/\s+/g, "");
-    if (!errMsg) success = normalizedSample.includes(TEST_EXPECTED_TEXT);
+    if (!errMsg) {
+      // 5.30.1 Fix · anthropic 中转层（如 claude-code-hub）会在请求转 Anthropic 前
+      //   注入「Kiro 开发助手」类的 system prompt，强制 Claude 拒绝跟随 user 消息里
+      //   的指令，导致严格匹配「连接成功」必失败。此问题在本平台代码层改不了
+      //   （中转行为），故放宽为「流非空 + 无 error event」即视为连通。
+      //   注：失去"模型听话"语义对 anthropic 是已知取舍——Kiro 注入下本就测不准。
+      if (provider.platform === "anthropic") {
+        success = sample.length > 0;
+      } else {
+        success = normalizedSample.includes(TEST_EXPECTED_TEXT);
+      }
+    }
     if (!success && !errMsg) {
       errMsg = sample
         ? `上游未按要求回复「${TEST_EXPECTED_TEXT}」，实际返回：${sample.slice(0, 200)}`

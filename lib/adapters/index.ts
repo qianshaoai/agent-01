@@ -429,8 +429,11 @@ async function* anthropicStream(
   };
 
   // 4. 认证 header：官方 endpoint 用 x-api-key，中转用 Authorization: Bearer
-  //    检测条件用 host 包含 "api.anthropic.com"（含 vertex/bedrock 等代理 host 也按 Bearer 算）
-  const isOfficial = config.apiEndpoint.includes("api.anthropic.com");
+  //    精确按 hostname 判断，避免代理 URL / query/path / 相似域名误判。
+  let isOfficial = false;
+  try {
+    isOfficial = new URL(config.apiEndpoint).hostname === "api.anthropic.com";
+  } catch {}
   const authHeader: Record<string, string> = isOfficial
     ? { "x-api-key": config.apiKey }
     : { Authorization: `Bearer ${config.apiKey}` };

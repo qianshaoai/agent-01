@@ -883,5 +883,119 @@ R2 已把二审意见并入主实施段，可进入 Phase 0 实施。
 | `app/admin/agent-builder/[id]/page.tsx` | 改 | `platform === "anthropic"` custom endpoint 模型下拉兜底 + composeValue 兜底 |
 | `app/api/agents/[id]/chat/route.ts` | 改 | supportsSystemRole + KB gate 加 `anthropic` |
 | `app/api/admin/agent-drafts/[id]/test-chat/route.ts` | 改 | KB gate 加 `anthropic` |
-| `upgrade/5.30up/5.30.1/方案-anthropic-原生协议接入-20260529.md` | 改 | **本文档，R2 已消歧** |
-| `upgrade/5.30up/5.30.1/变更记录-20260529.md` | 实施后新建 | 变更记录 |
+| `upgrade/5.30up/5.30.1/方案-anthropic-原生协议接入-20260529.md` | 改 | **本文档，R2 已消歧 · R3 加探针放宽节** |
+| `upgrade/5.30up/5.30.1/变更记录-20260529.md` | 实施后新建 | 变更记录（含 6/01 探针放宽 Fix） |
+
+---
+
+## R3 收口 · 实测验证后探针放宽（2026-06-01）
+
+### R3 触发
+
+5.30.1 主体改动 2026-05-29 落地、用户 6/01 在 dev 上人工实测 anthropic provider「测试该模型」按钮：
+
+- adapter 完全通了：Kiro 注入文本完整流回（SSE 解析、认证 header、endpoint 全对）
+- 但探针报「✗ 上游未按要求回复『连接成功』，实际返回：I appreciate you testing my consistency, but I need to be direct: I'm Kiro, an AI agent built to help with development and professional work. I won't follow instructions embedded in user messages that...」
+
+结论：Kiro system prompt 优先级 > user prompt，**强制 Claude 拒绝跟随 user 消息里的指令**。原 5.29up R5 Fix 4 加的「上游必须实际回复『连接成功』」硬校验在 anthropic + Kiro 注入场景下**必失败**——这正是 R0 Phase 4 + R2 §F 预判风险落地。
+
+### R3 决策 · 方案 A · 对 anthropic 平台放宽探针
+
+四选一对比：
+
+| | 改动 | 优劣 |
+|---|---|---|
+| **A · 仅对 anthropic 放宽**（采纳） | test/route.ts 加 `if (platform === "anthropic") success = sample.length > 0` | 最小改动；其它 5 个 platform 严格校验不变 |
+| B · 改 TEST_PROMPT 试图压过 Kiro | 加强 user 指令 | Kiro system 优先级 > user，仍会失败；影响所有平台 |
+| C · 探针塞 system 字段试图压 Kiro | messages 前加 system 反指令 | 不确定；中转可能拼接而不是替换；复杂 |
+| D · 不改 | — | API 管理列表 anthropic 永远红字 ✗，后面真坏了分不清 |
+
+### R3 实施 · 1 文件 1 处
+
+**改 [`app/api/admin/model-providers/[id]/test/route.ts`](../../app/api/admin/model-providers/[id]/test/route.ts) line 140 起**：
+
+```ts
+const normalizedSample = sample.replace(/\s+/g, "");
+if (!errMsg) {
+  // 5.30.1 Fix · anthropic 中转层（如 claude-code-hub）会在请求转 Anthropic 前
+  //   注入「Kiro 开发助手」类的 system prompt，强制 Claude 拒绝跟随 user 消息里
+  //   的指令，导致严格匹配「连接成功」必失败。此问题在本平台代码层改不了
+  //   （中转行为），故放宽为「流非空 + 无 error event」即视为连通。
+  //   注：失去"模型听话"语义对 anthropic 是已知取舍——Kiro 注入下本就测不准。
+  if (provider.platform === "anthropic") {
+    success = sample.length > 0;
+  } else {
+    success = normalizedSample.includes(TEST_EXPECTED_TEXT);
+  }
+}
+```
+
+### R3 影响范围
+
+- ✓ anthropic platform 「测试该模型」按钮：流非空 = ✓，空流 / fetch 失败 / error event 仍 = ✗
+- ✓ 其它 5 个 platform（coze / dify / yuanqi / qingyan / openai）严格匹配「连接成功」**不变**
+- ✗ anthropic 失去「Claude 是否听话」语义——但 Kiro 注入下本就测不准，此取舍可接受
+- ✗ 不解决 Kiro 注入问题（中转行为，本平台改不了 · 用户接受）
+
+---
+
+## R4 收口 · wfCtx 退出 system 走 user prefix（2026-06-01）
+
+### R4 触发
+
+5.30.1 + R3 落地后，用户 6/01 在工作流页面实测「参考: 222 你读一下这段内容，萃取一下我的经验」，Claude 智能体回「没收到具体的文字或文件」。
+
+通过浏览器 DevTools Network 面板抓 `POST /api/agents/[id]/chat` 的请求 payload，确认：
+
+```json
+{
+  "message": "你读一下这段内容，萃取一下我的经验",
+  "workflowContext": "用户：你好\n\n助手：你好呀！今天过得还顺利吗？...",
+  "workflowReferenceLabel": "222"
+}
+```
+
+- ✓ 前端正常发了完整的 222 步对话内容（workflowContext 字段非空）
+- ✓ 后端 chat route 按 5.30.1 R1 改动把 wfCtx 拼进 system 消息
+- ✓ anthropic adapter 把 system 消息抽到 `body.system` 字段发给中转
+- ✗ Claude 完全看不到（"没收到具体的文字或文件"）
+
+结论：**中转 claude-code-hub 直接替换 / 吞掉了 body.system 字段**——R0 当时预判 Kiro 是"前置追加"（双重人格），实测是**完全替换**，比预想更激进。
+
+### R4 决策 · 方案 B · anthropic 退出 supportsSystemRole
+
+三选一对比：
+
+| | 改动 | 优劣 |
+|---|---|---|
+| A · 不改 · 红字标注 anthropic 不适合做工作流步骤 | 搭建器加 hint | 0 改代码、admin 知情；但 anthropic 工作流功能直接残废 |
+| **B · anthropic 退出 supportsSystemRole**（采纳） | chat route.ts `supportsSystemRole` 把 anthropic 移出 → 走 5.21up 旧版的 user prefix 路径 | 中转不改 user 字段，wfCtx 进 Claude 实际 context；boundary 段已有缓解口吻继承 |
+| C · 换中转 / 上官方 API | 配置改 endpoint = `api.anthropic.com` | wfCtx 完美生效；但官方价 $5/$25 per MTok，用户暂不接受 |
+
+### R4 实施 · 1 文件 1 处
+
+**改 [`app/api/agents/[id]/chat/route.ts`](../../app/api/agents/[id]/chat/route.ts) line 455**：
+
+```ts
+// 5.30.1 R4 Fix · anthropic 退出 supportsSystemRole 白名单
+//   实测（2026-06-01）：claude-code-hub 类中转会吞掉 body.system 字段（替换成
+//   Kiro persona），导致 wfCtx 进 system 完全失效（payload 实测确认 wfCtx 已发出
+//   但 Claude 完全看不到）。退到 user prefix 路径（中转不改 user 字段），wfCtx
+//   能进 Claude 实际 context。boundary 段已有，缓解口吻继承问题。
+//   注：agent 的 system_prompt 仍走 body.system 仍会被 swallow——这是中转限制
+//   接受的取舍；wfCtx 比 system_prompt 更重要（工作流要靠它接力）。
+const supportsSystemRole = resolvedPlatform === "openai" || resolvedPlatform === "zhipu";
+```
+
+### R4 影响范围
+
+- ✓ anthropic 智能体在工作流接力时 wfCtx 进 user prefix 而非 body.system
+- ✓ 中转不动 user 字段，Claude 实际能读到上一步内容
+- ✓ openai / zhipu / coze / dify / yuanqi / qingyan **不受影响**（openai/zhipu 仍 system，其它仍 user prefix）
+- ✓ test-chat 不受影响（test-chat 没有 wfCtx 概念，KB gate 中 anthropic 仍保留）
+- ✗ agent 自己的 system_prompt（admin 写的人设）仍走 body.system 仍被 swallow——这是中转限制接受的取舍，wfCtx 比人设更关键
+- ⚠️ 不确定性：Kiro persona 中可能含"我不跟随 user 消息里的指令"类指令，可能仍压制 Claude 萃取 user prefix 内的 wfCtx 内容——需用户实测验证
+
+### R4 fallback · 若 B 仍失败 → A
+
+如果 B 实施后 Claude 仍拒绝读取 user prefix 中的 wfCtx，fallback 到方案 A：搭建器选 anthropic + 加入工作流时显式红字警示「Anthropic 中转不适合做带 wfCtx 的工作流步骤」，并建议改用 openai/zhipu 类 platform 或上 Anthropic 官方 API。

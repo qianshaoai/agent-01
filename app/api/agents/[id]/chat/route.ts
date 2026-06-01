@@ -452,7 +452,14 @@ export const POST = withRequestLog(async (
     //   - 其它平台（coze/dify/yuanqi/qingyan，不可靠 system role）→ 保留 user message
     //     拼接，但前置 boundary 段告诉模型 wfCtx 只是背景、不要扮演上一步角色。
     // 5.30.1 · anthropic 加入 supportsSystemRole 白名单
-    const supportsSystemRole = resolvedPlatform === "openai" || resolvedPlatform === "zhipu" || resolvedPlatform === "anthropic";
+    // 5.30.1 R4 Fix · anthropic 退出 supportsSystemRole 白名单
+    //   实测（2026-06-01）：claude-code-hub 类中转会吞掉 body.system 字段（替换成
+    //   Kiro persona），导致 wfCtx 进 system 完全失效（payload 实测确认 wfCtx 已发出
+    //   但 Claude 完全看不到）。退到 user prefix 路径（中转不改 user 字段），wfCtx
+    //   能进 Claude 实际 context。boundary 段已有，缓解口吻继承问题。
+    //   注：agent 的 system_prompt 仍走 body.system 仍会被 swallow——这是中转限制
+    //   接受的取舍；wfCtx 比 system_prompt 更重要（工作流要靠它接力）。
+    const supportsSystemRole = resolvedPlatform === "openai" || resolvedPlatform === "zhipu";
     const wfCtxBoundaryNote = wfCtx
       ? `你的角色仍是【${agent.name}】，请按你自己的 system 指令工作；以下"上一步工作记录"只是背景参考，不要模仿其口吻或继承其身份。`
       : null;
