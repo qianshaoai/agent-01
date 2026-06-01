@@ -219,8 +219,12 @@ export function AdminLayout({
 
   return (
     <div className="min-h-screen flex" style={{ background: "var(--bg-app)" }}>
-      {/* Desktop sidebar — 与用户端 header 同源深蓝渐变 */}
-      <aside className="hidden lg:flex flex-col w-60 bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-r border-white/10 fixed inset-y-0 left-0 z-40 shadow-[4px_0_20px_rgba(0,47,167,0.15)]">
+      {/* Desktop sidebar — 与用户端 header 同源深蓝渐变
+          6.1up Phase 2A · w-60 → var(--sidebar-w)（200 / 240 / 260 三档随分辨率响应）*/}
+      <aside
+        className="hidden lg:flex flex-col bg-gradient-to-br from-[#0f1f5a] via-[#1a3590] to-[#1a47c0] border-r border-white/10 fixed inset-y-0 left-0 z-40 shadow-[4px_0_20px_rgba(0,47,167,0.15)]"
+        style={{ width: "var(--sidebar-w)" }}
+      >
         {navContent}
       </aside>
 
@@ -237,8 +241,10 @@ export function AdminLayout({
         </div>
       )}
 
-      {/* Main */}
-      <div className="flex-1 lg:ml-60 flex flex-col min-h-screen">
+      {/* Main
+          6.1up Phase 2A · lg:ml-60 → lg:[margin-left:var(--sidebar-w)]
+          保留 lg gate（< 1024 隐藏侧栏 → 主内容无偏移），桌面下偏移随 --sidebar-w 同步 */}
+      <div className="flex-1 lg:[margin-left:var(--sidebar-w)] flex flex-col min-h-screen">
         {/* Mobile top bar */}
         <div className="lg:hidden bg-white border-b border-gray-100 px-4 h-14 flex items-center gap-3 sticky top-0 z-30">
           <button onClick={() => setMobileOpen(true)} className="p-2 rounded-[8px] hover:bg-gray-100">
