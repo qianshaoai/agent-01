@@ -44,6 +44,7 @@ type Agent = {
   permissions?: { scope_type: string; scope_id: string | null }[];
   workflows?: WorkflowRef[];
 };
+type ApiProvider = { id: string; name: string; platform: string; enabled: boolean };
 type Category = { id: string; name: string; icon_url?: string | null };
 type Tenant = { id: string; code: string; name: string };
 type Permission = { id: string; scope_type: string; scope_id: string | null; scope_label: string };
@@ -73,6 +74,13 @@ type ApiFormState = {
   advancedOpen: boolean;
 };
 const EMPTY_API: ApiFormState = { providerId: "", inputs: {}, advancedJson: "", advancedOpen: false };
+
+function resolveEffectivePlatform(providerId: string, providers: ApiProvider[], agent: Agent): string {
+  const selectedProvider = providers.find((p) => p.id === providerId);
+  if (selectedProvider) return selectedProvider.platform;
+  if (providerId && providerId === agent.provider_id && agent.provider?.platform) return agent.provider.platform;
+  return agent.platform;
+}
 
 // 把存量 model_params（任意 key → value）按 schema 分流成 inputs / advancedJson 两段
 function splitParamsBySchema(
@@ -159,7 +167,7 @@ export default function AgentsAdminPage() {
   const [form, setForm] = useState(EMPTY_AGENT);
   const [apiForm, setApiForm] = useState<ApiFormState>(EMPTY_API);
   // 5.15up PR-2 · API 配置弹窗的「命名 API」下拉选项
-  const [apiProviders, setApiProviders] = useState<{ id: string; name: string; platform: string; enabled: boolean }[]>([]);
+  const [apiProviders, setApiProviders] = useState<ApiProvider[]>([]);
   // 6.2up · 记录上一次 effectivePlatform，用于在 provider 切换 / apiProviders 异步加载时触发 re-split
   const prevEffPlatRef = useRef<string | null>(null);
 
@@ -170,8 +178,7 @@ export default function AgentsAdminPage() {
       prevEffPlatRef.current = null;
       return;
     }
-    const selectedProvider = apiProviders.find((p) => p.id === apiForm.providerId);
-    const effPlat = selectedProvider?.platform ?? showApiModal.provider?.platform ?? showApiModal.platform;
+    const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
     if (prevEffPlatRef.current === effPlat) return;
     const oldPlat = prevEffPlatRef.current;
     prevEffPlatRef.current = effPlat;
@@ -286,9 +293,9 @@ export default function AgentsAdminPage() {
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   async function openApi(a: Agent) {
     setShowApiModal(a);
-    // 6.2up · 首次分流用 agent.provider?.platform → agent.platform 兜底
-    // （此时 apiProviders 还没拉完，selectedProvider 暂时无法 lookup）
-    const initialPlatform = a.provider?.platform ?? a.platform;
+    // 6.2up · 首次分流不依赖 apiProviders 异步结果；
+    // 仅原绑定 provider 可用 agent.provider.platform 兜底，解绑时回退 agent.platform。
+    const initialPlatform = resolveEffectivePlatform(a.provider_id ?? "", [], a);
     const initialSchema = schemaForPlatform(initialPlatform);
     const params = (a.model_params ?? {}) as Record<string, unknown>;
     const split = splitParamsBySchema(params, initialSchema);
@@ -460,8 +467,7 @@ export default function AgentsAdminPage() {
   async function handleSaveApi() {
     if (!showApiModal) return;
     // 6.2up · 按 effectivePlatform 取 schema，校验高级 JSON + 各 input 字段，input 优先合并
-    const selectedProvider = apiProviders.find((p) => p.id === apiForm.providerId);
-    const effPlat = selectedProvider?.platform ?? showApiModal.provider?.platform ?? showApiModal.platform;
+    const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
     const schema = schemaForPlatform(effPlat);
     // 1. 解析高级 JSON
     const adv = parseAdvancedJson(apiForm.advancedJson);
@@ -1007,8 +1013,7 @@ export default function AgentsAdminPage() {
 
               {/* 6.2up · 模型参数：按 effectivePlatform 渲染 input 列表 + 折叠 JSON */}
               {(() => {
-                const selProv = apiProviders.find((p) => p.id === apiForm.providerId);
-                const effPlat = selProv?.platform ?? showApiModal.provider?.platform ?? showApiModal.platform;
+                const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
                 const schema = schemaForPlatform(effPlat);
                 // dify 在 advancedJson 空时隐藏折叠；其它平台（含 other）始终允许打开
                 const showJsonAdvanced = !schema.hideJsonIfEmpty || apiForm.advancedJson.trim().length > 0;
