@@ -848,7 +848,7 @@ export default function AgentBuilderEditPage({
                   </Field>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <Field label="温度（0.0 - 2.0）">
+                    <Field label="温度（0.0 - 2.0）" hint="越低越稳定准确，越高越发散有创意，日常对话建议 0.7">
                       <input
                         type="number"
                         step="0.1"
