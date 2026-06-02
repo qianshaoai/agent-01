@@ -22,7 +22,7 @@ type TestMsg = { role: "user" | "assistant"; content: string };
 type Provider = {
   id: string;
   name: string;
-  /** 5.29up · 合并模型选择下拉需要 provider_code 做分组标题 + 当前供应商小字 */
+  /** 5.29up / 6.3up · 一级供应商下拉的 label 后缀（与 name 一起显示，区分同 platform 多 provider） */
   provider_code: string;
   platform: string;
   api_endpoint: string; // 5.27up · 反查厂商预设需要 endpoint host
@@ -81,19 +81,19 @@ type Draft = {
 // 后下拉仍显示 GPT 列表"的 bug（同 platform="openai" 但模型完全不同）。
 // 5.20up 验收的「绑 KB 智能体最低 glm-4-air」标注仍在 zhipu-glm preset 里。
 //
-// ─── 5.29up · 模型选择融合 helpers ────────────────────────────
-//   - resolveProviderPresetForBuilder: 比 inferPresetFromExisting 更严格 —— host 找
-//     不到时不回落到该 platform 第一个 preset（避免 OpenAI 兼容自定义 endpoint 错套
-//     GPT 推荐模型）。只在搭建器内用，不动 presets.ts 全局语义。
-//   - buildModelOptions: providers × 各自 recommendedModels → 扁平选项列表，渲染时
-//     按 groupKey 归并成 optgroup。
-//   - composeValue: 把 (provider_id, model) 反推成 select 当前值；model 不在 preset
-//     列表里 → 返回空（按 placeholder 渲染，admin 需重新挑）。
+// ─── 6.3up · 模型选择两级化 helpers ────────────────────────────
+//   5.29up 把「供应商 + 模型」合并成一个 grouped popover，多 provider 后辨识度低
+//   （同 platform / provider_code 撞名）。6.3up 回退到两级 select：
+//     - buildProviderOptions: enabled providers → 一级下拉
+//     - buildModelsForProvider: 给定 provider → 二级下拉（recognized preset 用其
+//       recommendedModels；openai / anthropic custom endpoint 套 -official 推荐
+//       兜底；其它 custom → 空）
+//     - resolveProviderPresetForBuilder（保留）：host 不命中时不回落 platform 第
+//       一个 preset，避免 OpenAI 兼容自定义 endpoint 错套 GPT 推荐。
 //
-// 2026-05-29 删除：自定义模型名（探针）功能已下线，原因——第三方 OpenAI 兼容中转
-//   通常 silently 路由请求 + /models 列表 ID 与 OpenAI 标称命名不一致，导致探针要么
-//   误报 ✗ 要么误报 ✓，admin 体感比"只能从预设列表挑"还糟。保留 openai-platform
-//   custom 套 openai-official 推荐列表的兜底（当前接 OpenAI 的唯一通路）。
+//   5.29up 删除：自定义模型名（探针）功能已下线，6.3up 不恢复——第三方 OpenAI
+//   兼容中转的 silently 路由 + /models ID 命名差异让探针几乎必误报。要加新模型
+//   走 lib/model-providers/presets.ts 评审。
 
 type CustomBuilderResolution = { kind: "custom"; label: string };
 type RecognizedBuilderResolution = { kind: "recognized"; preset: ProviderPreset };
@@ -127,110 +127,44 @@ function resolveProviderPresetForBuilder(provider: Provider): BuilderResolution 
   return { kind: "custom", label: customProviderLabel(provider) };
 }
 
-type ModelOption = {
-  /** 同一 provider 的 options 共用一个 groupKey → 渲染时聚成一个 <optgroup> */
-  groupKey: string;
-  groupLabel: string;
-  optionValue: string;     // `${provider_id}::${model_value}`
-  optionLabel: string;
-};
+// 6.3up · 两级 select 选项的通用形态（不再用 ${pid}::${model} 组合 value）
+type Option = { value: string; label: string };
 
 // 5.29up · 模型显示文案：去掉 preset label 里的括号描述（"gpt-5.5（2026/04 旗舰）"
-//   → "gpt-5.5"）。原始 label 在 API 管理页继续展示，搭建器下拉里只显示纯模型名，
-//   admin 看着更干净。分组标题保留括号（那是 provider_code，必须留）。
+//   → "gpt-5.5"）。原始 label 在 API 管理页继续展示，搭建器下拉里只显示纯模型名。
 function stripModelDesc(label: string): string {
   return label.replace(/\s*[（(].*?[）)]\s*$/g, "").trim();
 }
 
-function buildModelOptions(providers: Provider[]): ModelOption[] {
-  // OpenAI 兼容（自定义）保留兜底：套 openai-official 的 recommendedModels（gpt-4o-
-  //   mini / gpt-5.5 等）。这是当前接 OpenAI 的唯一通路，移除会让 GPT 模型无处可选。
-  // 5.30.1 · 同样口径加 anthropic 兜底：anthropic platform 的 custom endpoint（典型
-  //   场景：第三方 Claude 中转，如 claude.redcodeai.cn）需套 anthropic-official 的
-  //   recommendedModels 让 admin 能在下拉里挑 Opus 4.8 / Sonnet 4.6 / Haiku 4.5。
-  const all = getPresetsByCategory("model");
-  const openaiOfficial = all.find((p) => p.code === "openai-official");
-  const openaiOfficialModels = openaiOfficial?.recommendedModels ?? [];
-  const anthropicOfficial = all.find((p) => p.code === "anthropic-official");
-  const anthropicOfficialModels = anthropicOfficial?.recommendedModels ?? [];
-
+// 6.3up · 一级下拉：可选供应商列表（enabled + 配了 key 的）
+function buildProviderOptions(providers: Provider[]): Option[] {
   return providers
     .filter((p) => p.enabled && p.has_api_key)
-    .flatMap((provider) => {
-      const r = resolveProviderPresetForBuilder(provider);
-      const presetName = r.kind === "recognized" ? r.preset.label.split("（")[0] : r.label;
-      const groupKey = provider.id;
-      const baseLabel = `${presetName}（${provider.provider_code}）`;
-
-      // openai 平台的 custom（典型场景：第三方中转）→ 套 openai-official 推荐模型
-      if (r.kind === "custom" && provider.platform === "openai" && openaiOfficialModels.length > 0) {
-        return openaiOfficialModels.map((m) => ({
-          groupKey,
-          groupLabel: baseLabel,
-          optionValue: `${provider.id}::${m.value}`,
-          optionLabel: stripModelDesc(m.label),
-        }));
-      }
-
-      // 5.30.1 · anthropic 平台的 custom（典型场景：第三方 Claude 中转）→ 套 anthropic-official 推荐模型
-      if (r.kind === "custom" && provider.platform === "anthropic" && anthropicOfficialModels.length > 0) {
-        return anthropicOfficialModels.map((m) => ({
-          groupKey,
-          groupLabel: baseLabel,
-          optionValue: `${provider.id}::${m.value}`,
-          optionLabel: stripModelDesc(m.label),
-        }));
-      }
-
-      // 其它自定义分支（非 openai/anthropic 平台且无 preset 匹配）→ 不出现在下拉里。
-      //   想用此类 provider 需先在 lib/model-providers/presets.ts 加 preset。
-      if (r.kind === "custom" || (r.preset.recommendedModels?.length ?? 0) === 0) {
-        return [];
-      }
-
-      // recognized 分支：仅 preset 推荐模型
-      return r.preset.recommendedModels!.map((m) => ({
-        groupKey,
-        groupLabel: baseLabel,
-        optionValue: `${provider.id}::${m.value}`,
-        optionLabel: stripModelDesc(m.label),
-      }));
-    });
+    .map((p) => ({ value: p.id, label: `${p.name}（${p.provider_code}）` }));
 }
 
-/**
- * 反推 select 的当前 value。
- *   - 没选供应商 → "" （placeholder 占位）
- *   - 已选供应商 + model 在 preset 推荐列表里 → `${pid}::${model}`
- *   - 已选供应商 + model 不在推荐 / model 为空 → "" （popover 显示 placeholder，
- *     admin 需重新挑；老 draft 的 model 缺失场景由 maybeSeedModelFromDefault 在
- *     加载时补齐；orphan 的自定义 model 名会被显示为未选中状态，admin 重新挑覆盖）
- */
-function composeValue(
-  providers: Provider[],
-  providerId: string | null,
-  model: string | undefined,
-): string {
-  if (!providerId) return "";
-  if (!model) return "";
-  const provider = providers.find((p) => p.id === providerId);
-  if (!provider) return "";
+// 6.3up · 二级下拉：给定 provider 的可选模型列表
+//   - recognized preset → preset.recommendedModels
+//   - openai / anthropic custom endpoint → 套 -official 推荐（5.29up Fix 4 + 5.30.1 R1#8 兜底口径）
+//   - 其它 custom → 空（要加新模型走 presets.ts 评审）
+function buildModelsForProvider(provider: Provider | undefined): Option[] {
+  if (!provider) return [];
   const r = resolveProviderPresetForBuilder(provider);
-  let list: { value: string; label: string }[];
-  if (r.kind === "recognized") {
-    list = r.preset.recommendedModels ?? [];
-  } else if (provider.platform === "openai") {
-    const all = getPresetsByCategory("model");
-    list = all.find((p) => p.code === "openai-official")?.recommendedModels ?? [];
-  } else if (provider.platform === "anthropic") {
-    // 5.30.1 · anthropic 平台的 custom endpoint 与 openai 同口径，套 anthropic-official 推荐
-    const all = getPresetsByCategory("model");
-    list = all.find((p) => p.code === "anthropic-official")?.recommendedModels ?? [];
-  } else {
-    return "";
+  if (r.kind === "recognized" && r.preset.recommendedModels?.length) {
+    return r.preset.recommendedModels.map((m) => ({ value: m.value, label: stripModelDesc(m.label) }));
   }
-  if (list.some((m) => m.value === model)) return `${providerId}::${model}`;
-  return "";
+  if (r.kind === "custom") {
+    const all = getPresetsByCategory("model");
+    if (provider.platform === "openai") {
+      const list = all.find((p) => p.code === "openai-official")?.recommendedModels ?? [];
+      return list.map((m) => ({ value: m.value, label: stripModelDesc(m.label) }));
+    }
+    if (provider.platform === "anthropic") {
+      const list = all.find((p) => p.code === "anthropic-official")?.recommendedModels ?? [];
+      return list.map((m) => ({ value: m.value, label: stripModelDesc(m.label) }));
+    }
+  }
+  return [];
 }
 
 // 5.29up R5 Fix 1 · 加载老 draft 时一次性把空 model 补成 provider 默认模型。
@@ -267,39 +201,23 @@ function validateModelBeforeSave(draft: Draft, providers: Provider[]): string | 
   return null;
 }
 
-// ─── 5.29up · 模型选择 popover ────────────────────────────────────────────
-// 替换原生 <select> 为可控浮层：固定可视高度（约 5-6 行）+ 滚轮滑动 + 分组 sticky 标题。
-// 解决原生 select 在 Windows 上展开过高/视觉割裂的问题。
-//
-//   - 点击触发按钮 → 浮层开关
-//   - 点击外部 / Esc → 关闭
-//   - 选中后立即关闭并触发 onChange
-//   - 当前选中项高亮 + ✓
-//   - 分组标题做 sticky，滚动时仍能看见当前在哪组
-type GroupedOptions = { groupKey: string; groupLabel: string; opts: ModelOption[] };
-
-function groupModelOptions(options: ModelOption[]): GroupedOptions[] {
-  const map = new Map<string, GroupedOptions>();
-  for (const o of options) {
-    const existing = map.get(o.groupKey);
-    if (existing) existing.opts.push(o);
-    else map.set(o.groupKey, { groupKey: o.groupKey, groupLabel: o.groupLabel, opts: [o] });
-  }
-  return Array.from(map.values());
-}
-
-function ModelSelectPopover({
+// ─── 6.3up · 通用单层 select popover ─────────────────────────────────────
+// 复用 5.29up popover 风格（按钮 + 浮层 + 点击外部/Esc 关闭 + 选中项高亮 ✓）。
+// 单层 Option[]，无分组 sticky 标题。两级 select（供应商 / 模型）共用。
+function SimpleSelectPopover({
   value,
   options,
   onChange,
   placeholder,
   disabled,
+  emptyHint = "暂无可选项",
 }: {
   value: string;
-  options: ModelOption[];
+  options: Option[];
   onChange: (v: string) => void;
   placeholder: string;
   disabled?: boolean;
+  emptyHint?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -320,9 +238,8 @@ function ModelSelectPopover({
     };
   }, [open]);
 
-  const grouped = groupModelOptions(options);
-  const current = options.find((o) => o.optionValue === value);
-  const buttonLabel = current?.optionLabel ?? placeholder;
+  const current = options.find((o) => o.value === value);
+  const buttonLabel = current?.label ?? placeholder;
 
   return (
     <div ref={rootRef} className="relative">
@@ -342,36 +259,29 @@ function ModelSelectPopover({
         // 5-6 行可视高度：每行 ~36px → max-h-[220px] 给 6 行；超出滚轮滑动
         <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-[10px] shadow-[0_10px_30px_rgba(0,0,0,0.12)] max-h-[220px] overflow-y-auto py-1">
           {options.length === 0 ? (
-            <p className="px-3 py-3 text-xs text-gray-400">暂无可选模型</p>
+            <p className="px-3 py-3 text-xs text-gray-400">{emptyHint}</p>
           ) : (
-            grouped.map((g) => (
-              <div key={g.groupKey}>
-                <div className="sticky top-0 z-10 px-3 py-1 text-[11px] font-medium text-gray-500 bg-gray-50 border-b border-gray-100">
-                  {g.groupLabel}
-                </div>
-                {g.opts.map((o) => {
-                  const isCurrent = o.optionValue === value;
-                  return (
-                    <button
-                      key={o.optionValue}
-                      type="button"
-                      onClick={() => {
-                        onChange(o.optionValue);
-                        setOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between transition-colors ${
-                        isCurrent
-                          ? "bg-[#002FA7]/8 text-[#002FA7] font-medium"
-                          : "text-gray-800 hover:bg-gray-50"
-                      }`}
-                    >
-                      <span className="truncate">{o.optionLabel}</span>
-                      {isCurrent && <Check size={13} className="text-[#002FA7] shrink-0 ml-2" />}
-                    </button>
-                  );
-                })}
-              </div>
-            ))
+            options.map((o) => {
+              const isCurrent = o.value === value;
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(o.value);
+                    setOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between transition-colors ${
+                    isCurrent
+                      ? "bg-[#002FA7]/8 text-[#002FA7] font-medium"
+                      : "text-gray-800 hover:bg-gray-50"
+                  }`}
+                >
+                  <span className="truncate">{o.label}</span>
+                  {isCurrent && <Check size={13} className="text-[#002FA7] shrink-0 ml-2" />}
+                </button>
+              );
+            })
           )}
         </div>
       )}
@@ -882,82 +792,59 @@ export default function AgentBuilderEditPage({
             {/* 分区 2：模型设置（仅对话型显示） */}
             {draft.agent_type === "chat" && (
               <section className="card p-5">
-                <SectionTitle icon={<Settings2 size={16} />} title="2. 模型设置" desc="直接挑模型，供应商自动联动。" />
+                <SectionTitle icon={<Settings2 size={16} />} title="2. 模型设置" desc="先选大模型供应商，再选模型。" />
                 <div className="space-y-3 mt-3">
-                  {/* 5.29up · 合并模型选择 ───────────────────────────────────
-                      一步式 grouped select：按供应商分组直接挑模型，选中后自动
-                      联动 provider_id + model_params.model。下方"当前供应商"小字
-                      让 admin 在 select 关闭后仍能看到当前用的是哪家（同模型名跨多
-                      provider 时尤其需要）。
-                      2026-05-29 · 自定义模型名（探针）功能已删除：第三方中转的
-                      silently 路由 + /models 列表 ID 命名不一致让探针几乎必误报。
-                      要用 OpenAI 兼容自定义 endpoint → 仍可从下拉里挑 openai-
-                      official 推荐模型（gpt-4o-mini 等）。要用 preset 未覆盖的
-                      新模型 → 改 lib/model-providers/presets.ts 走代码评审。 */}
-                  <Field label="模型选择 *">
-                    {(() => {
-                      const allOptions = buildModelOptions(enabledProviders);
-                      const currentValue = composeValue(
-                        enabledProviders,
-                        draft.provider_id,
-                        draft.model_params.model as string | undefined,
-                      );
-                      return (
-                        <>
-                          <ModelSelectPopover
-                            value={currentValue}
-                            options={allOptions}
-                            placeholder="请选择模型…"
-                            disabled={enabledProviders.length === 0}
-                            onChange={(v) => {
-                              if (!v) {
-                                patchDraft((d) => ({
-                                  ...d,
-                                  provider_id: null,
-                                  model_params: { ...d.model_params, model: undefined },
-                                }));
-                                return;
-                              }
-                              const [pid, modelName] = v.split("::");
-                              patchDraft((d) => ({
-                                ...d,
-                                provider_id: pid,
-                                model_params: {
-                                  ...d.model_params,
-                                  model: modelName,
-                                },
-                              }));
-                            }}
-                          />
+                  {/* 6.3up · 两级 select ───────────────────────────────────
+                      一级供应商 + 二级模型。切供应商时自动 reset model 字段
+                      避免静默错配。原 5.29up 合并下拉因为同 platform 多
+                      provider 时辨识度低被回退（截图反馈：claude（claude）
+                      provider_code 与 platform 同名导致小字辨识度差）。 */}
+                  <Field label="供应商 *">
+                    <SimpleSelectPopover
+                      value={draft.provider_id ?? ""}
+                      options={buildProviderOptions(providers)}
+                      placeholder="请选择大模型供应商…"
+                      disabled={enabledProviders.length === 0}
+                      emptyHint="暂无可用供应商"
+                      onChange={(v) => {
+                        // 6.3up · 切供应商时 reset model（决策点 2 · A）
+                        patchDraft((d) => ({
+                          ...d,
+                          provider_id: v || null,
+                          model_params: { ...d.model_params, model: undefined },
+                        }));
+                      }}
+                    />
+                    {enabledProviders.length === 0 && (
+                      <p className="text-[11px] text-amber-600 mt-1">
+                        当前没有可用供应商。请先去
+                        <Link href="/admin/model-providers" className="underline mx-1">模型接入</Link>
+                        添加并启用。
+                      </p>
+                    )}
+                  </Field>
 
-                          {/* 没可用供应商 → 引导去 API 管理新建 */}
-                          {enabledProviders.length === 0 && (
-                            <p className="text-[11px] text-amber-600 mt-1">
-                              当前没有可用供应商。请先去
-                              <Link href="/admin/model-providers" className="underline mx-1">模型接入</Link>
-                              添加并启用。
-                            </p>
-                          )}
-
-                          {/* 5.29up Fix 5 · 当前供应商小字：原生 select 关闭后看不到 optgroup，
-                              admin 需要在气泡下方明确"当前用的是哪家"，特别是同模型名跨多 provider 时 */}
-                          {selectedProvider && (
-                            <p className="text-[11px] text-gray-500 mt-1">
-                              当前供应商：
-                              <code className="font-mono">{selectedProvider.name}（{selectedProvider.provider_code}）</code>
-                            </p>
-                          )}
-
-                          {/* KB + flash 仍保留 5.20up 锁定的提示 */}
-                          {isKnowledgeBaseFlashModel && (
-                            <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
-                              已绑定知识库时不建议使用 GLM-4-Flash：验收中该模型会用常识反驳知识库事实。
-                              请改为 <code className="font-mono">glm-4-air</code> 或更高模型。
-                            </p>
-                          )}
-                        </>
-                      );
-                    })()}
+                  <Field label="模型 *">
+                    <SimpleSelectPopover
+                      value={(draft.model_params.model as string | undefined) ?? ""}
+                      options={buildModelsForProvider(selectedProvider)}
+                      placeholder={selectedProvider ? "请选择模型…" : "请先选供应商"}
+                      disabled={!selectedProvider}
+                      emptyHint="该供应商暂无预设模型；请到 lib/model-providers/presets.ts 添加"
+                      onChange={(v) => {
+                        patchDraft((d) => ({
+                          ...d,
+                          model_params: { ...d.model_params, model: v || undefined },
+                        }));
+                      }}
+                    />
+                    {/* KB + flash 仍保留 5.20up 锁定的提示 */}
+                    {isKnowledgeBaseFlashModel && (
+                      <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
+                        已绑定知识库时不建议使用 GLM-4-Flash：验收中该模型会用常识反驳知识库事实。
+                        请改为 <code className="font-mono">glm-4-air</code> 或更高模型。
+                      </p>
+                    )}
                   </Field>
 
                   <div className="grid grid-cols-2 gap-3">
