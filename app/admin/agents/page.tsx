@@ -10,6 +10,12 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
+import {
+  schemaForPlatform,
+  parseAdvancedJson,
+  validateNumberField,
+  type PlatformSchema,
+} from "@/lib/platform-param-schema";
 
 type WorkflowRef = { id: string; name: string };
 type UsedByEntry = { id: string; name: string; stepCount: number };
@@ -59,7 +65,51 @@ const PLATFORMS = ["coze", "dify", "qingyan", "yuanqi", "openai", "other"];
 // 5.15up PR-2 · 智能体平台 → API category（决定 API 配置下拉拉哪类命名 API）
 const AGENT_PLATFORMS = ["coze", "dify", "yuanqi", "qingyan"];
 const EMPTY_AGENT = { id: "", name: "", description: "", categoryIds: [] as string[], platform: "coze", agentType: "chat", externalUrl: "" };
-const EMPTY_API = { modelParams: '{"temperature": 0.7, "max_tokens": 2000}', providerId: "" };
+// 6.2up · API 配置弹窗状态：inputs（按 schema 拉的字段值） + advancedJson（schema 之外的 key） + 折叠展开状态
+type ApiFormState = {
+  providerId: string;
+  inputs: Record<string, string>;
+  advancedJson: string;
+  advancedOpen: boolean;
+};
+const EMPTY_API: ApiFormState = { providerId: "", inputs: {}, advancedJson: "", advancedOpen: false };
+
+// 把存量 model_params（任意 key → value）按 schema 分流成 inputs / advancedJson 两段
+function splitParamsBySchema(
+  params: Record<string, unknown>,
+  schema: PlatformSchema,
+): { inputs: Record<string, string>; advancedJson: string } {
+  const inputs: Record<string, string> = {};
+  const extra: Record<string, unknown> = {};
+  const schemaKeys = new Set(schema.fields.map((f) => f.key));
+  for (const [k, v] of Object.entries(params)) {
+    if (schemaKeys.has(k)) inputs[k] = v === null || v === undefined ? "" : String(v);
+    else extra[k] = v;
+  }
+  return {
+    inputs,
+    advancedJson: Object.keys(extra).length > 0 ? JSON.stringify(extra, null, 2) : "",
+  };
+}
+
+// provider 切换 / apiProviders 异步加载时收集当前 form 已填的全部参数（用于 re-split）
+// JSON 解析失败时退到空，避免切换被卡（仍保留 inputs 里的值）
+function collectCurrentParams(form: ApiFormState, schema: PlatformSchema): Record<string, unknown> {
+  const adv = parseAdvancedJson(form.advancedJson);
+  const extra = adv.ok ? adv.value : {};
+  const inputParams: Record<string, unknown> = {};
+  for (const f of schema.fields) {
+    const raw = form.inputs[f.key] ?? "";
+    if (raw === "") continue;
+    if (f.type === "number") {
+      const n = Number(raw);
+      inputParams[f.key] = Number.isFinite(n) ? n : raw;
+    } else {
+      inputParams[f.key] = raw;
+    }
+  }
+  return { ...extra, ...inputParams };
+}
 
 export default function AgentsAdminPage() {
   const { toast } = useToast();
@@ -107,9 +157,36 @@ export default function AgentsAdminPage() {
   const [displayLoading, setDisplayLoading] = useState(false);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [form, setForm] = useState(EMPTY_AGENT);
-  const [apiForm, setApiForm] = useState(EMPTY_API);
+  const [apiForm, setApiForm] = useState<ApiFormState>(EMPTY_API);
   // 5.15up PR-2 · API 配置弹窗的「命名 API」下拉选项
   const [apiProviders, setApiProviders] = useState<{ id: string; name: string; platform: string; enabled: boolean }[]>([]);
+  // 6.2up · 记录上一次 effectivePlatform，用于在 provider 切换 / apiProviders 异步加载时触发 re-split
+  const prevEffPlatRef = useRef<string | null>(null);
+
+  // 6.2up · provider 切换 / apiProviders 异步加载时按新 schema 重做分流
+  // 通用字段（model/temperature/max_tokens）继续显示；平台专属字段（bot_id 等）归入高级 JSON，不静默丢弃
+  useEffect(() => {
+    if (!showApiModal) {
+      prevEffPlatRef.current = null;
+      return;
+    }
+    const selectedProvider = apiProviders.find((p) => p.id === apiForm.providerId);
+    const effPlat = selectedProvider?.platform ?? showApiModal.provider?.platform ?? showApiModal.platform;
+    if (prevEffPlatRef.current === effPlat) return;
+    const oldPlat = prevEffPlatRef.current;
+    prevEffPlatRef.current = effPlat;
+    if (oldPlat === null) return; // 首次由 openApi 设置，不重做
+    const oldSchema = schemaForPlatform(oldPlat);
+    const collected = collectCurrentParams(apiForm, oldSchema);
+    const newSchema = schemaForPlatform(effPlat);
+    const reSplit = splitParamsBySchema(collected, newSchema);
+    setApiForm((prev) => ({
+      ...prev,
+      inputs: reSplit.inputs,
+      advancedJson: reSplit.advancedJson,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiForm.inputs/advancedJson 故意不放依赖：避免输入时无限 re-split
+  }, [showApiModal, apiForm.providerId, apiProviders]);
   // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
   // 三个独立的 guard，对应三个 modal 的保存按钮
   const saveAgentGuard = useSubmitGuard();
@@ -209,10 +286,19 @@ export default function AgentsAdminPage() {
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   async function openApi(a: Agent) {
     setShowApiModal(a);
+    // 6.2up · 首次分流用 agent.provider?.platform → agent.platform 兜底
+    // （此时 apiProviders 还没拉完，selectedProvider 暂时无法 lookup）
+    const initialPlatform = a.provider?.platform ?? a.platform;
+    const initialSchema = schemaForPlatform(initialPlatform);
+    const params = (a.model_params ?? {}) as Record<string, unknown>;
+    const split = splitParamsBySchema(params, initialSchema);
     setApiForm({
       providerId: a.provider_id ?? "",
-      modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}',
+      inputs: split.inputs,
+      advancedJson: split.advancedJson,
+      advancedOpen: false, // 默认收起
     });
+    prevEffPlatRef.current = initialPlatform;
     // 按 agent 平台拉对应类别的命名 API 作下拉选项
     setApiProviders([]);
     const cat = AGENT_PLATFORMS.includes(a.platform) ? "agent" : "model";
@@ -373,15 +459,39 @@ export default function AgentsAdminPage() {
 
   async function handleSaveApi() {
     if (!showApiModal) return;
+    // 6.2up · 按 effectivePlatform 取 schema，校验高级 JSON + 各 input 字段，input 优先合并
+    const selectedProvider = apiProviders.find((p) => p.id === apiForm.providerId);
+    const effPlat = selectedProvider?.platform ?? showApiModal.provider?.platform ?? showApiModal.platform;
+    const schema = schemaForPlatform(effPlat);
+    // 1. 解析高级 JSON
+    const adv = parseAdvancedJson(apiForm.advancedJson);
+    if (!adv.ok) { toast(adv.msg); return; }
+    // 2. 校验 input 字段（number 越界 / NaN / required）
+    const inputParams: Record<string, unknown> = {};
+    for (const f of schema.fields) {
+      const raw = apiForm.inputs[f.key] ?? "";
+      if (f.type === "number") {
+        const r = validateNumberField(f, raw);
+        if (!r.ok) { toast(r.msg); return; }
+        if (Number.isFinite(r.value)) inputParams[f.key] = r.value;
+      } else if (raw !== "") {
+        inputParams[f.key] = raw;
+      }
+    }
+    for (const f of schema.fields) {
+      if (f.required && (inputParams[f.key] === undefined || inputParams[f.key] === "")) {
+        toast(`「${f.label}」必填`); return;
+      }
+    }
+    // 3. input 优先合并：高级 JSON 提供兜底，input 覆盖同名 key
+    const finalParams = { ...adv.value, ...inputParams };
     await saveApiGuard.submit(async () => {
-      let params: Record<string, unknown> = {};
-      try { params = JSON.parse(apiForm.modelParams); } catch {}
       // 5.15up PR-2 · 只提交 providerId（绑定/解绑命名 API）+ modelParams；
       // 旧 apiEndpoint/apiKey 不再从此入口写入。PATCH 天然幂等。
       const res = await fetch(`/api/admin/agents/${showApiModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providerId: apiForm.providerId, modelParams: params }),
+        body: JSON.stringify({ providerId: apiForm.providerId, modelParams: finalParams }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -895,7 +1005,77 @@ export default function AgentsAdminPage() {
                 </p>
               </div>
 
-              <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">模型参数（JSON）</label><textarea rows={4} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none" value={apiForm.modelParams} onChange={(e) => setApiForm({ ...apiForm, modelParams: e.target.value })} /></div>
+              {/* 6.2up · 模型参数：按 effectivePlatform 渲染 input 列表 + 折叠 JSON */}
+              {(() => {
+                const selProv = apiProviders.find((p) => p.id === apiForm.providerId);
+                const effPlat = selProv?.platform ?? showApiModal.provider?.platform ?? showApiModal.platform;
+                const schema = schemaForPlatform(effPlat);
+                // dify 在 advancedJson 空时隐藏折叠；其它平台（含 other）始终允许打开
+                const showJsonAdvanced = !schema.hideJsonIfEmpty || apiForm.advancedJson.trim().length > 0;
+                return (
+                  <>
+                    <div className="border-t border-gray-100 pt-3 -mx-1 px-1">
+                      <div className="flex items-baseline justify-between mb-2">
+                        <label className="text-sm font-medium text-gray-700">模型参数</label>
+                        <span className="text-[11px] text-gray-400">按平台 {effPlat}</span>
+                      </div>
+                      {schema.fields.length === 0 && schema.noFieldsHint && (
+                        <p className="text-xs text-gray-500 bg-gray-50 rounded-[8px] px-3 py-2">{schema.noFieldsHint}</p>
+                      )}
+                      {schema.fields.map((f) => {
+                        const inputType = f.type === "password" ? "password" : f.type === "number" ? "number" : "text";
+                        return (
+                          <div key={f.key} className="flex flex-col gap-1 mt-3">
+                            <label className="text-xs font-medium text-gray-600">
+                              {f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}
+                            </label>
+                            <input
+                              type={inputType}
+                              min={f.min}
+                              max={f.max}
+                              step={f.step}
+                              placeholder={f.placeholder}
+                              className="w-full h-10 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
+                              value={apiForm.inputs[f.key] ?? ""}
+                              onChange={(e) => setApiForm((prev) => ({ ...prev, inputs: { ...prev.inputs, [f.key]: e.target.value } }))}
+                            />
+                            {f.hint && <p className="text-[11px] text-gray-400">{f.hint}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {showJsonAdvanced && (
+                      <div className="border-t border-gray-100 pt-3">
+                        <button
+                          type="button"
+                          onClick={() => setApiForm((prev) => ({ ...prev, advancedOpen: !prev.advancedOpen }))}
+                          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          <span className="font-mono">{apiForm.advancedOpen ? "▼" : "▶"}</span>
+                          <span>高级（JSON）</span>
+                          {apiForm.advancedJson.trim().length > 0 && (
+                            <span className="text-[10px] text-amber-600 ml-1">· 已保留旧参数</span>
+                          )}
+                        </button>
+                        {apiForm.advancedOpen && (
+                          <>
+                            <textarea
+                              rows={4}
+                              placeholder="{}"
+                              className="mt-2 w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none"
+                              value={apiForm.advancedJson}
+                              onChange={(e) => setApiForm((prev) => ({ ...prev, advancedJson: e.target.value }))}
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">
+                              仅用于覆盖 input 之外的额外字段；同名 key 时 input 值优先。
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowApiModal(null)}>取消</Button><Button onClick={handleSaveApi} loading={saveApiGuard.loading}>保存配置</Button></div>
           </div>
