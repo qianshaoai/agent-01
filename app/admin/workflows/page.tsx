@@ -841,11 +841,11 @@ export default function WorkflowsAdminPage() {
                               </span>
                             );
                           })}
-                          {/* 6.3up · 可见范围 chip · 「指定 XXX」改为 Home 图标 + tooltip + 多个时数字 */}
+                          {/* 6.3up · 可见范围 chip · 「指定 XXX」改为 Home 按钮 + 点击 popup 显示组织列表 */}
                           {wf.visible_to === "org_only" && (() => {
                             // 5.9up · 区分两种 'org_only' 语义：
-                            //   - 无 scope=org permission → "仅组织用户" 文字 chip
-                            //   - 有 scope=org permission → Home 图标 + tooltip
+                            //   - 无 scope=org permission → "仅组织用户" 文字 chip（无 popup）
+                            //   - 有 scope=org permission → Home 按钮 + popup
                             const orgRules = (wf.permissions ?? []).filter((r) => r.scope_type === "org");
                             if (orgRules.length === 0) {
                               return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>;
@@ -853,15 +853,7 @@ export default function WorkflowsAdminPage() {
                             const names = orgRules
                               .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id)
                               .filter(Boolean) as string[];
-                            return (
-                              <span
-                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium"
-                                title={`指定组织：${names.join("、")}`}
-                              >
-                                <Home size={12} />
-                                {names.length > 1 && <span>{names.length}</span>}
-                              </span>
-                            );
+                            return <VisibilityChipPopover label="指定组织" items={names} count={names.length} />;
                           })()}
                           {wf.visible_to === "personal_only" && (
                             <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>
@@ -894,24 +886,11 @@ export default function WorkflowsAdminPage() {
                               }
                               return r.scope_id;
                             }).filter(Boolean) as string[];
-                            return (
-                              <span
-                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium"
-                                title={`${typeLabel}：${names.join("、")}`}
-                              >
-                                <Home size={12} />
-                                {names.length > 1 && <span>{names.length}</span>}
-                              </span>
-                            );
+                            return <VisibilityChipPopover label={typeLabel} items={names} count={names.length} />;
                           })()}
                           {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
                           {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && (
-                            <span
-                              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium"
-                              title={`指定组织可见：${wf.visible_to}`}
-                            >
-                              <Home size={12} />
-                            </span>
+                            <VisibilityChipPopover label="指定组织可见" items={[wf.visible_to]} count={1} />
                           )}
                         </div>
                       </div>
@@ -1861,5 +1840,60 @@ function AgentBindPopover(props: {
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── 6.3up · 可见范围 chip 按钮 + popup ─────────────────────────────
+// 点击 Home 按钮弹出小窗口，列出完整组织/部门/小组；多个时按钮显示数量徽章。
+// 用 backdrop 实现 outside click 关闭，避免引入 popper.js / radix 等依赖。
+function VisibilityChipPopover({
+  label,
+  items,
+  count,
+}: {
+  label: string;
+  items: string[];
+  count: number;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium hover:bg-amber-100 transition-colors"
+        title={`${label}（共 ${count} 项）`}
+        aria-label={`${label} 详情`}
+      >
+        <Home size={12} />
+        {count > 1 && <span>{count}</span>}
+      </button>
+      {open && (
+        <>
+          {/* backdrop · 点击外部关闭（fixed 全屏透明层） */}
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="absolute z-50 top-full left-0 mt-1 min-w-[180px] max-w-[300px] bg-white rounded-[10px] shadow-lg border border-gray-100 p-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <Home size={13} className="text-amber-600" />
+              <span className="text-xs font-medium text-gray-700">{label}</span>
+              <span className="ml-auto text-[10px] text-gray-400">{count} 项</span>
+            </div>
+            <ul className="space-y-1 max-h-48 overflow-y-auto">
+              {items.map((name, i) => (
+                <li key={i} className="text-xs text-gray-600 px-1 py-0.5 hover:bg-gray-50 rounded">
+                  {name}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
+    </span>
   );
 }
