@@ -4,9 +4,11 @@ import { db } from "@/lib/db";
 import { streamChat, ChatMessage, TokenUsage } from "@/lib/adapters";
 import { decrypt } from "@/lib/crypto";
 import { withRequestLog } from "@/lib/request-logger";
-import { retrieveKbChunks } from "@/lib/kb/retrieve";
 import { buildKbStrictAnswerPrompt, buildKbUnavailablePrompt } from "@/lib/kb/prompt";
 import { isMetaOrChitchatMessage } from "@/lib/kb/intent";
+// 6.4up · 2-B+ KB 会话级记忆池 · 大池 + 小注入窗口
+import { injectKbForTurn, pickInjectK } from "@/lib/kb/inject";
+import type { KbSearchResult } from "@/lib/kb/types";
 
 import { CHAT } from "@/lib/config";
 import { humanizeChatError } from "@/lib/chat-error";
@@ -399,24 +401,32 @@ export const POST = withRequestLog(async (
       ? workflowContext.trim()
       : null;
 
-    // ── 5.19up 知识库B · 条件检索 + 5.21up 闲聊/工作流接力豁免 ──
-    // 仅 openai / 智谱平台（约束 §7.1：扣子 / Dify / 元器 / 清言等外部平台不接检索）。
-    // 检索失败（embedding 桩未实现 / RPC 报错 / 表未就绪）→ 降级为无知识库正常回答、不阻断对话。
-    // 5.19up 三轮收口：硬规则 + 资料从 system 消息改为 inline 拼到 user 消息开头 ——
-    //   弱模型（glm-4-flash 等）对 system 里的硬规则常无视；inline 紧贴问题、遵守率更高。
-    // 5.20up：把"空命中"也注入硬规则强制答"知识库中没有找到相关资料"，防模型乱编常识。
-    // 5.21up Fix：5.20up 这条对工作流接力首条（wfCtx 非空）和闲聊型短消息会误伤——
-    //   这些不是知识查询，不应让 KB 拦截。命中 wfCtx 或 isMetaOrChitchatMessage
-    //   则整体跳过 KB 检索（顺带省一次 embedding 调用）。
+    // ── 5.19up 知识库B + 6.4up 2-B+ · 会话级记忆池 · 大池 + 小注入窗口 ──
+    // 仅 openai / 智谱 / anthropic 三个平台走 KB（约束 §7.1：扣子 / Dify / 元器 / 清言等外部平台不接检索）。
+    // 检索失败 → 降级为无知识库正常回答、不阻断对话。
+    //
+    // 6.4up R1.1-H 修订：移除 5.21up 加的「wfCtx !== null 跳过 KB」短路。原意是工作流
+    //   接力首条消息常常是寒暄（"好的进入下一步"），不应让 KB 强拦截。但实测中正常的
+    //   工作流问题（如「我第一次轮值是啥时候」+ wfCtx）也被一起跳过 KB，直接拒答。
+    //   收窄后的 isMetaOrChitchatMessage（确认词白名单）足以单独负责拦截真正寒暄。
+    //
+    // 6.4up 2-B+ 实施：
+    //   - 单独 injectKbForTurn 收口检索 + 池操作 + 排序 + 注入；本文件不暴露 RPC 细节
+    //   - retrievedChunks = injectedChunks（不再只是本轮 RPC 命中；含池里被注入的历史 chunks）
+    //   - test-chat 走 retrieveKbChunks 薄壳（不接 DB 记忆池，详见 test-chat/route.ts）
     let kbInjectText = "";
-    // 5.28up · B · 把命中的 chunks 留到响应流里返给前端（done 事件 references 字段），
-    //   前端在 AI 回答下方显示"答案引用了 N 个片段"折叠面板。检索失败 / 跳过 / 空命中
-    //   都让 retrievedChunks 保持空数组，前端就不显示面板。
-    let retrievedChunks: import("@/lib/kb/types").KbSearchResult[] = [];
-    const skipKbForThisTurn = wfCtx !== null || isMetaOrChitchatMessage(message, history.length);
-    // 5.30.1 · anthropic 加入 KB 检索白名单（adapter 内部把 messages 数组里 user
-    //   消息的 KB 前缀照样会带过去，与 openai 流程兼容）
-    if ((resolvedPlatform === "openai" || resolvedPlatform === "zhipu" || resolvedPlatform === "anthropic") && !skipKbForThisTurn) {
+    // 6.4up · injectedChunks = 真正进 prompt 的 K_inject 个 chunks（含正文）
+    let retrievedChunks: KbSearchResult[] = [];
+    // 6.4up R1.1-I · 日志收集（仅 KB_DEBUG_PROMPT=1 时输出）
+    let dbgExpandedQuery: string | undefined;
+    let dbgCurrentChunksCount = 0;
+    let dbgPoolSize = 0;
+
+    const skipKbForThisTurn = isMetaOrChitchatMessage(message, history.length);
+    if (
+      (resolvedPlatform === "openai" || resolvedPlatform === "zhipu" || resolvedPlatform === "anthropic")
+      && !skipKbForThisTurn
+    ) {
       try {
         const { data: kbRows, error: kbErr } = await db
           .from("agent_knowledge_bases")
@@ -427,9 +437,19 @@ export const POST = withRequestLog(async (
           .map((r: { kb_id: string }) => r.kb_id)
           .filter(Boolean);
         if (kbIds.length > 0) {
-          const chunks = await retrieveKbChunks(kbIds, message);
-          kbInjectText = buildKbStrictAnswerPrompt(chunks);
-          retrievedChunks = chunks; // 5.28up · B
+          const modelName = (resolvedModelParams.model as string | undefined) ?? "";
+          const result = await injectKbForTurn({
+            conversationId: convId,
+            agentKbIds: kbIds,
+            query: message,
+            history,
+            model: modelName,
+          });
+          kbInjectText = buildKbStrictAnswerPrompt(result.injectedChunks);
+          retrievedChunks = result.injectedChunks;
+          dbgExpandedQuery = result.expandedQuery;
+          dbgCurrentChunksCount = result.currentChunks.length;
+          dbgPoolSize = result.poolSize;
         }
       } catch (e) {
         console.warn(
@@ -498,6 +518,36 @@ export const POST = withRequestLog(async (
           : {}),
       },
     ];
+
+    // ── 6.4up R1.1-I + R1.2-3 · KB 调试日志（双开关：NODE_ENV=development && KB_DEBUG_PROMPT=1）──
+    // 日志含 user 原话 + KB 内容预览 + agent 人设，仅本机 dev 用；
+    // 默认关闭，开发者要看时手动 `KB_DEBUG_PROMPT=1 npm run dev`。
+    if (process.env.NODE_ENV === "development" && process.env.KB_DEBUG_PROMPT === "1") {
+      const tokenEstimate = Math.round(JSON.stringify(messages).length / 4);
+      const modelName = (resolvedModelParams.model as string | undefined) ?? "";
+      console.log("[KB_DEBUG]", JSON.stringify({
+        agent: agent.agent_code,
+        conversationId: convId,
+        platform: resolvedPlatform,
+        model: modelName,
+        injectK: pickInjectK(modelName),
+        currentQuery: message,
+        expandedQueryPreview: dbgExpandedQuery?.slice(0, 300) ?? null,
+        currentChunksCount: dbgCurrentChunksCount,
+        memoryPoolSize: dbgPoolSize,
+        injectedChunksCount: retrievedChunks.length,
+        injectedChunksDetail: retrievedChunks.map((c) => ({
+          id: c.id,
+          similarity: c.similarity,
+          preview: c.content.slice(0, 60),
+        })),
+        messagesPreview: messages.map((m) => ({
+          role: m.role,
+          preview: typeof m.content === "string" ? m.content.slice(0, 200) : "[non-string]",
+        })),
+        estimatedTokens: tokenEstimate,
+      }, null, 2));
+    }
 
     // ── 5. 保存用户消息 ────────────────────────────────────────
     // displayContent 已包含图片 [图片: name, URL: url] 标记，便于历史回显

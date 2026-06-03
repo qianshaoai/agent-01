@@ -1170,7 +1170,7 @@ export default function AgentBuilderEditPage({
                       ? "⚠️ 有未保存修改"
                       : testHistory.length > 0
                         ? `本轮 ${testHistory.length / 2 | 0} 轮对话`
-                        : "测试不入库 / 不扣额度"}
+                        : "测试不入库 / 不扣额度 / 不累积 KB 记忆"}
                   </p>
                   {testStreaming ? (
                     <Button size="sm" onClick={stopTestChat} className="bg-red-50 text-red-600 hover:bg-red-100 border-red-200">
