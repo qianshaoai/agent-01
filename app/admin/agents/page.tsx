@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, X, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, X, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight, ChevronDown, ChevronRight } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 import {
   schemaForPlatform,
@@ -158,6 +158,16 @@ export default function AgentsAdminPage() {
   }, []);
   const isOrgAdmin = adminRole === "org_admin";
   // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留智能体列表（无 Tab 切换）
+  // 6.3up · 智能体管理改风格 · 分类分组默认折叠 · 点 chevron 展开
+  const [expandedAgentSections, setExpandedAgentSections] = useState<Set<string>>(new Set());
+  function toggleAgentSection(id: string) {
+    setExpandedAgentSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [showApiModal, setShowApiModal] = useState<Agent | null>(null);
   const [showDisplayModal, setShowDisplayModal] = useState<Agent | null>(null);
@@ -281,6 +291,21 @@ export default function AgentsAdminPage() {
     });
     setTimeout(() => setHighlightedRowId(null), 1500);
   }, [focusAgentId, loading, agents, toast]);
+
+  // 6.3up · focus 跳转时自动展开 target 所在 section（避免目标在折叠分类里看不到）
+  useEffect(() => {
+    if (!focusAgentId) return;
+    const target = agents.find((a) => a.id === focusAgentId);
+    if (!target) return;
+    const sectionIds: string[] = (target.categoryIds ?? []).length > 0
+      ? target.categoryIds!
+      : ["__uncategorized__"];
+    setExpandedAgentSections((prev) => {
+      const next = new Set(prev);
+      for (const sid of sectionIds) next.add(sid);
+      return next;
+    });
+  }, [focusAgentId, agents]);
 
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
@@ -590,11 +615,20 @@ export default function AgentsAdminPage() {
                     </tr>
                   </thead>
                   {/* 5.16up R4 · 按分类分组展示；多分类智能体在每个所属分类下各出现一次 */}
-                  {groupedSections.map((section) => (
+                  {/* 6.3up · 风格靠近工作流卡片 · 分类 header 加 chevron 折叠/展开，默认折叠 */}
+                  {groupedSections.map((section) => {
+                  const isExpanded = expandedAgentSections.has(section.id);
+                  return (
                   <tbody key={section.id} className="divide-y divide-gray-50">
-                    <tr className="bg-gray-50/80 border-t border-gray-100">
+                    <tr
+                      className="bg-gray-50/80 border-t border-gray-100 hover:bg-gray-100/80 cursor-pointer transition-colors"
+                      onClick={() => toggleAgentSection(section.id)}
+                    >
                       <td colSpan={5} className="px-5 py-2.5">
                         <div className="flex items-center gap-2">
+                          {isExpanded
+                            ? <ChevronDown size={14} className="text-gray-400 shrink-0" />
+                            : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
                           {section.icon_url ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={section.icon_url} alt={section.name} className="w-4 h-4 rounded-[3px] object-contain" />
@@ -606,7 +640,7 @@ export default function AgentsAdminPage() {
                         </div>
                       </td>
                     </tr>
-                    {section.agents.map((a) => (
+                    {isExpanded && section.agents.map((a) => (
                       <tr
                         key={a.id}
                         data-agent-row={a.id}
@@ -742,7 +776,8 @@ export default function AgentsAdminPage() {
                       </tr>
                     ))}
                   </tbody>
-                  ))}
+                  );
+                  })}
                 </table>
               </div>
             )}
