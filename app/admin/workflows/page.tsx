@@ -775,18 +775,7 @@ export default function WorkflowsAdminPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-medium text-gray-900">{wf.name}</p>
-                        {(wf.categoryIds ?? []).map((cid) => {
-                          const cat = categories.find((c) => c.id === cid);
-                          if (!cat) return null;
-                          return (
-                            <span key={cid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
-                              {/* 小图标（<20px），next/image 优化收益低 */}
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              {cat.icon_url ? <img src={cat.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
-                              {cat.name}
-                            </span>
-                          );
-                        })}
+                        {/* 6.3up · 分类标签 chip + 简介下沉到展开区，折叠态保留可见范围 + 停用 + 创建者 */}
                         {wf.visible_to === "org_only" && (() => {
                           // 5.9up · 区分两种 'org_only' 语义：
                           //   - 无 scope=org permission（5.7up 之前的"任意组织用户可见"老语义）→ "仅组织用户"
@@ -843,7 +832,7 @@ export default function WorkflowsAdminPage() {
                           </span>
                         )}
                       </div>
-                      {wf.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{wf.description}</p>}
+                      {/* 6.3up · 简介下沉到展开区（不再 truncate）*/}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <span className="text-xs text-gray-400 mr-2">{steps.length} 个步骤</span>
@@ -867,22 +856,46 @@ export default function WorkflowsAdminPage() {
                   {/* Steps */}
                   {isExpanded && (
                     <div className="border-t border-gray-50 px-5 pb-4 pt-3">
-                      {/* 4.27up 阶段一：视图切换 Tab */}
-                      <div className="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-[8px] w-fit">
-                        {(["list", "flow"] as const).map((mode) => (
-                          <button
-                            key={mode}
-                            onClick={() => setViewMode(wf.id, mode)}
-                            className={`px-3 py-1 text-xs rounded-[6px] transition-colors ${
-                              getViewMode(wf.id) === mode
-                                ? "bg-white text-[#002FA7] shadow-sm font-medium"
-                                : "text-gray-500 hover:text-gray-700"
-                            }`}
-                          >
-                            {mode === "flow" ? "流程图" : "列表"}
-                          </button>
-                        ))}
+                      {/* 4.27up 阶段一：视图切换 Tab · 6.3up · 右侧并列分类标签 chip（折叠态从头部下沉）*/}
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-1 p-0.5 bg-gray-100 rounded-[8px] w-fit shrink-0">
+                          {(["list", "flow"] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              onClick={() => setViewMode(wf.id, mode)}
+                              className={`px-3 py-1 text-xs rounded-[6px] transition-colors ${
+                                getViewMode(wf.id) === mode
+                                  ? "bg-white text-[#002FA7] shadow-sm font-medium"
+                                  : "text-gray-500 hover:text-gray-700"
+                              }`}
+                            >
+                              {mode === "flow" ? "流程图" : "列表"}
+                            </button>
+                          ))}
+                        </div>
+                        {/* 6.3up · 分类标签 chip 行（从头部下沉，右对齐 · 多分类时 wrap）*/}
+                        {(wf.categoryIds ?? []).length > 0 && (
+                          <div className="flex items-center gap-2 flex-wrap justify-end min-w-0">
+                            {(wf.categoryIds ?? []).map((cid) => {
+                              const cat = categories.find((c) => c.id === cid);
+                              if (!cat) return null;
+                              return (
+                                <span key={cid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
+                                  {/* 小图标（<20px），next/image 优化收益低 */}
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  {cat.icon_url ? <img src={cat.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
+                                  {cat.name}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
+
+                      {/* 6.3up · 完整简介行（不 truncate · 多行 wrap · 折叠态从头部下沉）*/}
+                      {wf.description && (
+                        <p className="text-sm text-gray-500 mb-3 leading-relaxed whitespace-pre-wrap">{wf.description}</p>
+                      )}
 
                       {getViewMode(wf.id) === "flow" ? (
                         <WorkflowFlowView
