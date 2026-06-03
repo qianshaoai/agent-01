@@ -826,22 +826,22 @@ export default function WorkflowsAdminPage() {
                             </button>
                           ))}
                         </div>
-                        {/* 6.3up · 分类标签 chip + 可见范围 chip 行（紧贴 Tab 右侧，多分类时一起 wrap）*/}
+                        {/* 6.3up · 分类标签 + 可见范围 聚合 chip 行（紧贴 Tab 右侧；都是图标按钮 + 点击 popup）*/}
                         <div className="flex items-center gap-2 flex-wrap">
-                          {/* 分类标签 chip */}
-                          {(wf.categoryIds ?? []).map((cid) => {
-                            const cat = categories.find((c) => c.id === cid);
-                            if (!cat) return null;
-                            return (
-                              <span key={cid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
-                                {/* 小图标（<20px），next/image 优化收益低 */}
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                {cat.icon_url ? <img src={cat.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
-                                {cat.name}
-                              </span>
-                            );
-                          })}
-                          {/* 6.3up · 可见范围 chip · 「指定 XXX」改为 Home 按钮 + 点击 popup 显示组织列表 */}
+                          {/* 分类标签 chip · 聚合为单按钮 · 点击 popup 显示所有标签名 + 图标 */}
+                          <ChipPopover
+                            label="标签"
+                            theme="green"
+                            triggerIcon={<Tag size={12} />}
+                            items={(wf.categoryIds ?? [])
+                              .map((cid) => {
+                                const cat = categories.find((c) => c.id === cid);
+                                if (!cat) return null;
+                                return { name: cat.name, iconUrl: cat.icon_url };
+                              })
+                              .filter(Boolean) as ChipItem[]}
+                          />
+                          {/* 6.3up · 可见范围 chip · 「指定 XXX」改为 Home 按钮 + 点击 popup */}
                           {wf.visible_to === "org_only" && (() => {
                             // 5.9up · 区分两种 'org_only' 语义：
                             //   - 无 scope=org permission → "仅组织用户" 文字 chip（无 popup）
@@ -850,10 +850,11 @@ export default function WorkflowsAdminPage() {
                             if (orgRules.length === 0) {
                               return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>;
                             }
-                            const names = orgRules
-                              .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id)
-                              .filter(Boolean) as string[];
-                            return <VisibilityChipPopover label="指定组织" items={names} count={names.length} />;
+                            const items: ChipItem[] = orgRules
+                              .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id ?? "")
+                              .filter((n): n is string => !!n)
+                              .map((name) => ({ name }));
+                            return <ChipPopover label="指定组织" theme="amber" triggerIcon={<Home size={12} />} items={items} />;
                           })()}
                           {wf.visible_to === "personal_only" && (
                             <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>
@@ -865,32 +866,32 @@ export default function WorkflowsAdminPage() {
                                            : firstType === "team" ? "指定小组"
                                            : "指定组织";
                             // 5.9up · 把 scope_id 解析成可读名称；dept/team 带上母公司前缀，便于跨组织辨认
-                            const names = rules.map((r) => {
+                            const items: ChipItem[] = rules.map((r): ChipItem => {
                               if (r.scope_type === "org") {
-                                return tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id;
+                                return { name: tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id ?? "" };
                               }
                               if (r.scope_type === "dept") {
                                 const d = allDepts.find((x) => x.id === r.scope_id);
-                                if (!d) return r.scope_id;
+                                if (!d) return { name: r.scope_id ?? "" };
                                 const tenant = tenants.find((t) => t.code === d.tenant_code)?.name;
-                                return tenant ? `${tenant} / ${d.name}` : d.name;
+                                return { name: tenant ? `${tenant} / ${d.name}` : d.name };
                               }
                               if (r.scope_type === "team") {
                                 const tm = allTeams.find((x) => x.id === r.scope_id);
-                                if (!tm) return r.scope_id;
+                                if (!tm) return { name: r.scope_id ?? "" };
                                 const d = allDepts.find((x) => x.id === tm.dept_id);
                                 const tenant = d ? tenants.find((t) => t.code === d.tenant_code)?.name : null;
-                                if (tenant && d) return `${tenant} / ${d.name} / ${tm.name}`;
-                                if (d) return `${d.name} / ${tm.name}`;
-                                return tm.name;
+                                if (tenant && d) return { name: `${tenant} / ${d.name} / ${tm.name}` };
+                                if (d) return { name: `${d.name} / ${tm.name}` };
+                                return { name: tm.name };
                               }
-                              return r.scope_id;
-                            }).filter(Boolean) as string[];
-                            return <VisibilityChipPopover label={typeLabel} items={names} count={names.length} />;
+                              return { name: r.scope_id ?? "" };
+                            }).filter((it) => !!it.name);
+                            return <ChipPopover label={typeLabel} theme="amber" triggerIcon={<Home size={12} />} items={items} />;
                           })()}
                           {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
                           {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && (
-                            <VisibilityChipPopover label="指定组织可见" items={[wf.visible_to]} count={1} />
+                            <ChipPopover label="指定组织可见" theme="amber" triggerIcon={<Home size={12} />} items={[{ name: wf.visible_to }]} />
                           )}
                         </div>
                       </div>
@@ -1843,19 +1844,31 @@ function AgentBindPopover(props: {
   );
 }
 
-// ─── 6.3up · 可见范围 chip 按钮 + popup ─────────────────────────────
-// 点击 Home 按钮弹出小窗口，列出完整组织/部门/小组；多个时按钮显示数量徽章。
-// 用 backdrop 实现 outside click 关闭，避免引入 popper.js / radix 等依赖。
-function VisibilityChipPopover({
+// ─── 6.3up · 通用 ChipPopover · 按钮 + 点击 popup 看列表 ────────────
+// 用于可见范围（橙色 Home）+ 分类标签（绿色 Tag）等聚合场景。
+// 单个时只显示图标；多个时图标 + 数字徽章；点击弹小窗列出全部 items。
+// 用 backdrop fixed inset-0 实现 outside click 关闭，无新依赖。
+type ChipItem = { name: string; iconUrl?: string | null };
+const CHIP_THEME = {
+  amber: { bg: "bg-amber-50", text: "text-amber-600", hover: "hover:bg-amber-100" },
+  green: { bg: "bg-green-50", text: "text-green-700", hover: "hover:bg-green-100" },
+} as const;
+
+function ChipPopover({
   label,
   items,
-  count,
+  triggerIcon,
+  theme,
 }: {
   label: string;
-  items: string[];
-  count: number;
+  items: ChipItem[];
+  triggerIcon: React.ReactNode;
+  theme: keyof typeof CHIP_THEME;
 }) {
   const [open, setOpen] = useState(false);
+  const count = items.length;
+  if (count === 0) return null;
+  const colors = CHIP_THEME[theme];
   return (
     <span className="relative inline-block">
       <button
@@ -1864,30 +1877,34 @@ function VisibilityChipPopover({
           e.stopPropagation();
           setOpen((o) => !o);
         }}
-        className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium hover:bg-amber-100 transition-colors"
+        className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium transition-colors ${colors.bg} ${colors.text} ${colors.hover}`}
         title={`${label}（共 ${count} 项）`}
         aria-label={`${label} 详情`}
       >
-        <Home size={12} />
+        {triggerIcon}
         {count > 1 && <span>{count}</span>}
       </button>
       {open && (
         <>
-          {/* backdrop · 点击外部关闭（fixed 全屏透明层） */}
+          {/* backdrop · 点击外部关闭 */}
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
             className="absolute z-50 top-full left-0 mt-1 min-w-[180px] max-w-[300px] bg-white rounded-[10px] shadow-lg border border-gray-100 p-3"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2 mb-2">
-              <Home size={13} className="text-amber-600" />
+              <span className={colors.text}>{triggerIcon}</span>
               <span className="text-xs font-medium text-gray-700">{label}</span>
               <span className="ml-auto text-[10px] text-gray-400">{count} 项</span>
             </div>
             <ul className="space-y-1 max-h-48 overflow-y-auto">
-              {items.map((name, i) => (
-                <li key={i} className="text-xs text-gray-600 px-1 py-0.5 hover:bg-gray-50 rounded">
-                  {name}
+              {items.map((item, i) => (
+                <li key={i} className="flex items-center gap-2 text-xs text-gray-600 px-1 py-0.5 hover:bg-gray-50 rounded">
+                  {item.iconUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={item.iconUrl} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain shrink-0" />
+                  )}
+                  <span className="break-all">{item.name}</span>
                 </li>
               ))}
             </ul>
