@@ -779,16 +779,7 @@ export default function WorkflowsAdminPage() {
                         <p className="font-medium text-gray-900">{wf.name}</p>
                         {/* 6.3up · 分类标签 chip + 简介 + 可见范围 chip 下沉到展开区，折叠态保留停用 + 创建者 */}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
-                        {/* 5.12up · 创建者徽章 · 6.3up 改为 Lock 按钮 + popup 显示可修改本工作流的管理员（actor_level >= creator_level）*/}
-                        {wf.created_by_role && (() => {
-                          const creatorLevel = ROLE_LEVEL_MAP[wf.created_by_role] ?? 0;
-                          const allowedRoles = (["super_admin", "system_admin", "org_admin"] as const)
-                            .filter((role) => (ROLE_LEVEL_MAP[role] ?? 0) >= creatorLevel);
-                          const items: ChipItem[] = allowedRoles.map((role) => ({
-                            name: ROLE_LABEL_MAP[role] ?? role,
-                          }));
-                          return <ChipPopover label="可修改本工作流的管理员" theme="gray" triggerIcon={<Lock size={12} />} items={items} />;
-                        })()}
+                        {/* 6.3up · 创建者徽章已下沉到展开区 chip 行 */}
                       </div>
                       {/* 6.3up · 简介下沉到展开区（不再 truncate）*/}
                     </div>
@@ -898,6 +889,16 @@ export default function WorkflowsAdminPage() {
                           {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && (
                             <ChipPopover label="指定组织可见" theme="amber" triggerIcon={<Home size={12} />} items={[{ name: wf.visible_to }]} />
                           )}
+                          {/* 5.12up 创建者徽章 · 6.3up 下沉到此处 · Lock 按钮 + popup 显示可修改本工作流的管理员 */}
+                          {wf.created_by_role && (() => {
+                            const creatorLevel = ROLE_LEVEL_MAP[wf.created_by_role] ?? 0;
+                            const allowedRoles = (["super_admin", "system_admin", "org_admin"] as const)
+                              .filter((role) => (ROLE_LEVEL_MAP[role] ?? 0) >= creatorLevel);
+                            const items: ChipItem[] = allowedRoles.map((role) => ({
+                              name: ROLE_LABEL_MAP[role] ?? role,
+                            }));
+                            return <ChipPopover label="可修改本工作流的管理员" theme="gray" triggerIcon={<Lock size={12} />} items={items} />;
+                          })()}
                         </div>
                       </div>
 
