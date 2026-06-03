@@ -856,8 +856,8 @@ export default function WorkflowsAdminPage() {
                   {/* Steps */}
                   {isExpanded && (
                     <div className="border-t border-gray-50 px-5 pb-4 pt-3">
-                      {/* 4.27up 阶段一：视图切换 Tab · 6.3up · 右侧并列分类标签 chip（折叠态从头部下沉）*/}
-                      <div className="flex items-start justify-between gap-3 mb-3">
+                      {/* 4.27up 阶段一：视图切换 Tab · 6.3up · 右侧紧邻分类标签 chip（折叠态从头部下沉）*/}
+                      <div className="flex items-center gap-3 mb-3 flex-wrap">
                         <div className="flex items-center gap-1 p-0.5 bg-gray-100 rounded-[8px] w-fit shrink-0">
                           {(["list", "flow"] as const).map((mode) => (
                             <button
@@ -873,9 +873,9 @@ export default function WorkflowsAdminPage() {
                             </button>
                           ))}
                         </div>
-                        {/* 6.3up · 分类标签 chip 行（从头部下沉，右对齐 · 多分类时 wrap）*/}
+                        {/* 6.3up · 分类标签 chip 行（紧贴 Tab 右侧，多分类时一起 wrap）*/}
                         {(wf.categoryIds ?? []).length > 0 && (
-                          <div className="flex items-center gap-2 flex-wrap justify-end min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
                             {(wf.categoryIds ?? []).map((cid) => {
                               const cat = categories.find((c) => c.id === cid);
                               if (!cat) return null;
