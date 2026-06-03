@@ -624,19 +624,21 @@ export default function AgentsAdminPage() {
                       className="bg-gray-50/80 border-t border-gray-100 hover:bg-gray-100/80 cursor-pointer transition-colors"
                       onClick={() => toggleAgentSection(section.id)}
                     >
-                      <td colSpan={5} className="px-5 py-2.5">
-                        <div className="flex items-center gap-2">
+                      <td colSpan={5} className="px-5 py-4">
+                        <div className="flex items-center gap-3">
                           {isExpanded
-                            ? <ChevronDown size={14} className="text-gray-400 shrink-0" />
-                            : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
+                            ? <ChevronDown size={18} className="text-gray-500 shrink-0" />
+                            : <ChevronRight size={18} className="text-gray-500 shrink-0" />}
                           {section.icon_url ? (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={section.icon_url} alt={section.name} className="w-4 h-4 rounded-[3px] object-contain" />
+                            <img src={section.icon_url} alt={section.name} className="w-6 h-6 rounded-[6px] object-contain" />
                           ) : (
-                            <Tag size={13} className="text-[#002FA7]" />
+                            <div className="w-6 h-6 rounded-[6px] bg-[#002FA7]/10 flex items-center justify-center shrink-0">
+                              <Tag size={14} className="text-[#002FA7]" />
+                            </div>
                           )}
-                          <span className="text-[13px] font-semibold text-gray-700">{section.name}</span>
-                          <span className="text-[11px] text-gray-400">{section.agents.length} 个</span>
+                          <span className="text-[16px] font-semibold text-gray-800">{section.name}</span>
+                          <span className="text-[12px] text-gray-400 font-medium">{section.agents.length} 个</span>
                         </div>
                       </td>
                     </tr>
