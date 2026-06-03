@@ -32,6 +32,7 @@ import {
   Tag,
   Check,
   Building2,
+  Home,
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
@@ -775,55 +776,7 @@ export default function WorkflowsAdminPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-medium text-gray-900">{wf.name}</p>
-                        {/* 6.3up · 分类标签 chip + 简介下沉到展开区，折叠态保留可见范围 + 停用 + 创建者 */}
-                        {wf.visible_to === "org_only" && (() => {
-                          // 5.9up · 区分两种 'org_only' 语义：
-                          //   - 无 scope=org permission（5.7up 之前的"任意组织用户可见"老语义）→ "仅组织用户"
-                          //   - 有 scope=org permission（5.7up+ org_admin 路径，限定特定组织）→ "指定组织：XXX"
-                          const orgRules = (wf.permissions ?? []).filter((r) => r.scope_type === "org");
-                          if (orgRules.length === 0) {
-                            return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>;
-                          }
-                          const names = orgRules
-                            .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id)
-                            .filter(Boolean) as string[];
-                          const label = `指定组织：${names.join("、")}`;
-                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={names.join("、")}>{label}</span>;
-                        })()}
-                        {wf.visible_to === "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>}
-                        {wf.visible_to === "custom" && (() => {
-                          const rules = wf.permissions ?? [];
-                          const firstType = rules[0]?.scope_type;
-                          const typeLabel = firstType === "dept" ? "指定部门"
-                                         : firstType === "team" ? "指定小组"
-                                         : "指定组织";
-                          // 5.9up · 把 scope_id 解析成可读名称；dept/team 带上母公司前缀，便于跨组织辨认
-                          const names = rules.map((r) => {
-                            if (r.scope_type === "org") {
-                              return tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id;
-                            }
-                            if (r.scope_type === "dept") {
-                              const d = allDepts.find((x) => x.id === r.scope_id);
-                              if (!d) return r.scope_id;
-                              const tenant = tenants.find((t) => t.code === d.tenant_code)?.name;
-                              return tenant ? `${tenant} / ${d.name}` : d.name;
-                            }
-                            if (r.scope_type === "team") {
-                              const tm = allTeams.find((x) => x.id === r.scope_id);
-                              if (!tm) return r.scope_id;
-                              const d = allDepts.find((x) => x.id === tm.dept_id);
-                              const tenant = d ? tenants.find((t) => t.code === d.tenant_code)?.name : null;
-                              if (tenant && d) return `${tenant} / ${d.name} / ${tm.name}`;
-                              if (d) return `${d.name} / ${tm.name}`;
-                              return tm.name;
-                            }
-                            return r.scope_id;
-                          }).filter(Boolean) as string[];
-                          const label = `${typeLabel}：${names.join("、")}`;
-                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={names.join("、")}>{label}</span>;
-                        })()}
-                        {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
-                        {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
+                        {/* 6.3up · 分类标签 chip + 简介 + 可见范围 chip 下沉到展开区，折叠态保留停用 + 创建者 */}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
                         {/* 5.12up · 创建者徽章：只显示角色（用户名查审计记录） */}
                         {wf.created_by_role && (
@@ -873,23 +826,94 @@ export default function WorkflowsAdminPage() {
                             </button>
                           ))}
                         </div>
-                        {/* 6.3up · 分类标签 chip 行（紧贴 Tab 右侧，多分类时一起 wrap）*/}
-                        {(wf.categoryIds ?? []).length > 0 && (
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {(wf.categoryIds ?? []).map((cid) => {
-                              const cat = categories.find((c) => c.id === cid);
-                              if (!cat) return null;
-                              return (
-                                <span key={cid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
-                                  {/* 小图标（<20px），next/image 优化收益低 */}
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  {cat.icon_url ? <img src={cat.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
-                                  {cat.name}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        )}
+                        {/* 6.3up · 分类标签 chip + 可见范围 chip 行（紧贴 Tab 右侧，多分类时一起 wrap）*/}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {/* 分类标签 chip */}
+                          {(wf.categoryIds ?? []).map((cid) => {
+                            const cat = categories.find((c) => c.id === cid);
+                            if (!cat) return null;
+                            return (
+                              <span key={cid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
+                                {/* 小图标（<20px），next/image 优化收益低 */}
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                {cat.icon_url ? <img src={cat.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
+                                {cat.name}
+                              </span>
+                            );
+                          })}
+                          {/* 6.3up · 可见范围 chip · 「指定 XXX」改为 Home 图标 + tooltip + 多个时数字 */}
+                          {wf.visible_to === "org_only" && (() => {
+                            // 5.9up · 区分两种 'org_only' 语义：
+                            //   - 无 scope=org permission → "仅组织用户" 文字 chip
+                            //   - 有 scope=org permission → Home 图标 + tooltip
+                            const orgRules = (wf.permissions ?? []).filter((r) => r.scope_type === "org");
+                            if (orgRules.length === 0) {
+                              return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>;
+                            }
+                            const names = orgRules
+                              .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id)
+                              .filter(Boolean) as string[];
+                            return (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium"
+                                title={`指定组织：${names.join("、")}`}
+                              >
+                                <Home size={12} />
+                                {names.length > 1 && <span>{names.length}</span>}
+                              </span>
+                            );
+                          })()}
+                          {wf.visible_to === "personal_only" && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>
+                          )}
+                          {wf.visible_to === "custom" && (() => {
+                            const rules = wf.permissions ?? [];
+                            const firstType = rules[0]?.scope_type;
+                            const typeLabel = firstType === "dept" ? "指定部门"
+                                           : firstType === "team" ? "指定小组"
+                                           : "指定组织";
+                            // 5.9up · 把 scope_id 解析成可读名称；dept/team 带上母公司前缀，便于跨组织辨认
+                            const names = rules.map((r) => {
+                              if (r.scope_type === "org") {
+                                return tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id;
+                              }
+                              if (r.scope_type === "dept") {
+                                const d = allDepts.find((x) => x.id === r.scope_id);
+                                if (!d) return r.scope_id;
+                                const tenant = tenants.find((t) => t.code === d.tenant_code)?.name;
+                                return tenant ? `${tenant} / ${d.name}` : d.name;
+                              }
+                              if (r.scope_type === "team") {
+                                const tm = allTeams.find((x) => x.id === r.scope_id);
+                                if (!tm) return r.scope_id;
+                                const d = allDepts.find((x) => x.id === tm.dept_id);
+                                const tenant = d ? tenants.find((t) => t.code === d.tenant_code)?.name : null;
+                                if (tenant && d) return `${tenant} / ${d.name} / ${tm.name}`;
+                                if (d) return `${d.name} / ${tm.name}`;
+                                return tm.name;
+                              }
+                              return r.scope_id;
+                            }).filter(Boolean) as string[];
+                            return (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium"
+                                title={`${typeLabel}：${names.join("、")}`}
+                              >
+                                <Home size={12} />
+                                {names.length > 1 && <span>{names.length}</span>}
+                              </span>
+                            );
+                          })()}
+                          {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
+                          {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && (
+                            <span
+                              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium"
+                              title={`指定组织可见：${wf.visible_to}`}
+                            >
+                              <Home size={12} />
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* 6.3up · 完整简介行（不 truncate · 多行 wrap · 折叠态从头部下沉）*/}
