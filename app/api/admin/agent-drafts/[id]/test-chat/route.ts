@@ -163,7 +163,11 @@ export async function POST(
     }
     if (kbIds.length > 0) {
       try {
-        const chunks = await retrieveKbChunks(kbIds, message);
+        // 6.4up R1.2-1 · test-chat 走 retrieveKbChunks 薄壳：
+        //   - 启用 1-C 历史拼接（传 history），享受降 threshold + 自然语言召回提升
+        //   - 不接 DB 记忆池（kb_context_state）—— 草稿无正式 conversation_id，
+        //     不能撞 FK；admin 验记忆累积请走「发布草稿 + 正式 chat」路径
+        const chunks = await retrieveKbChunks(kbIds, message, history);
         kbInjectText = buildKbStrictAnswerPrompt(chunks);
       } catch (e) {
         console.warn(
