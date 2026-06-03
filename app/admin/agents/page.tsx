@@ -608,7 +608,15 @@ export default function AgentsAdminPage() {
               <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体，点击右上角新增" : "没有符合筛选条件的智能体"}</p></div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm table-sticky-head">
+                <table className="w-full text-sm table-sticky-head table-fixed">
+                  {/* 6.3up · 固定列宽 · 防止折叠/展开时列宽抖动导致表头偏移 */}
+                  <colgroup>
+                    <col className="w-[28%]" />
+                    <col className="w-[18%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[22%]" />
+                    <col className="w-[18%]" />
+                  </colgroup>
                   <thead>
                     <tr>
                       {/* 6.3up · 表头居中（除"编号/名称"列保持左对齐，避免长名字行视觉偏移）*/}
