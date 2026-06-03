@@ -31,7 +31,28 @@ import {
   KB_INJECT_K_BY_MODEL_TIER,
   KB_INJECT_SCORE_WEIGHTS,
   KB_MEMORY_POOL_SIZE,
+  KB_MEMORY_RECALL_MIN_SIMILARITY,
 } from "@/lib/kb/config";
+
+// ─── R1.3-2 · 归一化类型 + helper ────────────────────────────────────────
+// KbSearchResult.id / similarity 是 optional（向后兼容旧调用），但 2-B+ 记忆池
+// 必须有 id 才能上池，必须有 similarity 才能进综合排序。归一化后 Set/Map/RPC
+// 写入都拿到非 undefined 字段，避免 string|undefined 类型噪声 + 运行时空字段。
+type KbChunkWithId = KbSearchResult & {
+  id: string;
+  similarity: number;
+};
+
+function normalizeKbChunksForMemory(chunks: KbSearchResult[]): KbChunkWithId[] {
+  return chunks
+    .filter((c): c is KbSearchResult & { id: string } =>
+      typeof c.id === "string" && c.id.length > 0,
+    )
+    .map((c) => ({
+      ...c,
+      similarity: typeof c.similarity === "number" ? c.similarity : 0,
+    }));
+}
 
 // ─── 模型档位判定（R1.1-D）───────────────────────────────────────────────
 // 用 model 名匹配档位，比按 platform 粗暴判断更准（openai 平台跨度极大：
@@ -92,10 +113,10 @@ export type InjectKbForTurnArgs = {
 };
 
 export type InjectKbForTurnResult = {
-  /** 真正注入给 prompt 的 chunks（K_inject 个，含正文）—— 也就是 references 的来源 */
-  injectedChunks: KbSearchResult[];
+  /** 真正注入给 prompt 的 chunks（K_inject 个，含正文 + 综合分排序时的 similarity）*/
+  injectedChunks: KbChunkWithId[];
   /** 本轮 RPC 命中的 chunks（用于日志/调试）*/
-  currentChunks: KbSearchResult[];
+  currentChunks: KbChunkWithId[];
   /** 写回 + 裁剪后池大小（日志用）*/
   poolSize: number;
   /** 实际送 embed 的 query 文本（日志用）*/
@@ -117,9 +138,10 @@ export async function injectKbForTurn(
   const expandedQuery = buildKbExpandedQuery(query, history);
   const queryVec = await embedQuery(expandedQuery);
 
-  // ── 3. 本轮 RPC 命中
-  const currentChunks = await retrieveKbChunksByVec(agentKbIds, queryVec);
-  const currentIds = new Set(currentChunks.map((c) => c.id));
+  // ── 3. 本轮 RPC 命中（R1.3-2 归一化：丢掉无 id 的异常 chunk，similarity 兜 0）
+  const rawCurrentChunks = await retrieveKbChunksByVec(agentKbIds, queryVec);
+  const currentChunks = normalizeKbChunksForMemory(rawCurrentChunks);
+  const currentIds = new Set<string>(currentChunks.map((c) => c.id));
 
   // ── 4. 拉本会话记忆池
   const { data: poolRowsData, error: poolErr } = await db
@@ -134,6 +156,9 @@ export async function injectKbForTurn(
   const poolById = new Map<string, PoolRow>(poolRows.map((r) => [r.chunk_id, r]));
 
   // ── 5. 池内重排（R1.2-2）：池里"不在本轮命中"的 chunks 用 queryVec 重算 cosine
+  // R1.3-1 · 加最低相似度门槛 KB_MEMORY_RECALL_MIN_SIMILARITY：池内 chunks 即使
+  // hit_count / recency 很高，也必须与本轮 query 有最低相关度才能复活。
+  // 否则纯靠"以前聊过"就把旧话题塞回 prompt，会污染回答（尤其当本轮 currentChunks=[]）。
   const poolOnlyIds = poolRows.map((r) => r.chunk_id).filter((id) => !currentIds.has(id));
   let poolRanked: RankRow[] = [];
   if (poolOnlyIds.length > 0) {
@@ -145,23 +170,22 @@ export async function injectKbForTurn(
     if (rankErr) {
       console.warn("[kb/inject] rank_kb_context_chunks 失败（降级为仅本轮）", rankErr.message);
     } else {
-      poolRanked = (rankData ?? []) as RankRow[];
+      poolRanked = ((rankData ?? []) as RankRow[])
+        .filter((r) => r.current_similarity >= KB_MEMORY_RECALL_MIN_SIMILARITY);
     }
   }
 
   // ── 6. 构造候选 + 综合分排序 → top K_inject
+  // R1.3-2 · currentChunks 已 normalize（id/similarity 必填），无需再防御 narrow
   const now = new Date();
   const candidates: Candidate[] = [];
 
   for (const c of currentChunks) {
-    // KbSearchResult.id / similarity 类型是 optional，但 RPC 返回的一定有
-    // 防御性 narrow：缺字段 = 异常 chunk，跳过
-    if (!c.id) continue;
     const meta = poolById.get(c.id);
     candidates.push({
       chunk_id: c.id,
       is_current: true,
-      similarity: c.similarity ?? 0,
+      similarity: c.similarity,
       hit_count: meta ? meta.hit_count + 1 : 1,
       last_hit_at: now,
     });
@@ -180,10 +204,21 @@ export async function injectKbForTurn(
 
   const k = pickInjectK(model);
   candidates.sort((a, b) => scoreCandidate(b, now) - scoreCandidate(a, now));
-  const selectedIds = candidates.slice(0, k).map((c) => c.chunk_id);
+  const selected = candidates.slice(0, k);
+  const selectedIds = selected.map((c) => c.chunk_id);
+  // 0% bug fix · 把综合排序时算出的 similarity（current 用本轮 RPC 真分；
+  // pool 用 rank RPC 重算分）记成 Map，回查正文后回填到 injectedChunks。
+  // fetchActiveChunksByIds 只取正文，similarity 硬塞 0，不回填则 messages.references
+  // 落库的 similarity 全是 0，前端引用率显示就全是 0%。
+  const simById = new Map<string, number>(selected.map((c) => [c.chunk_id, c.similarity]));
 
   // ── 7. 回查正文（active KB + done 文档 + agentKbIds 过滤；按 selectedIds 顺序）
-  const injectedChunks = await fetchActiveChunksByIds(selectedIds, agentKbIds);
+  const fetched = await fetchActiveChunksByIds(selectedIds, agentKbIds);
+  const injectedChunks: KbChunkWithId[] = fetched
+    .filter((c): c is KbSearchResult & { id: string } =>
+      typeof c.id === "string" && c.id.length > 0,
+    )
+    .map((c) => ({ ...c, similarity: simById.get(c.id) ?? 0 }));
 
   // ── 8. upsert 池（R1.2-5：is_current bool 明示参数）
   if (injectedChunks.length > 0) {

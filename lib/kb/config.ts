@@ -37,6 +37,14 @@ export const KB_SIMILARITY_THRESHOLD = 0.35;
 export const KB_MEMORY_POOL_SIZE = 64;
 
 /**
+ * 6.4up R1.3-1 · 记忆池历史 chunk 复活的最低相似度。
+ * 低于该值说明它虽然曾在本会话命中过，但与本轮 query 关系太弱，不应注入 prompt。
+ * 设为 0.30：略低于 KB_SIMILARITY_THRESHOLD=0.35，因为记忆池已被"本会话曾命中"预筛过。
+ * 本轮 RPC 命中的 currentChunks 不受这个门槛影响，仍按 KB_SIMILARITY_THRESHOLD 控制。
+ */
+export const KB_MEMORY_RECALL_MIN_SIMILARITY = 0.30;
+
+/**
  * 每轮注入窗口大小 · 按模型档位
  * - large · Opus 4.x / GPT-4o / Sonnet 4.x / glm-4-plus 等 ≥ 64k 上下文
  * - default · 主流中档（gpt-4o-mini / haiku-4.5 / glm-4-air 等）
