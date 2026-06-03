@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { isTagAdmin } from "@/lib/admin-permissions";
 
 // GET /api/admin/category-display?agentId=X
 // 返回该智能体在所有分类下的展示状态
@@ -76,6 +77,7 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
 
   const body = await req.json();
   const { agentId } = body;

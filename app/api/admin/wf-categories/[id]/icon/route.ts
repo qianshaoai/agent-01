@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { isTagAdmin } from "@/lib/admin-permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -10,9 +11,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权操作", "FORBIDDEN");
-  }
+  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
 
   const { id } = await params;
   const formData = await req.formData();
@@ -48,9 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
-  if (admin.role === "org_admin") {
-    return apiError("无权操作", "FORBIDDEN");
-  }
+  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
 
   const { id } = await params;
   const { error } = await db.from("wf_categories").update({ icon_url: null }).eq("id", id);

@@ -30,10 +30,8 @@ import {
   Search,
   X,
   Tag,
-  Pencil,
   Check,
   Building2,
-  Image as ImageIcon,
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
@@ -125,7 +123,7 @@ export default function WorkflowsAdminPage() {
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [tenantSearch, setTenantSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"workflows" | "categories">("workflows");
+  // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留工作流列表（无 Tab 切换）
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // 4.27up 阶段一：流程图 / 列表 视图切换，按 workflow.id 维度记忆
   // 4.29up：默认视图改为 list（列表为主，流程图为辅）
@@ -150,21 +148,16 @@ export default function WorkflowsAdminPage() {
   const [stepForm, setStepForm] = useState<{ title: string; description: string; execType: "agent" | "manual" | "review" | "external"; agentId: string; buttonText: string; enabled: boolean; stepOrder: number }>(EMPTY_STEP);
   const [stepError, setStepError] = useState("");
   // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
-  // 三个独立 guard：工作流 save / 步骤 save / 复制 / 新建分类
+  // 6.5up · addCatGuard 已抽到 /admin/tags
   const saveWfGuard = useSubmitGuard();
   const saveStepGuard = useSubmitGuard();
   const duplicateWfGuard = useSubmitGuard();
-  const addCatGuard = useSubmitGuard();
 
   // Confirm dialog state
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
   function showConfirm(message: string, onConfirm: () => void) { setConfirmDialog({ message, onConfirm }); }
 
-  // Category management state
-  const [newCatName, setNewCatName] = useState("");
-  const [catNameHint, setCatNameHint] = useState(""); // 5.7up · 空值 inline 提示
-  const [editingCatId, setEditingCatId] = useState<string | null>(null);
-  const [editingCatName, setEditingCatName] = useState("");
+  // 6.5up · 分类管理 state（newCatName / editingCatId / editingCatName 等）已抽到 /admin/tags
 
   // 4.29up：?focus=<wfId>&pageSize=100 跨页定位
   // 关键：客户端 hydrate 后才能读到 window.location.search（lazy state 在 SSR 首次执行时
@@ -654,56 +647,8 @@ export default function WorkflowsAdminPage() {
     return agents.find((a) => a.id === agentId) ?? null;
   };
 
-  // ── WF Category CRUD ──────────────────────────────────────────
-  async function addWfCategory() {
-    if (!newCatName.trim()) {
-      setCatNameHint("请输入分类名称");
-      return;
-    }
-    await addCatGuard.submit(async (idempotencyKey) => {
-      await fetch("/api/admin/wf-categories", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ name: newCatName.trim() }) });
-      setNewCatName(""); load();
-    });
-  }
-
-  async function saveEditWfCat(id: string) {
-    if (!editingCatName.trim()) return;
-    await fetch(`/api/admin/wf-categories/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: editingCatName.trim() }) });
-    setEditingCatId(null); setEditingCatName(""); load();
-  }
-
-  function deleteWfCat(cat: Category) {
-    showConfirm(`确认删除分类「${cat.name}」？`, async () => {
-      const res = await fetch(`/api/admin/wf-categories/${cat.id}`, { method: "DELETE" });
-      if (!res.ok) { const d = await res.json(); alert(d.error ?? "删除失败"); return; }
-      load();
-    });
-  }
-
-  async function handleWfCatIcon(catId: string, e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch(`/api/admin/wf-categories/${catId}/icon`, { method: "POST", body: fd });
-    if (res.ok) {
-      const data = await res.json();
-      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: data.url } : c));
-    } else {
-      const d = await res.json();
-      alert(d.error ?? "图标上传失败");
-    }
-    e.target.value = "";
-  }
-
-  function removeWfCatIcon(catId: string) {
-    showConfirm("确认删除此分类的图标？", async () => {
-      const res = await fetch(`/api/admin/wf-categories/${catId}/icon`, { method: "DELETE" });
-      if (res.ok) {
-        setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: null } : c));
-      }
-    });
-  }
+  // 6.5up · addWfCategory / saveEditWfCat / deleteWfCat / handleWfCatIcon / removeWfCatIcon
+  //        已抽到 /admin/tags 页面（不动后端 API，仅前端搬迁）
 
   return (
     <AdminLayout>
@@ -711,23 +656,13 @@ export default function WorkflowsAdminPage() {
         <PageHeader
           icon={<GitBranch size={20} />}
           title="工作流管理"
-          subtitle="管理工作流、步骤与分类"
+          subtitle="管理工作流与步骤"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {workflows.length} 个</span>}
-          actions={
-            <>
-              <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">
-                {(["workflows", "categories"] as const).map((tab) => (
-                  <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-1.5 rounded-[8px] text-[13px] font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                    {tab === "workflows" ? "工作流列表" : "分类管理"}
-                  </button>
-                ))}
-              </div>
-              {activeTab === "workflows" && <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>}
-            </>
-          }
+          actions={<Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>}
         />
 
-        {activeTab === "workflows" && <>
+        {/* 6.5up · 工作流列表主体（旧分类管理 Tab 已抽到 /admin/tags） */}
+        <>
 
         {/* 筛选栏 */}
         <Card padding="md" className="flex flex-wrap gap-3 items-center">
@@ -736,7 +671,7 @@ export default function WorkflowsAdminPage() {
             <input className="w-full h-10 border border-gray-200 rounded-[10px] pl-9 pr-3 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" placeholder="搜索工作流名称…" value={wfSearch} onChange={e => setWfSearch(e.target.value)} />
           </div>
           <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfCatFilter} onChange={e => setWfCatFilter(e.target.value)}>
-            <option value="">全部分类</option>
+            <option value="">全部标签</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfVisibleFilter} onChange={e => setWfVisibleFilter(e.target.value)}>
@@ -792,7 +727,7 @@ export default function WorkflowsAdminPage() {
             if (!wfCatFilter) {
               const uncat = filteredWorkflows.filter((wf) => (wf.categoryIds ?? []).length === 0);
               if (uncat.length > 0) {
-                sections.push({ id: "__uncategorized__", name: "未分类", icon_url: null, workflows: uncat });
+                sections.push({ id: "__uncategorized__", name: "未设置标签", icon_url: null, workflows: uncat });
               }
             }
             return sections.filter((s) => s.workflows.length > 0);
@@ -806,7 +741,7 @@ export default function WorkflowsAdminPage() {
           <div className="space-y-6">
             {/* 5.16up R6 方案乙 · 按工作流分类分区展示（不改 DB，非真隔离） */}
             <p className="text-[12px] text-gray-400 px-1">
-              按分类分区展示；区内仍按全局顺序排列 —— 分区视图，非各分类独立排序。
+              按标签分区展示；区内仍按全局顺序排列 —— 分区视图，非各标签独立排序。
             </p>
             {groupedWfSections.map((section) => (
             <div key={section.id}>
@@ -1089,86 +1024,7 @@ export default function WorkflowsAdminPage() {
         );
         })()}
 
-        </>}
-
-        {/* 分类管理 Tab */}
-        {activeTab === "categories" && (
-          <Card padding="lg">
-            <div className="flex items-center gap-2 mb-4">
-              <input
-                className={`flex-1 h-10 border rounded-[10px] px-4 text-sm focus:outline-none transition-colors ${
-                  catNameHint
-                    ? "border-red-400 placeholder:text-red-500 focus:border-red-500"
-                    : "border-gray-200 focus:border-[#002FA7]"
-                }`}
-                placeholder={catNameHint || "新分类名称…"}
-                value={newCatName}
-                onChange={(e) => {
-                  setNewCatName(e.target.value);
-                  if (catNameHint) setCatNameHint("");
-                }}
-                onFocus={() => {
-                  if (catNameHint) setCatNameHint("");
-                }}
-                onKeyDown={(e) => e.key === "Enter" && addWfCategory()}
-              />
-              <Button size="sm" onClick={addWfCategory} className="gap-1"><Plus size={14} /> 添加</Button>
-            </div>
-            <div className="space-y-2">
-              {categories.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-6">暂无分类，在上方输入名称后回车或点击添加</p>
-              ) : categories.map((cat) => (
-                <div key={cat.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-[12px]">
-                  {editingCatId === cat.id ? (
-                    <div className="flex items-center gap-2 flex-1">
-                      <Tag size={15} className="text-[#002FA7] shrink-0" />
-                      <input
-                        autoFocus
-                        className="flex-1 h-9 border border-[#002FA7]/40 rounded-[8px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
-                        value={editingCatName}
-                        onChange={(e) => setEditingCatName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveEditWfCat(cat.id);
-                          if (e.key === "Escape") { setEditingCatId(null); setEditingCatName(""); }
-                        }}
-                      />
-                      <button onClick={() => saveEditWfCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认" aria-label="确认"><Check size={13} /></button>
-                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消" aria-label="取消"><X size={13} /></button>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-3">
-                        {cat.icon_url ? (
-                          <div className="w-8 h-8 rounded-[8px] overflow-hidden bg-white border border-gray-200 flex items-center justify-center">
-                            {/* 用户上传图标，URL 动态不在 next/image remotePatterns 内 */}
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={cat.icon_url} alt={cat.name} className="w-full h-full object-contain" />
-                          </div>
-                        ) : (
-                          <div className="w-8 h-8 rounded-[8px] bg-[#002FA7]/8 flex items-center justify-center">
-                            <Tag size={15} className="text-[#002FA7]" />
-                          </div>
-                        )}
-                        <span className="font-medium text-gray-800">{cat.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <label className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors cursor-pointer" title={cat.icon_url ? "替换图标" : "上传图标"}>
-                          <input type="file" accept=".png,.jpg,.jpeg,.svg,.webp" className="hidden" onChange={(e) => handleWfCatIcon(cat.id, e)} />
-                          <ImageIcon size={13} />
-                        </label>
-                        {cat.icon_url && (
-                          <button onClick={() => removeWfCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标" aria-label="删除图标"><X size={13} /></button>
-                        )}
-                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Pencil size={13} /></button>
-                        <button onClick={() => deleteWfCat(cat)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={13} /></button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
-        )}
+        </>
 
       </div>
 
@@ -1184,9 +1040,9 @@ export default function WorkflowsAdminPage() {
                 <textarea rows={2} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="简短描述工作流用途…" value={wfForm.description} onChange={(e) => setWfForm({ ...wfForm, description: e.target.value })} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-gray-700">所属分类（可多选）</label>
+                <label className="text-sm font-medium text-gray-700">所属标签（可多选）</label>
                 {categories.length === 0 ? (
-                  <p className="text-xs text-gray-400">暂无分类，请先在「分类管理」Tab 中创建</p>
+                  <p className="text-xs text-gray-400">暂无标签，请先在「标签管理」中创建</p>
                 ) : (
                   <>
                     <div className="border border-gray-200 rounded-[12px] p-3 max-h-36 overflow-y-auto space-y-1.5">
@@ -1210,7 +1066,7 @@ export default function WorkflowsAdminPage() {
                         );
                       })}
                     </div>
-                    <p className="text-xs text-gray-400">不选则此工作流不出现在任何分类筛选下</p>
+                    <p className="text-xs text-gray-400">不选则此工作流不出现在任何标签筛选下</p>
                   </>
                 )}
               </div>
