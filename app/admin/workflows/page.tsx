@@ -33,6 +33,7 @@ import {
   Check,
   Building2,
   Home,
+  Lock,
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
@@ -778,12 +779,16 @@ export default function WorkflowsAdminPage() {
                         <p className="font-medium text-gray-900">{wf.name}</p>
                         {/* 6.3up · 分类标签 chip + 简介 + 可见范围 chip 下沉到展开区，折叠态保留停用 + 创建者 */}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
-                        {/* 5.12up · 创建者徽章：只显示角色（用户名查审计记录） */}
-                        {wf.created_by_role && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-500 border border-gray-200" title="具体创建者请查审计记录">
-                            {ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}
-                          </span>
-                        )}
+                        {/* 5.12up · 创建者徽章 · 6.3up 改为 Lock 按钮 + popup 显示可修改本工作流的管理员（actor_level >= creator_level）*/}
+                        {wf.created_by_role && (() => {
+                          const creatorLevel = ROLE_LEVEL_MAP[wf.created_by_role] ?? 0;
+                          const allowedRoles = (["super_admin", "system_admin", "org_admin"] as const)
+                            .filter((role) => (ROLE_LEVEL_MAP[role] ?? 0) >= creatorLevel);
+                          const items: ChipItem[] = allowedRoles.map((role) => ({
+                            name: ROLE_LABEL_MAP[role] ?? role,
+                          }));
+                          return <ChipPopover label="可修改本工作流的管理员" theme="gray" triggerIcon={<Lock size={12} />} items={items} />;
+                        })()}
                       </div>
                       {/* 6.3up · 简介下沉到展开区（不再 truncate）*/}
                     </div>
@@ -1852,6 +1857,7 @@ type ChipItem = { name: string; iconUrl?: string | null };
 const CHIP_THEME = {
   amber: { bg: "bg-amber-50", text: "text-amber-600", hover: "hover:bg-amber-100" },
   green: { bg: "bg-green-50", text: "text-green-700", hover: "hover:bg-green-100" },
+  gray:  { bg: "bg-gray-50",  text: "text-gray-500",  hover: "hover:bg-gray-100"  },
 } as const;
 
 function ChipPopover({
