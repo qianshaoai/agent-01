@@ -611,7 +611,17 @@ export default function AgentsAdminPage() {
                 <table className="w-full text-sm table-sticky-head">
                   <thead>
                     <tr>
-                      {["编号/名称", "标签", "类型/平台", "引用工作流", "操作"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                      {/* 6.3up · 表头居中（除"编号/名称"列保持左对齐，避免长名字行视觉偏移）*/}
+                      {(["编号/名称", "标签", "类型/平台", "引用工作流", "操作"] as const).map((h) => (
+                        <th
+                          key={h}
+                          className={`px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider ${
+                            h === "编号/名称" ? "text-left" : "text-center"
+                          }`}
+                        >
+                          {h}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   {/* 5.16up R4 · 按分类分组展示；多分类智能体在每个所属分类下各出现一次 */}
@@ -664,7 +674,7 @@ export default function AgentsAdminPage() {
                         </td>
                         <td className="px-5 py-4">
                           {a.categoriesAll && a.categoriesAll.length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
+                            <div className="flex flex-wrap items-center justify-center gap-1">
                               {a.categoriesAll.map((c) => (
                                 <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
                                   {/* 小图标（<20px），next/image 优化收益低 */}
@@ -675,11 +685,11 @@ export default function AgentsAdminPage() {
                               ))}
                             </div>
                           ) : (
-                            <Badge variant="muted">未设置标签</Badge>
+                            <div className="flex justify-center"><Badge variant="muted">未设置标签</Badge></div>
                           )}
                         </td>
                         <td className="px-5 py-4">
-                          <div className="flex items-center gap-1.5 flex-wrap">
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
                             {a.agent_type === "external" ? (
                               <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-700 flex items-center gap-1"><ExternalLink size={10} />外链</span>
                             ) : (
@@ -689,9 +699,9 @@ export default function AgentsAdminPage() {
                         </td>
                         <td className="px-5 py-4 relative">
                           {(a.workflows?.length ?? 0) === 0 ? (
-                            <span className="text-[11px] text-gray-400">未被工作流引用</span>
+                            <div className="flex justify-center"><span className="text-[11px] text-gray-400">未被工作流引用</span></div>
                           ) : (
-                            <div className="flex flex-wrap items-center gap-1.5">
+                            <div className="flex flex-wrap items-center justify-center gap-1.5">
                               {a.workflows!.slice(0, 2).map((w) => (
                                 <button
                                   key={w.id}
@@ -753,9 +763,9 @@ export default function AgentsAdminPage() {
                         <td className="px-5 py-4">
                           {/* 5.7up · org_admin 只读，整个操作列不显示 */}
                           {isOrgAdmin ? (
-                            <span className="text-xs text-gray-300">仅可查看</span>
+                            <div className="flex justify-center"><span className="text-xs text-gray-300">仅可查看</span></div>
                           ) : (
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center justify-center gap-1">
                             <button
                               onClick={() => toggleAgentEnabled(a)}
                               className={`p-1.5 rounded-[8px] transition-colors ${a.enabled ? "text-green-600 hover:bg-green-50" : "text-gray-400 hover:bg-gray-100"}`}
