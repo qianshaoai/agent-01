@@ -58,8 +58,11 @@
 | `migration_v42_match_kb_chunks_done_filter.sql` | **5.28up 小B 复审 Fix 1**【🔑 知识库数据正确性】`match_kb_chunks` RPC 加 `kb_documents.status='done'` 过滤；签名 / 返回字段保持冻结契约不变。⚠ 5.28up A 分批 insert 后中途失败的"半截文档"也会有 chunks 落库，**不跑此条 → 失败 / 索引中文档的部分片段可能被 chat 引用**。代码层 ingest.ts 内 fail() 主动清理已 insert chunks（双保险），但 RPC 层这条仍是必跑（防其它路径产生半截数据）。 | ☐ |
 | `migration_v43_scoped_ownership.sql` | **5.30up · 组织级 ownership 基建**【🔑 RBAC 必跑】`model_providers` + `knowledge_bases` 各加 `tenant_code TEXT NULL` + 单列 BTREE 索引。语义：NULL = 平台公共（super/system 建），非 NULL = 某 org 建。存量行回填默认 NULL（与现有行为兼容）。⚠ 5.30up 后端 list / canReadRow / canWriteRow / resolveCreateOwnership 都依赖 `tenant_code` 字段，**不跑此条 → API 管理 + 知识库管理 list/CRUD 5xx（缺列）**。必须先跑 SQL 再发 5.30up 代码。 | ☐ |
 | `migration_v44_anthropic_platform.sql` | **5.30.1 · Anthropic 接入**【🔑 接 Claude 必跑】`model_providers.platform` CHECK 扩 `'anthropic'` + `model_quota_weights` 种子加 `claude-haiku-4-5-20251001`=3 / `claude-sonnet-4-6`=8 / `claude-opus-4-8`=15。⚠ 不跑此条 → 新建 anthropic provider 时被 CHECK 约束拒（platform 不允许）；用 claude 对话时 `model_quota_weights` 查不到走 weight=1 软放过（成本被低估）。 | ☐ |
+| `migration_v50_custom_roles.sql` | **6.4up · 权限管理 · 自定义角色基建**【🔑 权限管理上线必跑】新建 3 张表 `custom_roles` / `custom_role_permissions` / `user_custom_roles`；`workflows` 加 `created_by_kind`（CHECK admin/custom_admin）+ `created_by_role_code`；历史行回填 `kind='admin', role_code=created_by_role`。旧 `created_by_role` 列与 v31 CHECK 不动。permission_key 不在 DB 加 CHECK（由 `lib/permission-keys.ts` + API 校验）。⚠ 不跑此条 → 自定义角色 CRUD / 用户绑角色 / custom admin 创建工作流全 500。 | ☐ |
 
 > v20 / v23 跳号无对应文件（v23 编号被已搁置的"组织码可改"草案占用）。
+> v45 跳号无对应文件；v46~v49 占号在 `feature/6.3up` 分支（工作流分层级配置：scope_order 表 / RPC / perms→order 触发器 / drop workflows.created_by FK）。
+> 待 6.3up 合入 master2 后本表会补齐 v46~v49 行；6.4up 的 v50 与 v46~v49 互不依赖、可独立跑。
 > v28~v33 已于 5.16up 回归核查时补登 —— "跑过"列标「功能在用，推定已跑」的，
 > 是因对应表 / 列已被线上代码依赖且回归测试通过、可证已执行；如需精确日期请按需复核。
 
