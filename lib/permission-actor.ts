@@ -146,6 +146,41 @@ async function buildCustomAdminActor(p: CustomAdminPayload): Promise<PermissionA
       .eq("user_id", p.userId),
   ]);
 
+  // R2 Fix 2 兜底 · 即使 freshness 已挡，buildActor 也独立校验一遍：
+  //   - 用户不存在 / 非 active → 返回空 permissions（actor 拿不到任何能力 → hasPermission 必拒）
+  //   - 用户绑定组织且 tenant disabled/expired → 同样返回空 permissions
+  // 这是防御深度：万一未来新增"未走 freshness 的 access 链路"，actor 层也不会越权。
+  const emptyActor = (reason: string): PermissionActor => ({
+    actorId: p.userId,
+    source: "custom_admin",
+    tenantCode: null,
+    deptId: null,
+    teamId: null,
+    userType: null,
+    builtinRole: null,
+    customRoleCodes: [],
+    permissions: new Set<PermissionKey>(),
+    username: `${p.username} (denied: ${reason})`,
+  });
+
+  if (!userRow) return emptyActor("user_not_found");
+  if ((userRow as { status: string }).status !== "active") return emptyActor("user_not_active");
+
+  // tenant 状态兜底校验（与 freshness 同口径）
+  const tc = userRow.tenant_code;
+  if (tc && tc !== "PERSONAL") {
+    const { data: tenant } = await db
+      .from("tenants")
+      .select("enabled, expires_at")
+      .eq("code", tc)
+      .maybeSingle();
+    if (!tenant) return emptyActor("tenant_not_found");
+    if (!tenant.enabled) return emptyActor("tenant_disabled");
+    if (tenant.expires_at && new Date(tenant.expires_at) < new Date()) {
+      return emptyActor("tenant_expired");
+    }
+  }
+
   type RoleJoinRow = {
     role_id: string;
     custom_roles: { code: string; enabled: boolean } | { code: string; enabled: boolean }[] | null;
@@ -176,14 +211,14 @@ async function buildCustomAdminActor(p: CustomAdminPayload): Promise<PermissionA
   return {
     actorId: p.userId,
     source: "custom_admin",
-    tenantCode: userRow?.tenant_code ?? null,
-    deptId: userRow?.dept_id ?? null,
-    teamId: userRow?.team_id ?? null,
-    userType: (userRow?.user_type as "personal" | "organization" | null) ?? null,
+    tenantCode: userRow.tenant_code ?? null,
+    deptId: userRow.dept_id ?? null,
+    teamId: userRow.team_id ?? null,
+    userType: (userRow.user_type as "personal" | "organization" | null) ?? null,
     builtinRole: null,
     customRoleCodes,
     permissions,
-    username: userRow?.username ?? userRow?.phone ?? p.username,
+    username: userRow.username ?? userRow.phone ?? p.username,
   };
 }
 

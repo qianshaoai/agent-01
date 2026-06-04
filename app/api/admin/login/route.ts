@@ -97,6 +97,21 @@ export async function POST(req: NextRequest) {
     //   - 不挂 firstLogin 闸门（custom role 不要求初始改密；用户层的首登流程在 /api/auth/login 已经做了）
     //   - middleware 仍校验 token freshness + cookie 存在性
     if (await hasAnyCustomRole(matchedUser.id)) {
+      // R2 Fix 4 · 与 builtin org_admin 同口径：所属组织必须 enabled 且未过期才放行
+      //   PERSONAL / 空 tenant_code 跳过（个人用户也可能配 custom role）
+      if (matchedUser.tenant_code && matchedUser.tenant_code !== "PERSONAL") {
+        const { data: tenant } = await db
+          .from("tenants")
+          .select("enabled, expires_at")
+          .eq("code", matchedUser.tenant_code)
+          .single();
+        if (!tenant || !tenant.enabled) {
+          return apiError("所属组织已被禁用，无法登录", "FORBIDDEN");
+        }
+        if (tenant.expires_at && new Date(tenant.expires_at) < new Date()) {
+          return apiError("所属组织已过期，无法登录", "FORBIDDEN");
+        }
+      }
       clearLoginFail(rateKey);
       const token = await signToken({
         type: "admin",

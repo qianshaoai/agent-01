@@ -45,7 +45,13 @@ export async function PATCH(
     if (!["active", "disabled"].includes(status)) {
       return apiError("状态值无效", "VALIDATION_ERROR");
     }
-    const { error } = await db.from("users").update({ status }).eq("id", id);
+    // 6.4up R2 Fix 2 · disabled 时同步写 force_relogin_at = NOW()
+    //   让 validateUserTokenFreshness / validateCustomAdminTokenFreshness 立即把
+    //   已签发的 user / custom admin cookie 判失效，防"禁用后旧 cookie 继续访问"。
+    //   重新 enable 不清 force_relogin_at（用户主动重登即可拿新 cookie）。
+    const updates: Record<string, unknown> = { status };
+    if (status === "disabled") updates.force_relogin_at = new Date().toISOString();
+    const { error } = await db.from("users").update(updates).eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({
       adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
@@ -179,11 +185,13 @@ export async function PATCH(
   //   nickname 改写为"已删除用户"避免后台继续暴露原账号信息。
   if (body.action === "soft-delete" || body.action === "delete") {
     const displayName = (target.nickname || target.phone) ?? undefined;
+    // 6.4up R2 Fix 2 · 软删除同步写 force_relogin_at = NOW()（同 disabled 路径）
     const { error } = await db.from("users").update({
       status: "deleted",
       username: `deleted_${id}`,
       phone: `del_${id}`,
       nickname: "已删除用户",
+      force_relogin_at: new Date().toISOString(),
     }).eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({

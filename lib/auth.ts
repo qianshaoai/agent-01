@@ -278,22 +278,55 @@ export async function getCurrentAdminAccess(): Promise<AdminAccessPayload | null
  * custom admin 的 actorId 是 users.id，所以直接比对 users.force_relogin_at。
  * 与 validateAdminTokenFreshness 第二条路径同口径，但因为 payload 形态不同（无 adminId）
  * 单独拉一个函数避免在 freshness 函数里塞 union 判别。
+ *
+ * R2 Fix 2 · 三层校验（小B 验收 P0-2 + R2.1 兜底）：
+ *   1. users.status 必须 'active'（禁用/注销/删除 → 立即失效）
+ *   2. force_relogin_at 比较（与 builtin 同口径）
+ *   3. 若用户绑定组织（tenant_code 非 PERSONAL）→ 该组织必须 enabled 且未过期
+ *
+ * DB 真错（网络/超时）→ 沿用项目"宁可放行不踢用户"的 5.12up 兜底策略 return true；
+ * 但若查到数据明确不通过 → 返回 false。
  */
 export async function validateCustomAdminTokenFreshness(
   payload: CustomAdminPayload
 ): Promise<boolean> {
-  if (!payload.iat) return true;
+  if (!payload.iat) {
+    // 无 iat 仍要补做 status / tenant 校验（虽然实际签发时一定有 iat）
+  }
   try {
-    const { data } = await db
+    const { data, error } = await db
       .from("users")
-      .select("force_relogin_at")
+      .select("force_relogin_at, status, tenant_code")
       .eq("id", payload.userId)
       .single();
-    if (!data || !data.force_relogin_at) return true;
-    const tokenIatMs = payload.iat * 1000;
-    const forceAtMs = new Date(data.force_relogin_at).getTime();
-    return tokenIatMs >= forceAtMs;
+    if (error || !data) return false; // 用户不存在 → cookie 立即失效
+
+    // ① status active 闸
+    if (data.status !== "active") return false;
+
+    // ② force_relogin_at 闸
+    if (data.force_relogin_at && payload.iat) {
+      const tokenIatMs = payload.iat * 1000;
+      const forceAtMs = new Date(data.force_relogin_at).getTime();
+      if (tokenIatMs < forceAtMs) return false;
+    }
+
+    // ③ tenant 启用 / 过期 闸（仅 org 用户；PERSONAL / NULL 跳过）
+    const tc = data.tenant_code;
+    if (tc && tc !== "PERSONAL") {
+      const { data: tenant } = await db
+        .from("tenants")
+        .select("enabled, expires_at")
+        .eq("code", tc)
+        .single();
+      if (!tenant) return false;
+      if (!tenant.enabled) return false;
+      if (tenant.expires_at && new Date(tenant.expires_at) < new Date()) return false;
+    }
+
+    return true;
   } catch {
+    // 真异常（网络/超时）→ 不阻塞，与 validateAdminTokenFreshness 同策略
     return true;
   }
 }

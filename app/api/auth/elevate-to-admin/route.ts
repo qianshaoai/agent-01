@@ -75,6 +75,20 @@ export async function POST() {
     // 6.4up · custom admin 入口：role='user' 但持有 custom role → 签 custom access cookie
     // 与 admin/login 第 2 路径同口径；不挂 firstLogin 闸门（用户层登录态已 active）。
     if (await hasAnyCustomRole(dbUser.id)) {
+      // R2 Fix 4 · 所属组织 enabled / 未过期 校验（与 builtin elevate 同口径）
+      if (dbUser.tenant_code && dbUser.tenant_code !== "PERSONAL") {
+        const { data: tenant } = await db
+          .from("tenants")
+          .select("enabled, expires_at")
+          .eq("code", dbUser.tenant_code)
+          .single();
+        if (!tenant || !tenant.enabled) {
+          return apiError("所属组织已被禁用，无法进入后台", "FORBIDDEN");
+        }
+        if (tenant.expires_at && new Date(tenant.expires_at) < new Date()) {
+          return apiError("所属组织已过期，无法进入后台", "FORBIDDEN");
+        }
+      }
       clearLoginFail(rateKey);
       const token = await signToken({
         type: "admin",

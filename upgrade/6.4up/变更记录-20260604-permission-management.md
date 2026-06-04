@@ -374,8 +374,110 @@ R1.2 § 不在本期范围明示不做的项目，留作 v1.1+ 视用户反馈�
 ## 部署 Runbook（待用户拍板节点）
 
 1. **dev DB 验证**
-   - 在 supabase 项目 `ysgdmdqygbvfthzylhqn` SQL Editor 跑 `migration_v50_custom_roles.sql`
+   - 在 supabase 项目 `ysgdmdqygbvfthzylhqn` SQL Editor 顺序跑：
+     - `migration_v50_custom_roles.sql`
+     - `migration_v51_workflows_drop_created_by_fk.sql`
    - SELECT 验证 3 张表 + workflows 2 列 + workflows 历史行已回填 `created_by_kind='admin'`
-2. **dev 实测 22 项**（见方案 § 验收清单）
-3. **生产 supabase** 跑同款 SQL
+   - 验证 `workflows.created_by` 已无 FK（`SELECT con.conname FROM pg_constraint con JOIN pg_class cls ON cls.oid=con.conrelid WHERE cls.relname='workflows' AND con.contype='f';` 应不含指向 created_by 的项）
+2. **dev 实测 22 项**（见方案 § 验收清单）+ R2 补测 4 项（见下）
+3. **生产 supabase** 跑同款 SQL（v50 + v51 顺序）
 4. **Vercel** 部署 feature/6.4up（合并 master2 → 自动部署）
+
+---
+
+## R2 修复（小B 验收 P0×2 + P1×2 + 用户 R2.1 三条补强）
+
+小B 静态验收（2026-06-04 第二轮）指出 4 个阻断 demo 的 finding，本节落地 R2 收口 + 用户拍板的 R2.1 三条补强。
+
+### P0-1 · workflows.created_by FK 撞 23503 · [supabase/migration_v51_workflows_drop_created_by_fk.sql](../../supabase/migration_v51_workflows_drop_created_by_fk.sql)【新建】
+
+- 起因：v31 加 FK to `admins(id)`；6.3up 的 v49 已 drop 但未合 master2 → 6.4up 不带；custom admin actorId 是 `users.id` → 写 created_by 撞 FK。
+- R2.1 用户补强：**不赌约束名**，按"指向 workflows.created_by 列的全部 FK"循环 drop（DO BLOCK 遍历 `pg_constraint` JOIN `pg_attribute`）。即使线上约束名漂移（历史改名 / pg_dump 改名 / 手动重建）也能修。
+- 幂等：DROP CONSTRAINT IF EXISTS + RAISE NOTICE 可追踪。
+- 与 v49 语义等价；两条均幂等、可共存。
+
+### P0-2 · custom admin 旧 cookie 不实时失效 · 三层修复
+
+**修复 A** · [lib/auth.ts](../../lib/auth.ts) `validateCustomAdminTokenFreshness`
+- 加 `users.status='active'` 校验；非 active → 立即失效
+- 加 `users.tenant_code` 关联 `tenants.enabled / expires_at` 校验；禁用/过期 → 立即失效（与 builtin org_admin 同口径）
+- DB 真错（网络/超时）仍 return true 不踢用户，与 `validateAdminTokenFreshness` 同策略
+- 用户不存在 → return false（旧逻辑只看 force_relogin_at 时 fallback 放行；现在收紧）
+
+**修复 B** · [lib/permission-actor.ts](../../lib/permission-actor.ts) `buildCustomAdminActor`
+- 防御深度兜底：user 不在 / status≠active / tenant 不可用 → 返回空 permissions Set；actor 拿不到任何能力 → hasPermission 必拒
+- 不依赖 freshness 单层把关；万一未来有未走 freshness 的链路也兜得住
+
+**修复 C** · [app/api/admin/users/[id]/route.ts](../../app/api/admin/users/%5Bid%5D/route.ts)
+- `set-status` action 改 disabled 时同步写 `force_relogin_at = NOW()`
+- `soft-delete / delete` action 同步写 `force_relogin_at = NOW()`
+- 与 5.6up "改组织" 走同一套强制重登机制；custom admin / builtin user cookie 全部立即失效
+
+### P1-1 · /admin/workflows 前端 custom admin 收口 · [app/admin/workflows/page.tsx](../../app/admin/workflows/page.tsx)
+
+页面拉 `/api/admin/me` 时新增三态：`accessSource` / `customPermissions` / 一组衍生 helper（`isCustomAdmin / hasAnyCustomCreate / hasAnyCustomUpdate / canCreateWf / canCopyWf / canDeleteWf / canToggleWfEnabled / canSeeCategoriesTab`）。
+
+- `canTouchWf(wf)` 增加 custom 分支：持有任一 `workflow.update.*` 即放行（scope 校验由后端做）
+- `noTouchReason(wf)` 增加 custom 分支文案
+- 按钮显隐：
+  - 「新增工作流」：仅在有任一 `workflow.create.*` 时显示
+  - 「复制」按钮：custom admin 隐藏（v1 不开放，避免点了打到 builtin-only duplicate API 返回 401）
+  - 「删除」按钮：custom admin 隐藏（v1 不开放）
+  - 「启停」按钮：custom admin 隐藏（v1 不开放）
+  - 「分类管理」Tab：custom admin 隐藏（依赖 builtin-only 类目接口）
+  - 步骤 toggleEnabled / deleteStep 按钮：custom admin 隐藏
+- 编辑弹窗收口（避免无脑发包导致后端 403）：
+  - 「可见权限」整段隐藏（custom admin 由后端按 actor scope 自动决定 visibleTo + permissions）
+  - 「启用」复选框隐藏
+  - `handleSaveWf` 构造 body 时 custom admin 不带 `enabled / visibleTo / permissions`
+- 步骤弹窗收口：
+  - 「启用此步骤」复选框隐藏
+  - `handleSaveStep` body 不带 `enabled`
+- 失败可见化（R2.1 用户补强）：
+  - `toggleWfEnabled / duplicateWf / deleteWf / toggleStepEnabled / deleteStep` 全部检查 `res.ok`；失败 toast `error`，不再"接口已 401 还显示『已删除』"
+
+### P1-2 · custom admin 登录/提升没校验租户 · [admin/login](../../app/api/admin/login/route.ts) + [elevate-to-admin](../../app/api/auth/elevate-to-admin/route.ts)
+
+两个 custom 分支签 token 前补查：
+
+```ts
+if (user.tenant_code && user.tenant_code !== "PERSONAL") {
+  查 tenants.enabled / expires_at；
+  enabled=false 或 expires_at < now → 403 拒签
+}
+```
+
+与 builtin org_admin 同口径；PERSONAL / 空 tenant_code 跳过（个人用户也可能配 custom role）。
+
+### R2.1 补强 3 · tenant 校验进入 actor / freshness 链路兜底
+
+P1-2 仅放 login/elevate 不够：用户在登录后被禁用/过期，旧 cookie 仍可能继续访问。R2.1 把同款校验进入：
+
+- `validateCustomAdminTokenFreshness`（顶部 token 校验时）
+- `buildCustomAdminActor`（每次构造 actor 时；进入 permissions 之前先 deny）
+
+三层覆盖：登录闸 + freshness 闸 + actor 闸；单点漏报有兜底。
+
+---
+
+## R2 验收补测（4 项 · 跟 22 项主验收并行）
+
+23. supabase 直接 INSERT 一行 workflow + custom admin user 设 created_by=users.id → 不再 23503
+24. 把 custom admin 用户置 disabled → 旧 cookie 访问任何 /api/admin/* 立刻 401（cookie 自动失效）
+25. 把 custom admin 用户所属租户置 disabled → 旧 cookie 同上
+26. custom admin 登录页：
+    - 「新建/复制/删除/启停」按钮按预期隐藏
+    - 编辑弹窗内「可见权限」区段 + 「启用」复选框消失
+    - 步骤启停 / 删除按钮消失
+    - 误点已隐藏按钮（绕过 UI）：API 仍 fail-closed 返回 403，toast 可见错误
+
+### 26 项 ALL ✅ 实际跑过才能 release demo（用户人工实测，本次不在 Claude 范围）
+
+---
+
+## 状态（R2.1）
+
+- typecheck ✅
+- lint ✅ 0 errors（1 warning 是历史 `agents/[id]/page.tsx`，与本次改动无关）
+- build ✅（Next 16 / Turbopack；首次 segfault 是 Windows 已知 flake，retry 通过）
+- 未跑 SQL：v50 + v51 双条留在仓库，待用户在 dev DB 跑后人工实测
