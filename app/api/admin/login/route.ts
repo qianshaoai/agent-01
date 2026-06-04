@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { signToken, buildAdminSetCookieHeader, AdminRole } from "@/lib/auth";
 import { checkLoginRate, recordLoginFail, clearLoginFail } from "@/lib/rate-limit";
+import { hasAnyCustomRole } from "@/lib/permission-actor";
 
 export async function POST(req: NextRequest) {
   const { username, password } = await req.json();
@@ -44,6 +45,7 @@ export async function POST(req: NextRequest) {
       username: admin.username,
       role: (admin.role as AdminRole) ?? "super_admin",
       tenantCode: admin.tenant_code ?? null,
+      source: "admin_table",
     });
     return NextResponse.json(
       { ok: true },
@@ -90,6 +92,23 @@ export async function POST(req: NextRequest) {
   // 角色检查：必须是 super_admin / system_admin / org_admin 才能进后台
   const role = matchedUser.role as string;
   if (!["super_admin", "system_admin", "org_admin"].includes(role)) {
+    // 6.4up · custom admin 入口：role='user' 但持有 custom role 时，签 custom access cookie
+    //   - 不签 builtin AdminPayload（无 adminId / role），避免被 requireAdmin 误识为 builtin
+    //   - 不挂 firstLogin 闸门（custom role 不要求初始改密；用户层的首登流程在 /api/auth/login 已经做了）
+    //   - middleware 仍校验 token freshness + cookie 存在性
+    if (await hasAnyCustomRole(matchedUser.id)) {
+      clearLoginFail(rateKey);
+      const token = await signToken({
+        type: "admin",
+        source: "custom_admin",
+        userId: matchedUser.id,
+        username: matchedUser.username ?? matchedUser.phone,
+      });
+      return NextResponse.json(
+        { ok: true, mustChangePassword: false },
+        { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
+      );
+    }
     return apiError("该账号无后台访问权限", "FORBIDDEN");
   }
 
@@ -127,6 +146,7 @@ export async function POST(req: NextRequest) {
     username: matchedUser.username ?? matchedUser.phone,
     role: role as AdminRole,
     tenantCode: role === "org_admin" ? matchedUser.tenant_code : null,
+    source: "user_admin",
     ...(mustChangePassword ? { firstLogin: true } : {}),
   });
 

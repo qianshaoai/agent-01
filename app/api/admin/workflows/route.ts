@@ -1,12 +1,58 @@
 import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { getAdminAccessPayload } from "@/lib/session";
+import { isCustomAdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import {
+  buildPermissionActor,
+  PermissionActor,
+  listReadableScopes,
+} from "@/lib/permission-actor";
+import { PermissionKey, getPermissionScopeSuffix } from "@/lib/permission-keys";
 
 export const dynamic = "force-dynamic";
 
 type WfPerm = { scope_type: string; scope_id: string | null };
+
+// 6.4up · 给 custom admin 计算可见 workflow id 集（从 resource_permissions 反查）
+async function computeCustomAdminVisibleWorkflowIds(
+  actor: PermissionActor,
+): Promise<string[] | null> {
+  const scope = listReadableScopes(actor);
+  if (scope.all) return null; // null 表示不限制
+  const orFilters: string[] = [];
+  if (scope.org) orFilters.push(`and(scope_type.eq.org,scope_id.eq.${scope.org})`);
+  if (scope.dept) {
+    orFilters.push(`and(scope_type.eq.dept,scope_id.eq.${scope.dept})`);
+    // dept 范围还看本 dept 下所有 team
+    const { data: teams } = await db.from("teams").select("id").eq("dept_id", scope.dept);
+    const teamIds = (teams ?? []).map((t: { id: string }) => t.id);
+    if (teamIds.length > 0) {
+      orFilters.push(`and(scope_type.eq.team,scope_id.in.(${teamIds.join(",")}))`);
+    }
+  }
+  if (scope.team) orFilters.push(`and(scope_type.eq.team,scope_id.eq.${scope.team})`);
+  if (orFilters.length === 0) return [];
+  const { data: hits } = await db
+    .from("resource_permissions")
+    .select("resource_id")
+    .eq("resource_type", "workflow")
+    .or(orFilters.join(","));
+  return Array.from(new Set((hits ?? []).map((r: { resource_id: string }) => r.resource_id)));
+}
+
+/** custom admin 持有的最高级 create scope（按 .all > .org > .dept > .team 优先） */
+function pickCreateKey(actor: PermissionActor): PermissionKey | null {
+  const order: PermissionKey[] = [
+    "workflow.create.all",
+    "workflow.create.org",
+    "workflow.create.dept",
+    "workflow.create.team",
+  ];
+  for (const k of order) if (actor.permissions.has(k)) return k;
+  return null;
+}
 
 // 5.9up · 校验 org_admin 提交的 permissions 是否都在本组织范围内
 // 任何 dept_id / team_id 必须真实属于 admin.tenantCode；scope=org 必须等于本组织
@@ -39,16 +85,37 @@ async function validateOrgAdminPermissions(
 }
 
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  // 6.4up · 双通道认证（access payload 同时承接 builtin / custom admin）
+  const access = await getAdminAccessPayload();
+  if (!access) return apiError("未登录或权限已变更", "UNAUTHORIZED");
+  if (!isCustomAdminPayload(access) && access.firstLogin === true) {
+    return apiError("首次登录需先修改初始密码，请回登录页完成密码修改", "FORBIDDEN");
+  }
 
   const { page, pageSize, start } = parsePagination(req, 50);
 
-  // 5.7up · org_admin 只看本组织相关工作流：
-  //   visible_to='org_only' 且 resource_permissions 里有 scope=本组织/部门/小组
-  //   OR visible_to='custom' 且 resource_permissions 里有 scope=本组织/部门/小组
   let scopedWfIds: string[] | null = null;
-  if (admin.role === "org_admin") {
+
+  if (isCustomAdminPayload(access)) {
+    // 6.4up · custom admin 路径：按持有的 read.* 计算可见 workflow id 集
+    const actor = await buildPermissionActor(access);
+    const readKeys: PermissionKey[] = [
+      "workflow.read.team",
+      "workflow.read.dept",
+      "workflow.read.org",
+      "workflow.read.all",
+    ];
+    if (!readKeys.some((k) => actor.permissions.has(k))) {
+      return paginatedResponse([], 0, page, pageSize);
+    }
+    scopedWfIds = await computeCustomAdminVisibleWorkflowIds(actor);
+    if (scopedWfIds !== null && scopedWfIds.length === 0) {
+      return paginatedResponse([], 0, page, pageSize);
+    }
+    // 走完 custom 分支后落到下方公共 DB 查询；admin 字段在 GET 列表无使用
+  } else if (access.role === "org_admin") {
+    // builtin 别名：保留下方原有 admin.* 变量名供 org_admin 逻辑使用
+    const admin = access;
     if (!admin.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
     const tenantCode = admin.tenantCode;
     const [{ data: depts }, { data: teams }] = await Promise.all([
@@ -126,14 +193,101 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  // 6.4up · 双通道认证
+  const access = await getAdminAccessPayload();
+  if (!access) return apiError("未登录或权限已变更", "UNAUTHORIZED");
+  if (!isCustomAdminPayload(access) && access.firstLogin === true) {
+    return apiError("首次登录需先修改初始密码，请回登录页完成密码修改", "FORBIDDEN");
+  }
 
   const body = await req.json();
   const { name, description, category, sortOrder, enabled, categoryIds } = body;
-  let { visibleTo, permissions } = body;
 
   if (!name) return apiError("请填写工作流名称", "VALIDATION_ERROR");
+
+  // ── 6.4up · custom admin 路径 ──
+  if (isCustomAdminPayload(access)) {
+    const actor = await buildPermissionActor(access);
+    const createKey = pickCreateKey(actor);
+    if (!createKey) return apiError("无新建工作流权限", "FORBIDDEN");
+    const suffix = getPermissionScopeSuffix(createKey);
+
+    // 决定 scope_type / scope_id
+    let scopeType: "team" | "dept" | "org" | "all";
+    let scopeId: string | null;
+    if (suffix === "team") {
+      if (!actor.teamId) return apiError("当前账号未绑定小组，无法新建团队级工作流", "FORBIDDEN");
+      scopeType = "team"; scopeId = actor.teamId;
+    } else if (suffix === "dept") {
+      if (!actor.deptId) return apiError("当前账号未绑定部门，无法新建部门级工作流", "FORBIDDEN");
+      scopeType = "dept"; scopeId = actor.deptId;
+    } else if (suffix === "org") {
+      if (!actor.tenantCode) return apiError("当前账号未绑定组织，无法新建组织级工作流", "FORBIDDEN");
+      scopeType = "org"; scopeId = actor.tenantCode;
+    } else {
+      // .all
+      scopeType = "all"; scopeId = null;
+    }
+
+    const roleCodeSnapshot = actor.customRoleCodes[0] ?? null;
+    const { data: created, error: createErr } = await db
+      .from("workflows")
+      .insert({
+        name,
+        description: description ?? "",
+        category: category ?? "",
+        sort_order: sortOrder ?? 0,
+        enabled: enabled ?? true,
+        visible_to: "custom",
+        created_by: actor.actorId,
+        // 不写 created_by_role —— custom admin 不在 builtin RBAC 等级体系内
+        created_by_kind: "custom_admin",
+        created_by_role_code: roleCodeSnapshot,
+      })
+      .select()
+      .single();
+    if (createErr) return dbError(createErr);
+
+    if (Array.isArray(categoryIds) && categoryIds.length > 0) {
+      await db.from("workflow_categories").insert(
+        categoryIds.map((cid: string) => ({ workflow_id: created.id, category_id: cid }))
+      );
+    }
+    const { error: permErr } = await db.from("resource_permissions").insert({
+      resource_type: "workflow",
+      resource_id: created.id,
+      scope_type: scopeType,
+      scope_id: scopeId,
+    });
+    if (permErr) {
+      // 回滚（无事务时尽力清理）
+      await db.from("workflows").delete().eq("id", created.id);
+      return dbError(permErr);
+    }
+
+    await writeAuditLog({
+      adminId: actor.actorId,
+      adminUsername: actor.username,
+      adminRole: "custom_admin",
+      adminTenantCode: actor.tenantCode ?? null,
+      action: "create",
+      resourceType: "workflow",
+      resourceId: created.id,
+      resourceName: name,
+      detail: {
+        created_by_kind: "custom_admin",
+        created_by_role_code: roleCodeSnapshot,
+        permission_key: createKey,
+        scope: { scope_type: scopeType, scope_id: scopeId },
+      },
+    });
+
+    return NextResponse.json(created, { status: 201 });
+  }
+
+  // ── builtin admin 路径（保留原有 5.9up org_admin 校验） ──
+  const admin = access;
+  let { visibleTo, permissions } = body;
 
   // 5.9up · org_admin 创建工作流：
   //   - 不传 permissions（或空）→ 兼容旧行为，默认全组织可见

@@ -1,6 +1,22 @@
-import { getCurrentUser, getCurrentAdmin, UserPayload, AdminPayload, AdminRole } from "@/lib/auth";
+import {
+  getCurrentUser,
+  getCurrentAdmin,
+  getCurrentAdminAccess,
+  UserPayload,
+  AdminPayload,
+  AdminRole,
+  AdminAccessPayload,
+  isCustomAdminPayload,
+} from "@/lib/auth";
 import { db } from "@/lib/db";
 import { apiError } from "@/lib/api-error";
+import {
+  buildPermissionActor,
+  hasPermission,
+  PermissionActor,
+  ResourceScope,
+} from "@/lib/permission-actor";
+import { PermissionKey } from "@/lib/permission-keys";
 
 // UserPayload enriched with DB-fresh status and nickname.
 // Use this in API routes that must enforce account status.
@@ -131,4 +147,68 @@ export async function requireUser(): Promise<ActiveUser | Response> {
   const user = await getActiveUser();
   if (!user) return apiError("未登录", "UNAUTHORIZED");
   return user;
+}
+
+// ─── 6.4up · 权限管理 · access payload + requirePermission ───
+//
+// 双通道（方案 R1.2 § 双通道权限模型）：
+//   - requireAdmin() ↑ 仍只接受 builtin admin（admin_table / user_admin）
+//   - getAdminAccessPayload() / requirePermission() ↓ 同时接受 custom admin
+//
+// 接入约定：custom admin 可达的所有 /api/admin/* 必须走 requirePermission(key)；
+//          未改造的旧接口继续 requireAdmin()，custom admin 进不去 → fail-closed。
+
+/**
+ * 取当前请求的 access payload（builtin 或 custom 都返回）。
+ * 用于 /api/admin/me、admin/login 复签、elevate-to-admin 等场景。
+ */
+export async function getAdminAccessPayload(): Promise<AdminAccessPayload | null> {
+  return getCurrentAdminAccess();
+}
+
+/**
+ * 鉴权辅助：业务接口要求 actor 持有 permissionKey 才能执行。
+ *
+ * 用法（建议在 PATCH/DELETE 路径上对每个目标资源也调一次 hasPermission 做 scope 校验）：
+ *   const result = await requirePermission("workflow.update.team");
+ *   if (result instanceof Response) return result;
+ *   const actor = result;
+ *   // 拿目标 workflow 的 scopes，再调 hasPermission(actor, key, targetScopes) 收紧校验
+ *
+ * 401 → 未登录 / token 失效；
+ * 403 → 登录有效但无此权限。
+ */
+export async function requirePermission(
+  permissionKey: PermissionKey
+): Promise<PermissionActor | Response> {
+  const access = await getAdminAccessPayload();
+  if (!access) return apiError("未登录或权限已变更", "UNAUTHORIZED");
+  // custom admin firstLogin 处理：custom admin 走 users 表，由前置 elevate / login 强制改密 + freshness 把关
+  // builtin admin firstLogin 仍走 requireAdmin 同款守门（access 路径不重复实现，避免逻辑分叉）
+  if (!isCustomAdminPayload(access) && (access as AdminPayload).firstLogin === true) {
+    return apiError(
+      "首次登录需先修改初始密码，请回登录页完成密码修改",
+      "FORBIDDEN",
+    );
+  }
+  const actor = await buildPermissionActor(access);
+  const ok = await hasPermission(actor, permissionKey);
+  if (!ok) return apiError("无此操作权限", "FORBIDDEN");
+  return actor;
+}
+
+/**
+ * 同 requirePermission 但允许调用方提供 targetScopes 一并校验
+ * （update/delete 已知目标 scope 的路径常用 —— 一步到位，避免业务层重复 build actor）。
+ */
+export async function requirePermissionForScopes(
+  permissionKey: PermissionKey,
+  targetScopes: ResourceScope[]
+): Promise<PermissionActor | Response> {
+  const result = await requirePermission(permissionKey);
+  if (result instanceof Response) return result;
+  const actor = result;
+  const ok = await hasPermission(actor, permissionKey, targetScopes);
+  if (!ok) return apiError("无此操作权限（目标资源超出权限范围）", "FORBIDDEN");
+  return actor;
 }

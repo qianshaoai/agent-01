@@ -15,7 +15,10 @@ export type AuditResourceType =
   | "agent_draft"
   // 5.30up · 知识库（knowledge_bases 表）
   // KB 各写路径（POST/PATCH/DELETE/文档上传/删除/重建索引）共用此 type
-  | "knowledge_base";
+  | "knowledge_base"
+  // 6.4up · 权限管理 · 自定义角色（custom_roles 表）
+  // CRUD（POST/PATCH/DELETE）+ 授予/撤销（grant/revoke 走 update action）共用此 type
+  | "custom_role";
 
 /**
  * 5.11up · 写时反查资源所属的组织 code
