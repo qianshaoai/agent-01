@@ -1042,6 +1042,8 @@ export default function WorkflowsAdminPage() {
                           moving={moving}
                           openAddStep={openAddStep}
                           highlightedStepAgentId={highlightedStepAgentId}
+                          canEditSteps={canTouchWf(wf)}
+                          isCustomAdmin={isCustomAdmin}
                         />
                       ) : (
                       <>
@@ -1643,8 +1645,13 @@ function WorkflowFlowView(props: {
   openAddStep: (workflowId: string, defaultOrder: number) => void;
   // 4.29up：从智能体跳过来时高亮使用该 agent 的步骤
   highlightedStepAgentId?: string | null;
+  // 6.4up R2.2 · 与列表视图同口径：custom admin 隐藏启停 / 删除；无 update 权时所有"改"按钮置灰 / 隐藏
+  //   canEditSteps：包含 builtin canTouchWf 与 custom hasAnyCustomUpdate 两个语义（外层已合并）
+  //   isCustomAdmin：仅用于决定"启停 / 删除"两类按钮是否完全隐藏（v1 不开放给 custom admin）
+  canEditSteps: boolean;
+  isCustomAdmin: boolean;
 }) {
-  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId } = props;
+  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId, canEditSteps, isCustomAdmin } = props;
   // 阶段二：当前激活绑定浮层的步骤 id（null = 关闭）。同一时间只允许一个浮层打开。
   const [bindingStepId, setBindingStepId] = useState<string | null>(null);
   // 4.29up：跳转到智能体管理（流程图节点里的"已绑定智能体"chip 可点击）
@@ -1654,12 +1661,15 @@ function WorkflowFlowView(props: {
     return (
       <div className="rounded-[12px] bg-gray-50/60 border border-dashed border-gray-200 px-4 py-8 text-center">
         <p className="text-sm text-gray-400 mb-3">暂无步骤</p>
-        <button
-          onClick={() => openAddStep(wfId, 0)}
-          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs text-[#002FA7] border border-[#002FA7]/30 rounded-[8px] hover:bg-[#002FA7]/5 transition-colors"
-        >
-          <Plus size={12} /> 添加第一个步骤
-        </button>
+        {/* R2.2 · 无 update 权时隐藏；列表视图同口径 */}
+        {canEditSteps && (
+          <button
+            onClick={() => openAddStep(wfId, 0)}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs text-[#002FA7] border border-[#002FA7]/30 rounded-[8px] hover:bg-[#002FA7]/5 transition-colors"
+          >
+            <Plus size={12} /> 添加第一个步骤
+          </button>
+        )}
       </div>
     );
   }
@@ -1682,8 +1692,10 @@ function WorkflowFlowView(props: {
     <div>
       <div className="overflow-x-auto -mx-1 px-1 pb-2">
         <div className="flex items-stretch gap-0 min-w-min">
-          {/* 第一个节点前的插入按钮 */}
-          <InsertSlot onClick={() => openInsertStep(wfId, 0)} disabled={moving !== null} />
+          {/* 第一个节点前的插入按钮 · R2.2 · 无 update 权时隐藏 */}
+          {canEditSteps && (
+            <InsertSlot onClick={() => openInsertStep(wfId, 0)} disabled={moving !== null} />
+          )}
 
           {steps.map((step, idx) => {
             const style = typeStyle[step.exec_type];
@@ -1791,13 +1803,13 @@ function WorkflowFlowView(props: {
                     )}
                   </div>
 
-                  {/* 操作区 */}
+                  {/* 操作区 · R2.2 · 与列表视图同口径 */}
                   <div className="flex items-center justify-end gap-1 px-2 py-1.5 border-t border-gray-100">
                     {/* 阶段三：上移 / 下移按钮（操作期间所有相邻按钮禁用，避免快速连点导致顺序错乱） */}
                     {/* loading 显示在被点击的方向按钮上：避免下移时上移按钮转圈的反直觉 */}
                     <button
                       onClick={() => moveStep(step, "up")}
-                      disabled={idx === 0 || moving !== null}
+                      disabled={!canEditSteps || idx === 0 || moving !== null}
                       className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
                       title="上移"
                       aria-label="上移"
@@ -1806,48 +1818,54 @@ function WorkflowFlowView(props: {
                     </button>
                     <button
                       onClick={() => moveStep(step, "down")}
-                      disabled={idx === steps.length - 1 || moving !== null}
+                      disabled={!canEditSteps || idx === steps.length - 1 || moving !== null}
                       className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
                       title="下移"
                       aria-label="下移"
                     >
                       {moving?.stepId === step.id && moving.direction === "down" ? <Loader2 size={12} className="animate-spin" /> : <ArrowDown size={12} />}
                     </button>
-                    <button
-                      onClick={() => toggleStepEnabled(step)}
-                      disabled={moving !== null}
-                      className={`p-1 rounded-[6px] transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}
-                      title={step.enabled ? "停用" : "启用"}
-                      aria-label={step.enabled ? "停用" : "启用"}
-                    >
-                      {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                    </button>
+                    {/* R2.2 · custom admin 隐藏启停按钮（v1 不开放） */}
+                    {!isCustomAdmin && (
+                      <button
+                        onClick={() => toggleStepEnabled(step)}
+                        disabled={!canEditSteps || moving !== null}
+                        className={`p-1 rounded-[6px] transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}
+                        title={step.enabled ? "停用" : "启用"}
+                        aria-label={step.enabled ? "停用" : "启用"}
+                      >
+                        {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                      </button>
+                    )}
                     <button
                       onClick={() => openEditStep(wfId, step)}
-                      disabled={moving !== null}
+                      disabled={!canEditSteps || moving !== null}
                       className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
                       title="编辑"
                       aria-label="编辑"
                     >
                       <Edit2 size={12} />
                     </button>
-                    <button
-                      onClick={() => deleteStep(step)}
-                      disabled={moving !== null}
-                      className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
-                      title="删除"
-                      aria-label="删除"
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                    {/* R2.2 · custom admin 隐藏删除按钮（v1 不开放） */}
+                    {!isCustomAdmin && (
+                      <button
+                        onClick={() => deleteStep(step)}
+                        disabled={!canEditSteps || moving !== null}
+                        className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
+                        title="删除"
+                        aria-label="删除"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                {/* 节点之间的连接线 + 插入按钮 */}
+                {/* 节点之间的连接线 + 插入按钮 · R2.2 · 无 update 权时禁用插入 */}
                 <ConnectorWithInsert
                   dimmed={!step.enabled || (idx + 1 < steps.length && !steps[idx + 1].enabled)}
                   onInsert={() => openInsertStep(wfId, idx + 1)}
-                  disabled={moving !== null}
+                  disabled={!canEditSteps || moving !== null}
                 />
               </div>
             );
@@ -1855,13 +1873,16 @@ function WorkflowFlowView(props: {
         </div>
       </div>
 
-      <button
-        onClick={() => openAddStep(wfId, steps.length)}
-        disabled={moving !== null}
-        className="mt-3 w-full py-2 border border-dashed border-gray-200 rounded-[10px] text-sm text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors flex items-center justify-center gap-1 disabled:opacity-30 disabled:hover:text-gray-400 disabled:hover:border-gray-200 disabled:cursor-not-allowed"
-      >
-        <Plus size={14} /> 添加步骤
-      </button>
+      {/* R2.2 · 底部"添加步骤"：无 update 权时隐藏（含 custom admin 没 update 的情况） */}
+      {canEditSteps && (
+        <button
+          onClick={() => openAddStep(wfId, steps.length)}
+          disabled={moving !== null}
+          className="mt-3 w-full py-2 border border-dashed border-gray-200 rounded-[10px] text-sm text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors flex items-center justify-center gap-1 disabled:opacity-30 disabled:hover:text-gray-400 disabled:hover:border-gray-200 disabled:cursor-not-allowed"
+        >
+          <Plus size={14} /> 添加步骤
+        </button>
+      )}
     </div>
   );
 }
