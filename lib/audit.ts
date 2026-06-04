@@ -15,7 +15,10 @@ export type AuditResourceType =
   | "agent_draft"
   // 5.30up · 知识库（knowledge_bases 表）
   // KB 各写路径（POST/PATCH/DELETE/文档上传/删除/重建索引）共用此 type
-  | "knowledge_base";
+  | "knowledge_base"
+  // 6.3up R1.1 · 工作流分层级配置 · order 表写操作（add / reorder / remove）共用此 type
+  // 同步写 resource_permissions 时会另外写一条 resource_permission 审计
+  | "workflow_scope_order";
 
 /**
  * 5.11up · 写时反查资源所属的组织 code

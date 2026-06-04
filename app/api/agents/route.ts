@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import {
+  buildVisibilityCtx,
+  filterVisibleWorkflows,
+  visibleWorkflowAgentIds,
+} from "@/lib/workflow-visibility";
 
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
@@ -128,6 +133,8 @@ export async function GET(req: NextRequest) {
   const directIds = (directLinks ?? []).map((l: { agent_id: string }) => l.agent_id);
 
   // 4b. 过滤用户可见工作流，取步骤中的智能体（自动同步集合）
+  // 6.3up R1.1 · 顶替原本 5 落点中最旧的口径（只看 visible_to 字面值不查 permissions）。
+  //   该口径会让 visible_to='org_only' 工作流在分类页"跨组织泄露"步骤 agent。
   let autoAgentIds: string[] = [];
   if (workflowIds.length > 0) {
     const { data: wfs } = await db
@@ -136,28 +143,16 @@ export async function GET(req: NextRequest) {
       .in("id", workflowIds)
       .eq("enabled", true);
 
-    const tenantCode = user.tenantCode ?? "";
-    const visibleWfIds = (wfs ?? [])
-      .filter((wf) => {
-        if (wf.visible_to === "all") return true;
-        const allowed = wf.visible_to.split(",").map((s: string) => s.trim().toUpperCase());
-        return allowed.includes(tenantCode.toUpperCase());
-      })
-      .map((wf) => wf.id);
+    const ctxForWf = await buildVisibilityCtx(user);
+    const visibleWfIdSet = await filterVisibleWorkflows(
+      (wfs ?? []).map((wf) => ({ id: wf.id, visible_to: wf.visible_to ?? null })),
+      ctxForWf
+    );
+    const visibleWfIds = [...visibleWfIdSet];
 
     if (visibleWfIds.length > 0) {
-      const { data: steps } = await db
-        .from("workflow_steps")
-        .select("agent_id")
-        .in("workflow_id", visibleWfIds)
-        .eq("enabled", true)
-        .not("agent_id", "is", null);
-
-      autoAgentIds = [
-        ...new Set(
-          (steps ?? []).map((s: { agent_id: string }) => s.agent_id).filter(Boolean)
-        ),
-      ];
+      const agentIdSet = await visibleWorkflowAgentIds(visibleWfIds);
+      autoAgentIds = [...agentIdSet];
     }
   }
 

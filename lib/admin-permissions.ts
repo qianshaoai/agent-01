@@ -62,3 +62,19 @@ export function noWritePermissionMessage(creatorRole: AdminRole | null | undefin
 export function isTagAdmin(role: AdminRole | null | undefined): boolean {
   return role === "super_admin" || role === "system_admin";
 }
+
+/**
+ * 6.3up R1.1 · 工作流分层级配置（/admin/workflow-config）写操作权限闸门。
+ * 范围：super_admin + system_admin；org_admin 拒绝（跨组织配置应集中在平台管理员）。
+ *
+ * 决策点 3 拍板：(a) super + system_admin；org_admin 后续如有需求再放开。
+ *
+ * 调用方：
+ *  - 服务端 4 个写 endpoint：`if (!isWorkflowConfigAdmin(admin.role)) return apiError(...)`
+ *  - 页面级 guard / 入口按钮（/admin/workflows 头部）的角色隐藏
+ *
+ * role 为 null/undefined（未登录/me 未返回）→ false（拒绝）。
+ */
+export function isWorkflowConfigAdmin(role: AdminRole | null | undefined): boolean {
+  return role === "super_admin" || role === "system_admin";
+}

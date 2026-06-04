@@ -34,6 +34,7 @@ import {
   Building2,
   Home,
   Lock,
+  Layers,
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
@@ -74,11 +75,12 @@ type Workflow = {
 
 type PermScope = "org" | "dept" | "team";
 
+// R1.8 · 不再手动设 sortOrder（6.3up「分层级配置」+ 全局自动接末尾接管），
+//        EMPTY_WF / 回填 / 提交都不写 sortOrder；DB 字段保留作为兜底键。
 const EMPTY_WF = {
   name: "",
   description: "",
   category: "",
-  sortOrder: 0,
   enabled: true,
   visibleTo: "all",
   categoryIds: [] as string[],
@@ -127,6 +129,16 @@ export default function WorkflowsAdminPage() {
   const [loading, setLoading] = useState(true);
   // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留工作流列表（无 Tab 切换）
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // R1.7 · 分类 section 折叠（与智能体管理风格一致）· 默认全折叠
+  const [expandedWfSections, setExpandedWfSections] = useState<Set<string>>(new Set());
+  function toggleWfSection(id: string) {
+    setExpandedWfSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   // 4.27up 阶段一：流程图 / 列表 视图切换，按 workflow.id 维度记忆
   // 4.29up：默认视图改为 list（列表为主，流程图为辅）
   const [viewModeMap, setViewModeMap] = useState<Record<string, "flow" | "list">>({});
@@ -292,7 +304,6 @@ export default function WorkflowsAdminPage() {
       name: wf.name,
       description: wf.description,
       category: wf.category,
-      sortOrder: wf.sort_order,
       enabled: wf.enabled,
       visibleTo,
       categoryIds: wf.categoryIds ?? [],
@@ -319,7 +330,6 @@ export default function WorkflowsAdminPage() {
         name: wfForm.name,
         description: wfForm.description,
         category: wfForm.category,
-        sortOrder: wfForm.sortOrder,
         enabled: wfForm.enabled,
         visibleTo: wfForm.visibleTo,
         categoryIds: wfForm.categoryIds,
@@ -660,7 +670,22 @@ export default function WorkflowsAdminPage() {
           title="工作流管理"
           subtitle="管理工作流与步骤"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {workflows.length} 个</span>}
-          actions={<Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>}
+          actions={
+            <>
+              {/* 6.3up R1.1 · 工作流配置入口（仅 super/system_admin 可见，与服务端 isWorkflowConfigAdmin 一致） */}
+              {(adminRole === "super_admin" || adminRole === "system_admin") && (
+                <Button
+                  variant="outline"
+                  onClick={() => router.push("/admin/workflow-config")}
+                  className="gap-2"
+                  title="按组织 / 部门 / 小组配置工作流的展示与排序"
+                >
+                  <Layers size={16} /> 工作流配置
+                </Button>
+              )}
+              <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>
+            </>
+          }
         />
 
         {/* 6.5up · 工作流列表主体（旧分类管理 Tab 已抽到 /admin/tags） */}
@@ -745,19 +770,33 @@ export default function WorkflowsAdminPage() {
             <p className="text-[12px] text-gray-400 px-1">
               按标签分区展示；区内仍按全局顺序排列 —— 分区视图，非各标签独立排序。
             </p>
-            {groupedWfSections.map((section) => (
+            {groupedWfSections.map((section) => {
+            const sectionExpanded = expandedWfSections.has(section.id);
+            return (
             <div key={section.id}>
-              <div className="flex items-center gap-2 px-1 mb-2">
+              {/* R1.7 · 分类 header · 卡片化（与下面工作流卡片视觉一致）+ chevron 折叠 */}
+              <button
+                type="button"
+                onClick={() => toggleWfSection(section.id)}
+                className="card card-hover w-full flex items-center gap-3 px-5 py-4 mb-3 text-left"
+              >
+                {sectionExpanded
+                  ? <ChevronDown size={18} className="text-gray-500 shrink-0" />
+                  : <ChevronRight size={18} className="text-gray-500 shrink-0" />}
                 {section.icon_url ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={section.icon_url} alt={section.name} className="w-4 h-4 rounded-[3px] object-contain" />
+                  <img src={section.icon_url} alt={section.name} className="w-7 h-7 rounded-[8px] object-contain shrink-0" />
                 ) : (
-                  <Tag size={13} className="text-[#002FA7]" />
+                  <div className="w-7 h-7 rounded-[8px] bg-[#002FA7]/10 flex items-center justify-center shrink-0">
+                    <Tag size={15} className="text-[#002FA7]" />
+                  </div>
                 )}
-                <span className="text-[13px] font-semibold text-gray-700">{section.name}</span>
-                <span className="text-[11px] text-gray-400">{section.workflows.length} 个</span>
-              </div>
-              <div className="space-y-3">
+                <span className="text-[16px] font-semibold text-gray-800">{section.name}</span>
+                <span className="text-[12px] text-gray-400 font-medium ml-auto">{section.workflows.length} 个工作流</span>
+              </button>
+              {sectionExpanded && (
+              // R1.13 · 工作流相对标签向右缩进 + 左侧加竖向连接线，强化"从属关系"
+              <div className="space-y-3 ml-6 pl-5 mb-3 border-l-2 border-[#002FA7]/15">
             {section.workflows.map((wf) => {
               const isExpanded = expandedId === wf.id;
               const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
@@ -1041,8 +1080,10 @@ export default function WorkflowsAdminPage() {
               );
             })}
               </div>
+              )}
             </div>
-            ))}
+            );
+            })}
           </div>
         );
         })()}
@@ -1093,7 +1134,7 @@ export default function WorkflowsAdminPage() {
                   </>
                 )}
               </div>
-              <Input label="排序（数字越小越靠前）" type="number" value={String(wfForm.sortOrder)} onChange={(e) => setWfForm({ ...wfForm, sortOrder: Number(e.target.value) })} />
+              {/* R1.8 · 删除"排序"输入框 —— 全局排序由「分层级配置」管理；新建自动接末尾；DB 字段保留作为兜底键 */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
                 {/* 5.9up · org_admin 限定本组织范围三档可选 */}
@@ -1896,13 +1937,13 @@ function ChipPopover({
           {/* backdrop · 点击外部关闭 */}
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
-            className="absolute z-50 top-full left-0 mt-1 min-w-[180px] max-w-[300px] bg-white rounded-[10px] shadow-lg border border-gray-100 p-3"
+            className="absolute z-50 top-full left-0 mt-1 min-w-[240px] max-w-[360px] bg-white rounded-[10px] shadow-lg border border-gray-100 p-3"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2 mb-2">
               <span className={colors.text}>{triggerIcon}</span>
-              <span className="text-xs font-medium text-gray-700">{label}</span>
-              <span className="ml-auto text-[10px] text-gray-400">{count} 项</span>
+              <span className="text-xs font-medium text-gray-700 whitespace-nowrap">{label}</span>
+              <span className="ml-auto text-[10px] text-gray-400 whitespace-nowrap">{count} 项</span>
             </div>
             <ul className="space-y-1 max-h-48 overflow-y-auto">
               {items.map((item, i) => (
