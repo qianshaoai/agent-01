@@ -795,8 +795,8 @@ export default function WorkflowsAdminPage() {
                 <span className="text-[12px] text-gray-400 font-medium ml-auto">{section.workflows.length} 个工作流</span>
               </button>
               {sectionExpanded && (
-              // R1.13 · 工作流相对标签向右缩进 + 左侧加竖向连接线，强化"从属关系"
-              <div className="space-y-3 ml-6 pl-5 mb-3 border-l-2 border-[#002FA7]/15">
+              // R1.14 · 仅靠左缩进表达从属关系（去掉竖线，更简洁）
+              <div className="space-y-3 ml-5 mb-3">
             {section.workflows.map((wf) => {
               const isExpanded = expandedId === wf.id;
               const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
