@@ -109,7 +109,12 @@ export function AdminLayout({
     } catch {}
     return { logo_url: "", platform_name: "" };
   });
-  const [adminRole, setAdminRole] = useState<AdminRole>("super_admin");
+  // 6.5up · 修复后台导航初始角色闪现
+  //   旧实现：useState("super_admin") → /api/admin/me 回来前所有角色都按超管渲染，
+  //   低权限账号（system_admin / org_admin）首屏会看到 SUPER_ONLY 菜单（如品牌设置），
+  //   等 fetch 回来才消失。半秒级闪现 = 权限边界泄露感。
+  //   新实现：初始 null → loading skeleton；拿到真实角色后再渲染菜单。
+  const [adminRole, setAdminRole] = useState<AdminRole | null>(null);
   const [adminUsername, setAdminUsername] = useState<string>("");
 
   useEffect(() => {
@@ -142,10 +147,12 @@ export function AdminLayout({
     return () => window.removeEventListener("focus", onFocus);
   }, [pathname]);
 
-  // 按当前角色过滤导航
-  const visibleNavGroups = navGroups
-    .map((g) => ({ ...g, items: g.items.filter((it) => it.allowedRoles.includes(adminRole)) }))
-    .filter((g) => g.items.length > 0);
+  // 按当前角色过滤导航；角色未知时返回空，由 nav 区域渲染 loading skeleton
+  const visibleNavGroups = adminRole === null
+    ? []
+    : navGroups
+        .map((g) => ({ ...g, items: g.items.filter((it) => it.allowedRoles.includes(adminRole)) }))
+        .filter((g) => g.items.length > 0);
 
   const navContent = (
     <>
@@ -169,8 +176,8 @@ export function AdminLayout({
         </div>
       </div>
 
-      {/* 当前管理员身份 */}
-      {adminUsername && (
+      {/* 当前管理员身份（username 与 role 同一个 fetch 回来，双守卫保类型安全 + 避免空 role 时角色名渲染异常） */}
+      {adminUsername && adminRole && (
         <div className="mx-3 my-3 px-3 py-2 rounded-[10px] bg-white/10 border border-white/15">
           <p className="text-[12px] text-white/60">当前登录</p>
           <p className="text-[13px] font-semibold text-white truncate">{adminUsername}</p>
@@ -180,7 +187,21 @@ export function AdminLayout({
 
       {/* 导航 */}
       <nav className="flex-1 px-3 py-2 overflow-y-auto space-y-5">
-        {visibleNavGroups.map((group) => (
+        {adminRole === null ? (
+          // 6.5up · 角色未知时显示骨架，避免按超管渲染再回退
+          <div className="space-y-5 px-1 pt-2" aria-hidden>
+            {[6, 5, 4].map((n, gi) => (
+              <div key={gi}>
+                <div className="h-3 w-14 mx-3 mb-2 bg-white/10 rounded animate-pulse" />
+                <div className="space-y-1">
+                  {Array.from({ length: n }).map((_, i) => (
+                    <div key={i} className="h-8 mx-1 bg-white/10 rounded-[10px] animate-pulse" />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : visibleNavGroups.map((group) => (
           <div key={group.label}>
             <p className="px-3 mb-1.5 text-[11px] font-medium text-white/50 tracking-wider uppercase">{group.label}</p>
             <div className="space-y-0.5">

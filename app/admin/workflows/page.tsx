@@ -345,18 +345,28 @@ export default function WorkflowsAdminPage() {
     });
   }
 
+  // 6.5up · 失败不再假成功 —— 把 res.ok 检查 + toast 错误统一加进所有 mutating fetch
   async function toggleWfEnabled(wf: Workflow) {
-    await fetch(`/api/admin/workflows/${wf.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !wf.enabled }) });
+    const res = await fetch(`/api/admin/workflows/${wf.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !wf.enabled }) });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      toast(d.error ?? "切换启用状态失败，请重试");
+    }
     load();
   }
 
   function duplicateWf(wf: Workflow) {
     showConfirm(`确认复制工作流「${wf.name}」？将连同所有步骤一起复制。`, async () => {
       await duplicateWfGuard.submit(async (idempotencyKey) => {
-        await fetch(`/api/admin/workflows/${wf.id}/duplicate`, {
+        const res = await fetch(`/api/admin/workflows/${wf.id}/duplicate`, {
           method: "POST",
           headers: { "Idempotency-Key": idempotencyKey },
         });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          toast(d.error ?? "复制工作流失败，请重试");
+          return;
+        }
         load(); toast("工作流已复制");
       });
     });
@@ -364,7 +374,12 @@ export default function WorkflowsAdminPage() {
 
   function deleteWf(wf: Workflow) {
     showConfirm(`确认删除工作流「${wf.name}」？步骤也会一并删除。`, async () => {
-      await fetch(`/api/admin/workflows/${wf.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/admin/workflows/${wf.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast(d.error ?? "删除工作流失败，请重试");
+        return;
+      }
       load(); toast("工作流已删除");
     });
   }
@@ -398,6 +413,13 @@ export default function WorkflowsAdminPage() {
     const freshSteps: WorkflowStep[] = fresh?.workflow_steps
       ? [...fresh.workflow_steps].sort((a: WorkflowStep, b: WorkflowStep) => a.step_order - b.step_order)
       : steps;
+    // 6.5up · renumber 的 PATCH 失败不再静默：任一失败 toast 报错并提示刷新确认
+    const patchOrder = (s: WorkflowStep, idx: number) =>
+      s.step_order !== idx + 1
+        ? fetch(`/api/admin/workflow-steps/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stepOrder: idx + 1 }) })
+            .then(r => { if (!r.ok) throw new Error("renumber failed"); })
+        : Promise.resolve();
+
     // 如果有 insertAfterOrder，把新步骤放到正确位置后重排
     const insertAfterOrder = showStepModal?.insertAfterOrder;
     if (insertAfterOrder !== undefined && newStepId) {
@@ -409,20 +431,20 @@ export default function WorkflowsAdminPage() {
           newStep,
           ...others.slice(insertAfterOrder),
         ];
-        await Promise.all(reordered.map((s, i) =>
-          s.step_order !== i + 1
-            ? fetch(`/api/admin/workflow-steps/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stepOrder: i + 1 }) })
-            : Promise.resolve()
-        ));
+        try {
+          await Promise.all(reordered.map(patchOrder));
+        } catch {
+          toast("步骤序号重排可能未完全保存，请刷新确认");
+        }
         return;
       }
     }
     // 普通重排：按当前顺序重新编 1,2,3
-    await Promise.all(freshSteps.map((s, i) =>
-      s.step_order !== i + 1
-        ? fetch(`/api/admin/workflow-steps/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stepOrder: i + 1 }) })
-        : Promise.resolve()
-    ));
+    try {
+      await Promise.all(freshSteps.map(patchOrder));
+    } catch {
+      toast("步骤序号重排可能未完全保存，请刷新确认");
+    }
   }
 
   async function handleSaveStep() {
@@ -452,7 +474,12 @@ export default function WorkflowsAdminPage() {
   function deleteStep(step: WorkflowStep) {
     showConfirm(`确认删除步骤「${step.title}」？`, async () => {
       const wf = workflows.find(w => w.workflow_steps?.some(s => s.id === step.id));
-      await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast(d.error ?? "删除步骤失败，请重试");
+        return;
+      }
       await load();
       if (wf) await renumberSteps(wf.id);
       await load();
@@ -461,7 +488,11 @@ export default function WorkflowsAdminPage() {
   }
 
   async function toggleStepEnabled(step: WorkflowStep) {
-    await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !step.enabled }) });
+    const res = await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !step.enabled }) });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      toast(d.error ?? "切换步骤启用状态失败，请重试");
+    }
     load();
   }
 
