@@ -571,7 +571,6 @@ export default function AdminUsersPage() {
         <PageHeader
           icon={<Users size={20} />}
           title="用户管理"
-          subtitle="管理平台所有用户账号、角色及分组归属"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {total} 人</span>}
           actions={
             <>

@@ -230,7 +230,6 @@ export default function WorkflowConfigPage() {
         <PageHeader
           icon={<GitBranch size={20} />}
           title="工作流配置"
-          subtitle="按组织 / 部门 / 小组分层级配置展示与排序（添加 = 该层级可见 + 按排序展示）"
           actions={
             <Button
               variant="outline"

@@ -111,7 +111,6 @@ export default function AnalyticsPage() {
         <PageHeader
           icon={<BarChart3 size={20} />}
           title="用量看板"
-          subtitle="组织维度 + 个人维度调用统计（实时）"
           actions={
             <>
               <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">

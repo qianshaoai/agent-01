@@ -174,7 +174,6 @@ export default function AdminSettingsPage() {
         <PageHeader
           icon={<SettingsIcon size={20} />}
           title="品牌设置"
-          subtitle="配置平台 Logo、名称、帮助文档与联系方式，变更后全站生效"
         />
 
         {msg && (

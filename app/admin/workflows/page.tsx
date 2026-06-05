@@ -716,7 +716,6 @@ export default function WorkflowsAdminPage() {
         <PageHeader
           icon={<GitBranch size={20} />}
           title="工作流管理"
-          subtitle="管理工作流与步骤"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {workflows.length} 个</span>}
           actions={
             <>

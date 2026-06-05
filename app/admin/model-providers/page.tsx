@@ -401,7 +401,6 @@ export default function ModelProvidersPage() {
         <PageHeader
           icon={<Plug size={20} />}
           title="API 管理"
-          subtitle="集中管理大模型 / 智能体平台的接入地址、API Key、默认参数"
           actions={
             // 5.30up · embedding tab 对 org_admin 隐藏新增按钮（基建仅平台可建）
             !(activeTab === "embedding" && me?.role === "org_admin") && (

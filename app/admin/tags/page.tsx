@@ -245,7 +245,6 @@ export default function TagsAdminPage() {
         <PageHeader
           icon={<Tag size={20} />}
           title="标签管理"
-          subtitle="管理智能体与工作流的标签"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {agentTags.length + wfTags.length} 个</span>}
           actions={
             <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">

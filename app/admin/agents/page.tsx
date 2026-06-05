@@ -568,7 +568,6 @@ export default function AgentsAdminPage() {
         <PageHeader
           icon={<Bot size={20} />}
           title="智能体管理"
-          subtitle="管理所有智能体与权限配置"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {agents.length} 个</span>}
           actions={
             !isOrgAdmin ? (

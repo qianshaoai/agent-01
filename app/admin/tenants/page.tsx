@@ -267,7 +267,6 @@ export default function TenantsPage() {
         <PageHeader
           icon={<Building2 size={20} />}
           title="组织管理"
-          subtitle="管理所有组织、部门与小组"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {tenants.length} 家</span>}
           actions={isOrgAdmin ? null : <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增组织</Button>}
         />

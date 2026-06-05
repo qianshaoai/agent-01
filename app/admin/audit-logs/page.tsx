@@ -129,7 +129,6 @@ export default function AuditLogsPage() {
         <PageHeader
           icon={<ClipboardList size={20} />}
           title="审计记录"
-          subtitle="记录所有管理员后台操作：组织、用户、智能体、工作流、公告、设置等"
         />
 
         {/* 筛选栏 */}

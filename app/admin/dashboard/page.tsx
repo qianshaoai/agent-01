@@ -51,7 +51,6 @@ export default function DashboardPage() {
         <PageHeader
           icon={<LayoutDashboard size={20} />}
           title="控制台"
-          subtitle="欢迎回到 AI 智能体平台管理后台"
         />
 
         {/* Stats */}

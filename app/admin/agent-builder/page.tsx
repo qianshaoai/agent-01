@@ -123,10 +123,9 @@ export default function AgentBuilderListPage() {
         <PageHeader
           icon={<Hammer size={20} />}
           title="智能体搭建"
-          subtitle="拖拽式配置智能体：基础信息 / 模型 / 提示词 / 对话体验 / 发布范围"
           actions={
             <Button onClick={create} loading={createGuard.loading} className="flex items-center gap-1.5">
-              <Plus size={16} /> 新建草稿
+              <Plus size={16} /> 新建智能体
             </Button>
           }
         />
@@ -137,7 +136,7 @@ export default function AgentBuilderListPage() {
           </div>
         ) : list.length === 0 ? (
           <div className="card p-12 text-center text-gray-400">
-            还没有任何草稿，点右上角「新建草稿」开始搭建第一个智能体
+            还没有任何智能体，点右上角「新建智能体」开始搭建第一个智能体
           </div>
         ) : (
           <div className="card overflow-hidden">

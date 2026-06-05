@@ -86,7 +86,6 @@ export default function LogsPage() {
         <PageHeader
           icon={<FileText size={20} />}
           title="操作日志"
-          subtitle="全量审计日志，可追溯所有用户行为"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {total} 条</span>}
           actions={
             <button onClick={() => load()} className="flex items-center gap-1.5 px-3 h-9 rounded-[10px] text-[13px] text-gray-500 hover:bg-gray-100 transition-colors">

@@ -92,7 +92,6 @@ export default function NoticesPage() {
         <PageHeader
           icon={<Megaphone size={20} />}
           title="公告管理"
-          subtitle="全局公告对所有用户可见；组织公告仅对指定组织可见"
           actions={<Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增公告</Button>}
         />
 
