@@ -275,6 +275,23 @@ export default function WorkflowsAdminPage() {
     }, 1500);
   }, [focusWfId, focusFromAgentId, loading, workflows, toast]);
 
+  // 6.5up · focus 跳转时自动展开 target 所在分类 section（避免目标卡片在折叠的
+  //   分类 tbody 里看不到 / 滚到错位置）。仿 app/admin/agents/page.tsx 6.3up 同款
+  //   语义：只 add target 所在 section，不收其它 section，让用户保留浏览上下文。
+  useEffect(() => {
+    if (!focusWfId) return;
+    const target = workflows.find((w) => w.id === focusWfId);
+    if (!target) return;
+    const sectionIds: string[] = (target.categoryIds ?? []).length > 0
+      ? target.categoryIds!
+      : ["__uncategorized__"];
+    setExpandedWfSections((prev) => {
+      const next = new Set(prev);
+      for (const sid of sectionIds) next.add(sid);
+      return next;
+    });
+  }, [focusWfId, workflows]);
+
   // ── Workflow CRUD ──────────────────────────────────────────────
   function openAddWf() { setEditingWf(null); setWfForm(EMPTY_WF); setWfError(""); setShowWfModal(true); }
   function openEditWf(wf: Workflow) {
