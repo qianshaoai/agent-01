@@ -162,6 +162,9 @@ export default function WorkflowsAdminPage() {
   }
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  // 6.5up R1 · picker 接口截断标记 + 真实总数，用于 AgentBindPopover 顶部提示
+  const [agentsCapped, setAgentsCapped] = useState(false);
+  const [agentsTotalCount, setAgentsTotalCount] = useState(0);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [allDepts, setAllDepts] = useState<Dept[]>([]);
@@ -250,17 +253,23 @@ export default function WorkflowsAdminPage() {
       const wfPs = urlPageSize && urlPageSize > 0 ? `?pageSize=${urlPageSize}` : "";
       const [wr, ar, cr, tr, dr, teamsR] = await Promise.all([
         fetch(`/api/admin/workflows${wfPs}`).then((r) => r.json()).then(d => d.data ?? d),
-        // 4.27up 阶段一：显式 pageSize=100（接口默认 50、上限 100）
-        // 避免流程图节点把"不在第一页的智能体"误判为已删除。
-        // > 100 智能体的场景作为已知短板，留待阶段二独立评估专用候选接口。
-        fetch("/api/admin/agents?pageSize=100").then((r) => r.json()).then(d => d.data ?? d),
+        // 6.5up R1 · 走 picker 专用接口（极简字段 + 全量拉 hard cap 2000），
+        //   替代 4.27up 阶段一的 ?pageSize=100 兜底；同时拿 capped/totalCount 用于
+        //   popover 截断提示。超过 2000 的场景需要做服务端搜索（方案 C），目前留作下一轮。
+        fetch("/api/admin/agents/picker").then((r) => r.json()).then(d => ({
+          list: Array.isArray(d?.data) ? d.data : [],
+          capped: !!d?.capped,
+          totalCount: typeof d?.totalCount === "number" ? d.totalCount : 0,
+        })),
         fetch("/api/admin/wf-categories").then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
         fetch("/api/admin/departments").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
         fetch("/api/admin/teams").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
       ]);
       setWorkflows(Array.isArray(wr) ? wr : []);
-      setAgents(Array.isArray(ar) ? ar : []);
+      setAgents(ar.list);
+      setAgentsCapped(ar.capped);
+      setAgentsTotalCount(ar.totalCount);
       setCategories(Array.isArray(cr) ? cr : []);
       setTenants(Array.isArray(tr) ? tr : []);
       setAllDepts(Array.isArray(dr) ? dr : []);
@@ -1051,6 +1060,8 @@ export default function WorkflowsAdminPage() {
                           moving={moving}
                           openAddStep={openAddStep}
                           highlightedStepAgentId={highlightedStepAgentId}
+                          agentsCapped={agentsCapped}
+                          agentsTotalCount={agentsTotalCount}
                         />
                       ) : (
                       <>
@@ -1559,6 +1570,8 @@ export default function WorkflowsAdminPage() {
           agents={agents}
           currentAgentId={stepForm.agentId || null}
           allowClear
+          capped={agentsCapped}
+          totalCount={agentsTotalCount}
           onPick={(id) => {
             setStepForm({ ...stepForm, agentId: id });
             setShowStepFormAgentPicker(false);
@@ -1609,8 +1622,11 @@ function WorkflowFlowView(props: {
   openAddStep: (workflowId: string, defaultOrder: number) => void;
   // 4.29up：从智能体跳过来时高亮使用该 agent 的步骤
   highlightedStepAgentId?: string | null;
+  // 6.5up R1 · picker 接口 capped/totalCount 透传给节点内 AgentBindPopover
+  agentsCapped: boolean;
+  agentsTotalCount: number;
 }) {
-  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId } = props;
+  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId, agentsCapped, agentsTotalCount } = props;
   // 阶段二：当前激活绑定浮层的步骤 id（null = 关闭）。同一时间只允许一个浮层打开。
   const [bindingStepId, setBindingStepId] = useState<string | null>(null);
   // 4.29up：跳转到智能体管理（流程图节点里的"已绑定智能体"chip 可点击）
@@ -1750,6 +1766,8 @@ function WorkflowFlowView(props: {
                           <AgentBindPopover
                             agents={agents}
                             currentAgentId={step.agent_id ?? null}
+                            capped={agentsCapped}
+                            totalCount={agentsTotalCount}
                             onPick={async (agentId) => {
                               setBindingStepId(null);
                               await bindAgentToStep(step, agentId);
@@ -1888,8 +1906,11 @@ function AgentBindPopover(props: {
   // 6.5up · 编辑步骤弹窗里用 allowClear=true 显示"清空当前绑定"按钮；
   //   节点内快捷绑定场景不传 → 不显示（避免 bindAgentToStep 收到空 agentId 走 catch 报错）
   allowClear?: boolean;
+  // 6.5up R1 · picker 接口的截断标记 + 真实总数，capped=true 时顶部显示警告
+  capped?: boolean;
+  totalCount?: number;
 }) {
-  const { agents, currentAgentId, onPick, onClose, allowClear } = props;
+  const { agents, currentAgentId, onPick, onClose, allowClear, capped, totalCount } = props;
   const [q, setQ] = useState("");
 
   useEffect(() => {
@@ -1900,12 +1921,14 @@ function AgentBindPopover(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // 6.5up R1 · 搜索覆盖 platform，用户可以搜"coze"/"dify"/"zhipu"直接命中外部接入 agent
   const keyword = q.trim().toLowerCase();
   const list = keyword
     ? agents.filter(
         (a) =>
           a.name.toLowerCase().includes(keyword) ||
-          a.agent_code.toLowerCase().includes(keyword)
+          a.agent_code.toLowerCase().includes(keyword) ||
+          (a.platform ?? "").toLowerCase().includes(keyword)
       )
     : agents;
 
@@ -1949,13 +1972,20 @@ function AgentBindPopover(props: {
               autoFocus
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索智能体名称或编号"
+              placeholder="搜索名称 / 编号 / 平台"
               className="w-full h-10 pl-9 pr-3 text-sm border border-gray-200 rounded-[10px] focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 bg-white"
             />
           </div>
           <p className="text-[11px] text-gray-400 mt-1.5 px-0.5">
             共 {agents.length} 个可用智能体{keyword && `，匹配 ${list.length} 个`}
           </p>
+          {/* 6.5up R1 · 超过 2000 截断时的红色警告：超出部分需升级服务端搜索后才能查 */}
+          {capped && (
+            <div className="mt-2 px-2.5 py-2 rounded-[8px] bg-amber-50 border border-amber-200 text-[11px] text-amber-700 leading-relaxed">
+              当前数据库共 {totalCount ?? agents.length} 个智能体，超出 2000 已截断。
+              <br />超出部分暂时无法在此搜索，请联系开发升级服务端搜索后才能查找。
+            </div>
+          )}
         </div>
 
         {/* 列表 */}
