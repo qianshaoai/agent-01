@@ -140,7 +140,16 @@ export default function AgentBuilderListPage() {
           </div>
         ) : (
           <div className="card overflow-hidden">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              {/* 6.5up · 固定列宽，避免长 description 撑爆名称列、把状态/类型挤成竖排
+                  仿 app/admin/agents/page.tsx 6.3up 同款 colgroup 模式 */}
+              <colgroup>
+                <col className="w-[38%]" />
+                <col className="w-[10%]" />
+                <col className="w-[12%]" />
+                <col className="w-[20%]" />
+                <col className="w-[20%]" />
+              </colgroup>
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">名称</th>
@@ -163,7 +172,7 @@ export default function AgentBuilderListPage() {
                           {d.name || "未命名智能体"}
                         </Link>
                         {d.description && (
-                          <div className="text-xs text-gray-400 line-clamp-1 mt-0.5">{d.description}</div>
+                          <div className="text-xs text-gray-400 truncate mt-0.5" title={d.description}>{d.description}</div>
                         )}
                       </td>
                       <td className="px-4 py-3">

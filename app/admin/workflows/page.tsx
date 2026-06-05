@@ -20,6 +20,7 @@ import {
   Eye,
   Wrench,
   ExternalLink,
+  Plug,
   ToggleLeft,
   ToggleRight,
   GripVertical,
@@ -38,7 +39,19 @@ import {
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
-type Agent = { id: string; agent_code: string; name: string; agent_type: string; external_url: string };
+// 6.5up · 补全 published_from_draft_id / platform / description 三个字段，
+//   用于三类智能体的区分（自建 / 外部接入 / 外链）和列表内的副信息展示。
+//   API 已 select 这些字段（app/api/admin/agents/route.ts:33），仅前端类型补全。
+type Agent = {
+  id: string;
+  agent_code: string;
+  name: string;
+  agent_type: string;
+  external_url: string;
+  published_from_draft_id: string | null;
+  platform: string;
+  description: string;
+};
 type Category = { id: string; name: string; icon_url?: string | null };
 type Tenant = { id: string; code: string; name: string; enabled: boolean };
 type Dept = { id: string; name: string; tenant_code: string };
@@ -88,6 +101,34 @@ const EMPTY_WF = {
   permIds: [] as string[],
 };
 const EMPTY_STEP = { title: "", description: "", execType: "agent" as "agent" | "manual" | "review" | "external", agentId: "", buttonText: "进入智能体", enabled: true, stepOrder: 1 };
+
+// 6.5up · 三类智能体区分（自建 / 外部接入 / 外链）+ 视觉常量单点定义
+//   - external_link  : agent_type === "external"，跳转外部 URL
+//   - builtin        : agent_type === "chat" && published_from_draft_id != null，agent-builder 发布的
+//   - external_api   : agent_type === "chat" && published_from_draft_id == null，直连 coze/dify/zhipu/openai
+type AgentSource = "builtin" | "external_api" | "external_link";
+
+function getAgentSource(a: Agent): AgentSource {
+  if (a.agent_type === "external") return "external_link";
+  if (a.published_from_draft_id) return "builtin";
+  return "external_api";
+}
+
+const SOURCE_META: Record<AgentSource, {
+  label: string;
+  Icon: typeof Bot;
+  bg: string;
+  iconColor: string;
+  chipBg: string;
+  chipText: string;
+  order: number;
+}> = {
+  builtin:       { label: "自建",     Icon: Bot,          bg: "bg-[#002FA7]/8", iconColor: "text-[#002FA7]",  chipBg: "bg-[#002FA7]/10", chipText: "text-[#002FA7]",  order: 1 },
+  external_api:  { label: "外部接入", Icon: Plug,         bg: "bg-violet-50",   iconColor: "text-violet-600", chipBg: "bg-violet-50",    chipText: "text-violet-600", order: 2 },
+  external_link: { label: "外链",     Icon: ExternalLink, bg: "bg-orange-50",   iconColor: "text-orange-500", chipBg: "bg-orange-50",    chipText: "text-orange-500", order: 3 },
+};
+
+const SOURCE_ORDER: AgentSource[] = ["builtin", "external_api", "external_link"];
 
 export default function WorkflowsAdminPage() {
   const { toast } = useToast();
@@ -161,6 +202,8 @@ export default function WorkflowsAdminPage() {
   const [showStepModal, setShowStepModal] = useState<{ workflowId: string; step?: WorkflowStep; insertAfterOrder?: number } | null>(null);
   const [stepForm, setStepForm] = useState<{ title: string; description: string; execType: "agent" | "manual" | "review" | "external"; agentId: string; buttonText: string; enabled: boolean; stepOrder: number }>(EMPTY_STEP);
   const [stepError, setStepError] = useState("");
+  // 6.5up · 编辑步骤弹窗里"绑定智能体"用 AgentBindPopover 替代原生 select
+  const [showStepFormAgentPicker, setShowStepFormAgentPicker] = useState(false);
   // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
   // 6.5up · addCatGuard 已抽到 /admin/tags
   const saveWfGuard = useSubmitGuard();
@@ -1081,7 +1124,10 @@ export default function WorkflowsAdminPage() {
                                       className="text-xs text-[#002FA7] hover:underline mt-1 flex items-center gap-1"
                                       title="跳转到智能体管理"
                                     >
-                                      {boundAgent.agent_type === "external" ? <ExternalLink size={10} /> : <Bot size={10} />}
+                                      {(() => {
+                                        const meta = SOURCE_META[getAgentSource(boundAgent)];
+                                        return <meta.Icon size={10} className={meta.iconColor} />;
+                                      })()}
                                       <span className="truncate max-w-[260px]">绑定：{boundAgent.name}</span>
                                     </button>
                                   );
@@ -1458,12 +1504,37 @@ export default function WorkflowsAdminPage() {
                 <>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-sm font-medium text-gray-700">绑定智能体</label>
-                    <select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={stepForm.agentId} onChange={(e) => setStepForm({ ...stepForm, agentId: e.target.value })}>
-                      <option value="">不绑定</option>
-                      {agents.map((a) => (
-                        <option key={a.id} value={a.id}>{a.name}{a.agent_type === "external" ? " [外链]" : ""}</option>
-                      ))}
-                    </select>
+                    {/* 6.5up · 原生 select 替换为可搜索 / 三类分组的触发器按钮 + AgentBindPopover */}
+                    <button
+                      type="button"
+                      onClick={() => setShowStepFormAgentPicker(true)}
+                      className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm bg-white text-left flex items-center gap-2 hover:border-[#002FA7]/40 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+                    >
+                      {(() => {
+                        const cur = stepForm.agentId ? agents.find((a) => a.id === stepForm.agentId) : null;
+                        if (!cur) {
+                          return <span className="flex-1 text-gray-400">点击选择智能体</span>;
+                        }
+                        const src = getAgentSource(cur);
+                        const meta = SOURCE_META[src];
+                        return (
+                          <>
+                            <meta.Icon size={15} className={meta.iconColor} />
+                            <span className="flex-1 truncate text-gray-900">{cur.name}</span>
+                            {src === "external_api" && cur.platform ? (
+                              <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full border border-violet-100 ${meta.chipBg} ${meta.chipText}`}>
+                                {cur.platform}
+                              </span>
+                            ) : src === "external_link" ? (
+                              <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full border border-orange-100 ${meta.chipBg} ${meta.chipText}`}>
+                                外链
+                              </span>
+                            ) : null}
+                          </>
+                        );
+                      })()}
+                      <ChevronDown size={14} className="text-gray-400 shrink-0" />
+                    </button>
                   </div>
                   <Input label="按钮文案" placeholder="如 进入智能体、打开工具" value={stepForm.buttonText} onChange={(e) => setStepForm({ ...stepForm, buttonText: e.target.value })} />
                 </>
@@ -1480,6 +1551,20 @@ export default function WorkflowsAdminPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 6.5up · 编辑步骤弹窗里的"绑定智能体"picker（叠在编辑弹窗之上，z-[60]） */}
+      {showStepFormAgentPicker && (
+        <AgentBindPopover
+          agents={agents}
+          currentAgentId={stepForm.agentId || null}
+          allowClear
+          onPick={(id) => {
+            setStepForm({ ...stepForm, agentId: id });
+            setShowStepFormAgentPicker(false);
+          }}
+          onClose={() => setShowStepFormAgentPicker(false)}
+        />
       )}
 
       {/* 确认弹窗 */}
@@ -1572,7 +1657,9 @@ function WorkflowFlowView(props: {
             const agent = isAgent ? getAgent(step.agent_id) : null;
             const agentMissingId = isAgent && step.agent_id && !agent;
             const noAgentBound  = isAgent && !step.agent_id;
-            const isExternalAgent = isAgent && agent?.agent_type === "external";
+            // 6.5up · 三类智能体区分（自建 / 外部接入 / 外链）
+            const agentSrc = agent ? getAgentSource(agent) : null;
+            const agentMeta = agentSrc ? SOURCE_META[agentSrc] : null;
 
             const isStepHighlighted = !!highlightedStepAgentId && step.agent_id === highlightedStepAgentId;
             return (
@@ -1648,11 +1735,13 @@ function WorkflowFlowView(props: {
                             className="text-xs text-[#002FA7] hover:underline flex items-center gap-1 truncate text-left"
                             title={`跳转到智能体：${agent.name}`}
                           >
-                            {isExternalAgent ? <ExternalLink size={10} /> : <Bot size={10} />}
+                            {agentMeta && <agentMeta.Icon size={10} className={agentMeta.iconColor} />}
                             <span className="truncate">{agent.name}</span>
-                            <span className={`ml-1 text-[10px] px-1 py-px rounded ${isExternalAgent ? "bg-orange-50 text-orange-500" : "bg-blue-50 text-blue-500"}`}>
-                              {isExternalAgent ? "外链" : "chat"}
-                            </span>
+                            {agentMeta && agentSrc && (
+                              <span className={`ml-1 text-[10px] px-1 py-px rounded ${agentMeta.chipBg} ${agentMeta.chipText}`}>
+                                {agentSrc === "external_api" ? (agent.platform || "外部接入") : agentMeta.label}
+                              </span>
+                            )}
                           </button>
                         )}
 
@@ -1796,8 +1885,11 @@ function AgentBindPopover(props: {
   currentAgentId: string | null;
   onPick: (agentId: string) => void | Promise<void>;
   onClose: () => void;
+  // 6.5up · 编辑步骤弹窗里用 allowClear=true 显示"清空当前绑定"按钮；
+  //   节点内快捷绑定场景不传 → 不显示（避免 bindAgentToStep 收到空 agentId 走 catch 报错）
+  allowClear?: boolean;
 }) {
-  const { agents, currentAgentId, onPick, onClose } = props;
+  const { agents, currentAgentId, onPick, onClose, allowClear } = props;
   const [q, setQ] = useState("");
 
   useEffect(() => {
@@ -1821,7 +1913,7 @@ function AgentBindPopover(props: {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 animate-in fade-in duration-150"
       role="dialog"
       aria-modal="true"
       onClick={onClose}
@@ -1868,55 +1960,79 @@ function AgentBindPopover(props: {
 
         {/* 列表 */}
         <div className="flex-1 overflow-y-auto py-2 px-2 max-h-[400px]">
+          {/* 6.5up · 已绑定时提供"清空"快捷入口（仅 allowClear 时显示，避免节点内快捷绑定路径误传空 agentId） */}
+          {allowClear && currentAgentId && (
+            <button
+              onClick={() => onPick("")}
+              className="w-full mb-2 flex items-center gap-3 px-3 py-2 rounded-[10px] text-left border border-dashed border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-colors text-[13px] text-gray-500"
+            >
+              <X size={14} className="text-gray-400" />
+              <span>不绑定（清空当前绑定）</span>
+            </button>
+          )}
           {list.length === 0 ? (
             <div className="py-12 text-center">
               <Search size={22} className="mx-auto text-gray-200 mb-2" />
               <p className="text-[12px] text-gray-400">没有匹配的智能体</p>
             </div>
           ) : (
-            <div className="flex flex-col gap-0.5">
-              {list.map((a) => {
-                const isExternal = a.agent_type === "external";
-                const isCurrent = a.id === currentAgentId;
+            // 6.5up · 按三类 source 分组渲染，每组带小标题 + 计数 + 三套图标颜色；
+            //   外部接入显示 platform chip（coze/dify/zhipu/openai），外链显示"外链"chip，
+            //   自建无 chip（蓝色 Bot 已自证）；空组自动隐藏小标题。
+            <div className="flex flex-col gap-3">
+              {SOURCE_ORDER.map((src) => {
+                const items = list.filter((a) => getAgentSource(a) === src);
+                if (items.length === 0) return null;
+                const meta = SOURCE_META[src];
                 return (
-                  <button
-                    key={a.id}
-                    onClick={() => !isCurrent && onPick(a.id)}
-                    disabled={isCurrent}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-left transition-all ${
-                      isCurrent
-                        ? "bg-[#002FA7]/8 border border-[#002FA7]/20 cursor-not-allowed"
-                        : "border border-transparent hover:bg-gray-50 hover:border-gray-100"
-                    }`}
-                    title={isCurrent ? "当前已绑定" : `选择：${a.name}`}
-                  >
-                    <div
-                      className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${
-                        isExternal ? "bg-orange-50" : "bg-[#002FA7]/8"
-                      }`}
-                    >
-                      {isExternal ? (
-                        <ExternalLink size={15} className="text-orange-500" />
-                      ) : (
-                        <Bot size={16} className="text-[#002FA7]" />
-                      )}
+                  <div key={src}>
+                    <div className="px-2 py-1 flex items-center gap-1.5 text-[11px] font-medium text-gray-500 uppercase tracking-wider">
+                      <meta.Icon size={11} className={meta.iconColor} />
+                      <span>{meta.label}</span>
+                      <span className="text-gray-400 normal-case">({items.length})</span>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-[14px] truncate ${isCurrent ? "text-[#002FA7] font-medium" : "text-gray-800"}`}>
-                        {a.name}
-                      </p>
-                      <p className="text-[11px] text-gray-400 font-mono truncate mt-0.5">{a.agent_code}</p>
+                    <div className="flex flex-col gap-0.5">
+                      {items.map((a) => {
+                        const isCurrent = a.id === currentAgentId;
+                        return (
+                          <button
+                            key={a.id}
+                            onClick={() => !isCurrent && onPick(a.id)}
+                            disabled={isCurrent}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-left transition-all ${
+                              isCurrent
+                                ? "bg-[#002FA7]/8 border border-[#002FA7]/20 cursor-not-allowed"
+                                : "border border-transparent hover:bg-gray-50 hover:border-gray-100"
+                            }`}
+                            title={isCurrent ? "当前已绑定" : `选择：${a.name}${a.description ? ` — ${a.description}` : ""}`}
+                          >
+                            <div className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${meta.bg}`}>
+                              <meta.Icon size={16} className={meta.iconColor} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-[14px] truncate ${isCurrent ? "text-[#002FA7] font-medium" : "text-gray-800"}`}>
+                                {a.name}
+                              </p>
+                              <p className="text-[11px] text-gray-400 font-mono truncate mt-0.5">{a.agent_code}</p>
+                            </div>
+                            {isCurrent ? (
+                              <span className="shrink-0 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-[#002FA7]/15 text-[#002FA7] font-medium">
+                                <Check size={11} /> 已绑定
+                              </span>
+                            ) : src === "external_api" && a.platform ? (
+                              <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full border border-violet-100 ${meta.chipBg} ${meta.chipText}`}>
+                                {a.platform}
+                              </span>
+                            ) : src === "external_link" ? (
+                              <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full border border-orange-100 ${meta.chipBg} ${meta.chipText}`}>
+                                外链
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
                     </div>
-                    {isCurrent ? (
-                      <span className="shrink-0 inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-[#002FA7]/15 text-[#002FA7] font-medium">
-                        <Check size={11} /> 已绑定
-                      </span>
-                    ) : isExternal ? (
-                      <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-500 border border-orange-100">
-                        外链
-                      </span>
-                    ) : null}
-                  </button>
+                  </div>
                 );
               })}
             </div>
