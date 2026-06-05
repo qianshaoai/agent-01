@@ -20,10 +20,13 @@ import { apiError, dbError } from "@/lib/api-error";
 import { requireAdmin } from "@/lib/session";
 import { writeAuditLog } from "@/lib/audit";
 import {
-  isPermissionKey,
+  isWorkflowPermissionKey,
   requiresSuperAdminToGrant,
-  PermissionKey,
+  WorkflowPermissionKey,
 } from "@/lib/permission-keys";
+
+// 6.4up v2 Phase A · custom-roles PATCH 同样严校 WORKFLOW_PERMISSION_KEYS
+const isPermissionKey = isWorkflowPermissionKey;
 
 export const dynamic = "force-dynamic";
 
@@ -105,14 +108,14 @@ export async function PATCH(
     if (updErr) return dbError(updErr);
   }
 
-  // permissions 全量替换
-  let validKeys: PermissionKey[] | null = null;
+  // 6.4up v2 Phase A · permissions 全量替换：严校 WORKFLOW_PERMISSION_KEYS
+  let validKeys: WorkflowPermissionKey[] | null = null;
   if (permissions !== undefined) {
     if (!Array.isArray(permissions)) return apiError("permissions 必须是数组", "VALIDATION_ERROR");
     validKeys = [];
     for (const k of permissions) {
       if (!isPermissionKey(k)) {
-        return apiError(`权限项 ${String(k)} 不在合法清单中`, "VALIDATION_ERROR");
+        return apiError(`权限项 ${String(k)} 不在 workflow 自定义角色合法清单中`, "VALIDATION_ERROR");
       }
       if (requiresSuperAdminToGrant(k) && admin.role !== "super_admin") {
         return apiError(`权限 ${k} 仅超级管理员可授予`, "FORBIDDEN");

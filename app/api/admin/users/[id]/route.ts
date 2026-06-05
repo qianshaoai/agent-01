@@ -88,13 +88,39 @@ export async function PATCH(
     if (!canAssignRole(admin.role, role, admin.adminId === id)) {
       return apiError("无权将用户设置为该角色（不能高于或等于自己）", "FORBIDDEN");
     }
-    const { error } = await db.from("users").update({ role }).eq("id", id);
-    if (error) return dbError(error);
+
+    // 6.4up v2 Phase A · role 从 'user' 变为 builtin admin 时调 RPC：
+    //   一次事务完成 UPDATE users.role + DELETE user_custom_roles + INSERT audit_logs
+    //   防止双通道权限叠加（方案 §1.3 双通道隔离硬规则）
+    const isPromotingToBuiltinAdmin =
+      target.role === "user" &&
+      ["super_admin", "system_admin", "org_admin"].includes(role);
+
+    if (isPromotingToBuiltinAdmin) {
+      const { error: rpcErr } = await db.rpc("change_user_role_clear_custom", {
+        p_user_id: id,
+        p_new_role: role,
+        p_actor_id: admin.adminId,
+      });
+      if (rpcErr) {
+        // 兼容降级：如果 v52 RPC 未跑（user 仍走旧的 update 路径），fallback
+        if (rpcErr.code === "42883" /* function does not exist */) {
+          const { error: updErr } = await db.from("users").update({ role }).eq("id", id);
+          if (updErr) return dbError(updErr);
+        } else {
+          return dbError(rpcErr);
+        }
+      }
+    } else {
+      const { error } = await db.from("users").update({ role }).eq("id", id);
+      if (error) return dbError(error);
+    }
+
     await writeAuditLog({
       adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "update", resourceType: "user", resourceId: id,
       resourceName: (target.nickname || target.phone) ?? undefined,
-      detail: { action: "set-role", newRole: role, oldRole: target.role },
+      detail: { action: "set-role", newRole: role, oldRole: target.role, clearedCustomRoles: isPromotingToBuiltinAdmin },
     });
     return NextResponse.json({ ok: true });
   }

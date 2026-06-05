@@ -39,6 +39,17 @@ import {
   PermissionScopeSuffix,
 } from "@/lib/permission-keys";
 
+// 6.4up v2 Phase A · 是否进入 v2 effective set 合成路径
+//   - 任一 resource 在 PERMISSION_V2_ENFORCE_RESOURCES CSV 出现 → builtin admin actor 构建时
+//     额外查 builtin_role_permissions + admin_permission_overrides 合成 effective set
+//   - 空 / 未设 → 跳过查询，effectivePermissions 留空集（hasPermission builtin 路径走旧 role-based fallback）
+//   这是方案 §3.4 「flag 不含该 resource → no-op」的对应实现：actor 层也按 flag 决定是否查 v2 两表，
+//   避免空 flag 时无意义的 DB 往返
+function isPermissionV2Enabled(): boolean {
+  const csv = process.env.PERMISSION_V2_ENFORCE_RESOURCES ?? "";
+  return csv.trim().length > 0;
+}
+
 // ─── 类型 ────────────────────────────────────────────────────
 
 export type PermissionActor = {
@@ -57,6 +68,13 @@ export type PermissionActor = {
   customRoleCodes: string[];
   /** custom admin 派生出的完整 permission_key 集（dedup 后） */
   permissions: Set<PermissionKey>;
+  /**
+   * 6.4up v2 Phase A · builtin admin 的 v2 通道 effective permission set
+   *   = builtin_role_permissions[role] ∪ admin_permission_overrides[grant] - admin_permission_overrides[revoke]
+   * 仅在 PERMISSION_V2_ENFORCE_RESOURCES env 非空时查 DB 合成；空集时 hasPermission builtin 路径
+   * 走旧 role-based fallback（行为等价 6.4up）。custom admin 路径不用此字段（用 permissions）。
+   */
+  effectivePermissions: Set<string>;
   /** 用户名（供审计日志用，buildPermissionActor 顺手取出） */
   username: string;
 };
@@ -85,6 +103,8 @@ async function buildBuiltinAdminActor(p: AdminPayload): Promise<PermissionActor>
     .eq("id", p.adminId)
     .maybeSingle();
   if (adminRow) {
+    const builtinRole = (adminRow.role as AdminRole | null) ?? p.role;
+    const effective = await loadEffectivePermissions("admin_table", p.adminId, builtinRole);
     return {
       actorId: p.adminId,
       source: "admin_table",
@@ -92,9 +112,10 @@ async function buildBuiltinAdminActor(p: AdminPayload): Promise<PermissionActor>
       deptId: null,
       teamId: null,
       userType: null,
-      builtinRole: (adminRow.role as AdminRole | null) ?? p.role,
+      builtinRole,
       customRoleCodes: [],
       permissions: new Set<PermissionKey>(),
+      effectivePermissions: effective,
       username: adminRow.username ?? p.username,
     };
   }
@@ -105,6 +126,8 @@ async function buildBuiltinAdminActor(p: AdminPayload): Promise<PermissionActor>
     .eq("id", p.adminId)
     .maybeSingle();
   if (userRow) {
+    const builtinRole = (userRow.role as AdminRole | null) ?? p.role;
+    const effective = await loadEffectivePermissions("user_admin", p.adminId, builtinRole);
     return {
       actorId: p.adminId,
       source: "user_admin",
@@ -112,9 +135,10 @@ async function buildBuiltinAdminActor(p: AdminPayload): Promise<PermissionActor>
       deptId: userRow.dept_id ?? null,
       teamId: userRow.team_id ?? null,
       userType: (userRow.user_type as "personal" | "organization" | null) ?? null,
-      builtinRole: (userRow.role as AdminRole | null) ?? p.role,
+      builtinRole,
       customRoleCodes: [],
       permissions: new Set<PermissionKey>(),
+      effectivePermissions: effective,
       username: userRow.username ?? userRow.phone ?? p.username,
     };
   }
@@ -129,8 +153,47 @@ async function buildBuiltinAdminActor(p: AdminPayload): Promise<PermissionActor>
     builtinRole: p.role,
     customRoleCodes: [],
     permissions: new Set<PermissionKey>(),
+    effectivePermissions: new Set<string>(),
     username: p.username,
   };
+}
+
+// 6.4up v2 Phase A · builtin admin effective permissions 合成
+//   = builtin_role_permissions[role] ∪ admin_permission_overrides[grant] - admin_permission_overrides[revoke]
+// 容错：任一查询失败 → 返回空 set（builtin admin hasPermission 走旧 fallback）；不阻断 actor 构建。
+async function loadEffectivePermissions(
+  source: "admin_table" | "user_admin",
+  actorId: string,
+  builtinRole: AdminRole | null,
+): Promise<Set<string>> {
+  // super_admin 公式第 1 行硬全权，不需要查；v2 enforce 未启用时也不查
+  if (!builtinRole || builtinRole === "super_admin" || !isPermissionV2Enabled()) {
+    return new Set<string>();
+  }
+
+  const [pack, overrides] = await Promise.all([
+    db.from("builtin_role_permissions").select("permission_key").eq("role", builtinRole),
+    db
+      .from("admin_permission_overrides")
+      .select("permission_key, effect")
+      .eq("admin_source", source)
+      .eq("admin_id", actorId),
+  ]);
+
+  // 任一查询失败 → 空 set（fail-safe；hasPermission 退回旧 role fallback）
+  if (pack.error || overrides.error) return new Set<string>();
+
+  const eff = new Set<string>();
+  for (const r of (pack.data ?? []) as { permission_key: string }[]) {
+    eff.add(r.permission_key);
+  }
+  type Ov = { permission_key: string; effect: "grant" | "revoke" };
+  const ovs = (overrides.data ?? []) as Ov[];
+  for (const o of ovs) {
+    if (o.effect === "grant") eff.add(o.permission_key);
+    else if (o.effect === "revoke") eff.delete(o.permission_key);
+  }
+  return eff;
 }
 
 async function buildCustomAdminActor(p: CustomAdminPayload): Promise<PermissionActor> {
@@ -160,6 +223,7 @@ async function buildCustomAdminActor(p: CustomAdminPayload): Promise<PermissionA
     builtinRole: null,
     customRoleCodes: [],
     permissions: new Set<PermissionKey>(),
+    effectivePermissions: new Set<string>(),
     username: `${p.username} (denied: ${reason})`,
   });
 
@@ -218,6 +282,8 @@ async function buildCustomAdminActor(p: CustomAdminPayload): Promise<PermissionA
     builtinRole: null,
     customRoleCodes,
     permissions,
+    // custom 通道判定走 permissions（custom_role_permissions），不用 v2 两表
+    effectivePermissions: new Set<string>(),
     username: userRow.username ?? userRow.phone ?? p.username,
   };
 }
@@ -268,15 +334,33 @@ export async function hasPermission(
   key: PermissionKey,
   targetScopes?: ResourceScope[]
 ): Promise<boolean> {
-  // builtin admin 不走 permission keys，复用旧 role 规则
+  // ─── 公式第 1 行：super_admin 硬全权 ───────────────────────────
+  if (actor.builtinRole === "super_admin") return true;
+
+  // ─── builtin admin 路径 ────────────────────────────────────────
+  // 6.4up v2 Phase A · 双模式：
+  //   - effectivePermissions 非空（v2 enforce 已启用 + 表已 seed）→ 走新公式
+  //   - effectivePermissions 空 → 退回旧 role-based fallback（保 6.4up 行为）
   if (actor.source !== "custom_admin") {
     const role = actor.builtinRole;
     if (!role) return false;
-    if (role === "super_admin") return true;
+
+    // v2 公式路径：finalKeys.has(key) && scopeOk
+    if (actor.effectivePermissions.size > 0) {
+      if (!actor.effectivePermissions.has(key)) return false;
+      const suffix = getPermissionScopeSuffix(key);
+      if (!targetScopes || targetScopes.length === 0) return true;
+      for (const s of targetScopes) {
+        const ok = await isScopeWithinActorRange(actor, suffix, s);
+        if (!ok) return false;
+      }
+      return true;
+    }
+
+    // 旧 role-based fallback（v2 未启用 / 表未 seed / 查询失败时兜底，零行为变化）
     const resource = getPermissionResource(key);
     if (role === "system_admin" && resource === "workflow") return true;
     if (role === "org_admin" && resource === "workflow") {
-      // org_admin 必须有 tenantCode，且 targetScopes（若传）全部命中本组织
       if (!actor.tenantCode) return false;
       if (!targetScopes || targetScopes.length === 0) return true;
       for (const s of targetScopes) {
@@ -288,11 +372,10 @@ export async function hasPermission(
     return false;
   }
 
-  // custom admin 路径
+  // ─── custom admin 路径（v50 通道，与 v2 表完全无关） ───────────
   if (!actor.permissions.has(key)) return false;
   const suffix = getPermissionScopeSuffix(key);
   if (!targetScopes || targetScopes.length === 0) {
-    // read/create 无明确目标时（list 路径 / 调用方稍后再做 scope 路由）→ 持 key 即放行
     return true;
   }
   for (const s of targetScopes) {

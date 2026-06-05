@@ -18,7 +18,13 @@ export type AuditResourceType =
   | "knowledge_base"
   // 6.4up · 权限管理 · 自定义角色（custom_roles 表）
   // CRUD（POST/PATCH/DELETE）+ 授予/撤销（grant/revoke 走 update action）共用此 type
-  | "custom_role";
+  | "custom_role"
+  // 6.4up v2 Phase A · 角色默认权限包（builtin_role_permissions 表）
+  // Tab 2 编辑 system_admin / org_admin 默认包时写 audit；不绑特定 tenant_code → 平台级
+  | "builtin_role_permission"
+  // 6.4up v2 Phase A · 管理员个人权限 override（admin_permission_overrides 表）
+  // Tab 1 编辑某 admin 的 grant/revoke 时写 audit；按 target admin 反查 tenant
+  | "admin_override";
 
 /**
  * 5.11up · 写时反查资源所属的组织 code
@@ -99,6 +105,17 @@ export async function resolveResourceTenantCode(
           .eq("id", resourceId)
           .maybeSingle();
         return data?.tenant_code ?? null;
+      }
+      // 6.4up v2 Phase A · 角色默认权限包 = 平台公共，tenant=NULL
+      case "builtin_role_permission":
+        return null;
+      // 6.4up v2 Phase A · admin override · resourceId 是 target admin 的 user/admin id
+      //   先查 admins 表（admin_table 路径），再 fallback users 表（user_admin 路径）
+      case "admin_override": {
+        const { data: a } = await db.from("admins").select("tenant_code").eq("id", resourceId).maybeSingle();
+        if (a) return a.tenant_code ?? null;
+        const { data: u } = await db.from("users").select("tenant_code").eq("id", resourceId).maybeSingle();
+        return u?.tenant_code ?? null;
       }
       default:
         return null;
