@@ -2123,7 +2123,8 @@ function ChipPopover({
         aria-label={`${label} 详情`}
       >
         {triggerIcon}
-        {count > 1 && <span>{count}</span>}
+        {/* 6.5up · count=1 时也显示数字，避免单标签时 icon 后面空着、和无内容 chip 视觉混淆 */}
+        <span>{count}</span>
       </button>
       {open && (
         <>
