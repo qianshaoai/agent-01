@@ -67,22 +67,34 @@ export async function GET(req: NextRequest) {
     ctx
   );
 
-  // 6.3up R1.1 · Phase 4 · 层级排序回退（team > dept > org > workflows.sort_order）
-  // system_admin 跳过排序（保持现状全量按 workflows.sort_order）；其它角色调 RPC。
-  const scopeOrderMap = new Map<string, number>();
+  // 6.3up R1.1 · Phase 4 · 层级排序（team > dept > org > 未配置）
+  // 6.5up · 由"COALESCE 数字升序"升级为"先按层级分桶，桶内再按 sort_order"
+  //   旧：每个工作流取最具体那层的 sort_order，所有工作流混在一起按数字排
+  //   新：team 配置的工作流整体排在 dept 前，dept 整体排在 org 前，每桶内部按各自 sort_order
+  // system_admin 跳过 RPC（保持现状全量按 workflows.sort_order）；其它角色调 RPC。
+  type ScopeKind = "team" | "dept" | "org";
+  const scopeOrderMap = new Map<string, { sortOrder: number; scope: ScopeKind }>();
   if (user.role !== "system_admin") {
     const { data: orderRows } = await db.rpc("get_user_workflow_order", { p_user_id: user.userId });
-    for (const row of (orderRows ?? []) as { workflow_id: string; sort_order: number }[]) {
-      scopeOrderMap.set(row.workflow_id, row.sort_order);
+    for (const row of (orderRows ?? []) as { workflow_id: string; sort_order: number; scope: ScopeKind }[]) {
+      scopeOrderMap.set(row.workflow_id, { sortOrder: row.sort_order, scope: row.scope });
     }
   }
 
   const visible = workflows.filter((wf) => visibleIds.has(wf.id));
 
-  // 最终排序：COALESCE(scope_order, workflows.sort_order, 999999) ASC, id ASC
+  // 桶权重：team=1 → dept=2 → org=3 → 未配置=4（兜底走 workflows.sort_order）
+  const SCOPE_BUCKET: Record<ScopeKind, number> = { team: 1, dept: 2, org: 3 };
+  const UNSCOPED_BUCKET = 4;
+
   visible.sort((a, b) => {
-    const aOrder = scopeOrderMap.get(a.id) ?? a.sort_order ?? 999999;
-    const bOrder = scopeOrderMap.get(b.id) ?? b.sort_order ?? 999999;
+    const aMeta = scopeOrderMap.get(a.id);
+    const bMeta = scopeOrderMap.get(b.id);
+    const aBucket = aMeta ? SCOPE_BUCKET[aMeta.scope] : UNSCOPED_BUCKET;
+    const bBucket = bMeta ? SCOPE_BUCKET[bMeta.scope] : UNSCOPED_BUCKET;
+    if (aBucket !== bBucket) return aBucket - bBucket;
+    const aOrder = aMeta?.sortOrder ?? a.sort_order ?? 999999;
+    const bOrder = bMeta?.sortOrder ?? b.sort_order ?? 999999;
     if (aOrder !== bOrder) return aOrder - bOrder;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
