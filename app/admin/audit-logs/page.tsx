@@ -51,8 +51,8 @@ const RESOURCE_LABEL: Record<string, string> = {
   agent:               "智能体",
   workflow:            "工作流",
   workflow_step:       "工作流步骤",
-  category:            "智能体分类",
-  wf_category:         "工作流分类",
+  category:            "智能体标签",
+  wf_category:         "工作流标签",
   notice:              "公告",
   tenant:              "组织",
   user:                "用户",
@@ -148,8 +148,8 @@ export default function AuditLogsPage() {
                 <option value="workflow_step">工作流步骤</option>
                 <option value="tenant">组织</option>
                 <option value="user">用户</option>
-                <option value="category">智能体分类</option>
-                <option value="wf_category">工作流分类</option>
+                <option value="category">智能体标签</option>
+                <option value="wf_category">工作流标签</option>
                 <option value="notice">公告</option>
                 <option value="department">部门</option>
                 <option value="team">小组</option>

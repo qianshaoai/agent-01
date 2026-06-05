@@ -44,9 +44,10 @@ export async function GET(req: NextRequest) {
 
   const { page, pageSize, start } = parsePagination(req, 50);
 
-  // 5.7up · org_admin 只看本组织相关工作流：
-  //   visible_to='org_only' 且 resource_permissions 里有 scope=本组织/部门/小组
-  //   OR visible_to='custom' 且 resource_permissions 里有 scope=本组织/部门/小组
+  // 5.7up · org_admin 看本组织相关工作流：
+  //   visible_to='org_only' / 'custom' 且 resource_permissions 里有 scope=本组织/部门/小组
+  // R1.11 · 用户要求叠加：visible_to='all' 的全平台工作流也可见
+  //   编辑/删除权仍由 canActOnRole 把关（visible_to='all' 多为 super/system 创建 → org_admin 通常只能浏览/复制）
   let scopedWfIds: string[] | null = null;
   if (admin.role === "org_admin") {
     if (!admin.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
@@ -66,12 +67,19 @@ export async function GET(req: NextRequest) {
       orFilters.push(`and(scope_type.eq.team,scope_id.in.(${teamIds.join(",")}))`);
     }
 
-    const { data: scoped } = await db
-      .from("resource_permissions")
-      .select("resource_id")
-      .eq("resource_type", "workflow")
-      .or(orFilters.join(","));
-    scopedWfIds = Array.from(new Set((scoped ?? []).map((r: { resource_id: string }) => r.resource_id)));
+    // 并行：1. 本组织相关 perms 命中  2. 全平台可见 visible_to='all'
+    const [{ data: scoped }, { data: allVis }] = await Promise.all([
+      db.from("resource_permissions")
+        .select("resource_id")
+        .eq("resource_type", "workflow")
+        .or(orFilters.join(",")),
+      db.from("workflows")
+        .select("id")
+        .eq("visible_to", "all"),
+    ]);
+    const permIds = (scoped ?? []).map((r: { resource_id: string }) => r.resource_id);
+    const allVisIds = (allVis ?? []).map((r: { id: string }) => r.id);
+    scopedWfIds = Array.from(new Set([...permIds, ...allVisIds]));
 
     if (scopedWfIds.length === 0) {
       // 无任何可见工作流，直接返回空
@@ -79,11 +87,14 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // R1.12 修复：v49 drop 了 workflows.created_by FK 后，PostgREST 不再认
+  //   `creator:created_by ( username )` 隐式 join 关系（PGRST200），整个 GET 500。
+  //   改为：① select 不带 creator；② 分别从 admins / users 表查 username 并 merge。
+  //   这也与 admin.adminId 双来源（admins 表或 users 表）的现实保持一致。
   let wfQuery = db.from("workflows")
     .select(`
       id, name, description, category, sort_order, enabled, visible_to, created_at,
       created_by, created_by_role,
-      creator:created_by ( username ),
       workflow_categories ( category_id ),
       workflow_steps (
         id, step_order, title, description, exec_type, agent_id, button_text, enabled
@@ -109,15 +120,34 @@ export async function GET(req: NextRequest) {
     permMap.set(p.resource_id, arr);
   }
 
-  type CreatorJoin = { username: string } | null;
+  // R1.12 · 拿 created_by 集 → 同时查 admins / users 两张表（adminId 双来源）→ 合并 map
+  const creatorIds = Array.from(
+    new Set(
+      ((wfRes.data ?? []) as { created_by: string | null }[])
+        .map((wf) => wf.created_by)
+        .filter((x): x is string => !!x)
+    )
+  );
+  const usernameMap = new Map<string, string>();
+  if (creatorIds.length > 0) {
+    const [{ data: adminRows }, { data: userRows }] = await Promise.all([
+      db.from("admins").select("id, username").in("id", creatorIds),
+      db.from("users").select("id, username").in("id", creatorIds),
+    ]);
+    for (const a of (adminRows ?? []) as { id: string; username: string | null }[]) {
+      if (a.username) usernameMap.set(a.id, a.username);
+    }
+    for (const u of (userRows ?? []) as { id: string; username: string | null }[]) {
+      if (u.username && !usernameMap.has(u.id)) usernameMap.set(u.id, u.username);
+    }
+  }
+
   const result = (wfRes.data ?? []).map((wf) => {
-    const creator = wf.creator as unknown as CreatorJoin;
     return {
       ...wf,
       categoryIds: (wf.workflow_categories ?? []).map((c: { category_id: string }) => c.category_id),
       workflow_categories: undefined,
-      creator: undefined,
-      created_by_username: creator?.username ?? null,
+      created_by_username: wf.created_by ? (usernameMap.get(wf.created_by) ?? null) : null,
       permissions: permMap.get(wf.id) ?? [],
     };
   });
@@ -152,13 +182,32 @@ export async function POST(req: NextRequest) {
 
   // 5.11up · 记录创建者（admin ID + 角色快照），用于上下级权限校验
   const adminRole = (admin.role ?? "super_admin") as "super_admin" | "system_admin" | "org_admin";
+
+  // R1.8 · sort_order 自动接末尾（max + 1）。
+  //   起因：手动输入框已删（6.3up「分层级配置」接管显式排序）。但 DB 字段仍是
+  //   未配层级工作流的全局兜底键 + 后台列表默认排序键。新建若全默认 0 会让多个
+  //   新工作流堆在最前并彼此 id 兜底，不直观；自动接末尾给个稳定的自然顺序。
+  //   显式传 sortOrder 仍优先（PATCH / 集成测试 / SDK 调用兼容）。
+  let finalSortOrder: number;
+  if (typeof sortOrder === "number") {
+    finalSortOrder = sortOrder;
+  } else {
+    const { data: maxRow } = await db
+      .from("workflows")
+      .select("sort_order")
+      .order("sort_order", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    finalSortOrder = ((maxRow as { sort_order: number } | null)?.sort_order ?? -1) + 1;
+  }
+
   const { data, error } = await db
     .from("workflows")
     .insert({
       name,
       description: description ?? "",
       category: category ?? "",
-      sort_order: sortOrder ?? 0,
+      sort_order: finalSortOrder,
       enabled: enabled ?? true,
       visible_to: visibleTo ?? "all",
       created_by: admin.adminId,

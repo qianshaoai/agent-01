@@ -3,10 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { isTagAdmin } from "@/lib/admin-permissions";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
 
   const { id } = await params;
   const { name } = await req.json();
@@ -30,6 +32,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
 
   const { id } = await params;
 

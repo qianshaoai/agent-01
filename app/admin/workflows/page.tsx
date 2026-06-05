@@ -30,10 +30,11 @@ import {
   Search,
   X,
   Tag,
-  Pencil,
   Check,
   Building2,
-  Image as ImageIcon,
+  Home,
+  Lock,
+  Layers,
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
@@ -74,11 +75,12 @@ type Workflow = {
 
 type PermScope = "org" | "dept" | "team";
 
+// R1.8 · 不再手动设 sortOrder（6.3up「分层级配置」+ 全局自动接末尾接管），
+//        EMPTY_WF / 回填 / 提交都不写 sortOrder；DB 字段保留作为兜底键。
 const EMPTY_WF = {
   name: "",
   description: "",
   category: "",
-  sortOrder: 0,
   enabled: true,
   visibleTo: "all",
   categoryIds: [] as string[],
@@ -125,8 +127,18 @@ export default function WorkflowsAdminPage() {
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [tenantSearch, setTenantSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"workflows" | "categories">("workflows");
+  // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留工作流列表（无 Tab 切换）
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // R1.7 · 分类 section 折叠（与智能体管理风格一致）· 默认全折叠
+  const [expandedWfSections, setExpandedWfSections] = useState<Set<string>>(new Set());
+  function toggleWfSection(id: string) {
+    setExpandedWfSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   // 4.27up 阶段一：流程图 / 列表 视图切换，按 workflow.id 维度记忆
   // 4.29up：默认视图改为 list（列表为主，流程图为辅）
   const [viewModeMap, setViewModeMap] = useState<Record<string, "flow" | "list">>({});
@@ -150,21 +162,16 @@ export default function WorkflowsAdminPage() {
   const [stepForm, setStepForm] = useState<{ title: string; description: string; execType: "agent" | "manual" | "review" | "external"; agentId: string; buttonText: string; enabled: boolean; stepOrder: number }>(EMPTY_STEP);
   const [stepError, setStepError] = useState("");
   // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
-  // 三个独立 guard：工作流 save / 步骤 save / 复制 / 新建分类
+  // 6.5up · addCatGuard 已抽到 /admin/tags
   const saveWfGuard = useSubmitGuard();
   const saveStepGuard = useSubmitGuard();
   const duplicateWfGuard = useSubmitGuard();
-  const addCatGuard = useSubmitGuard();
 
   // Confirm dialog state
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
   function showConfirm(message: string, onConfirm: () => void) { setConfirmDialog({ message, onConfirm }); }
 
-  // Category management state
-  const [newCatName, setNewCatName] = useState("");
-  const [catNameHint, setCatNameHint] = useState(""); // 5.7up · 空值 inline 提示
-  const [editingCatId, setEditingCatId] = useState<string | null>(null);
-  const [editingCatName, setEditingCatName] = useState("");
+  // 6.5up · 分类管理 state（newCatName / editingCatId / editingCatName 等）已抽到 /admin/tags
 
   // 4.29up：?focus=<wfId>&pageSize=100 跨页定位
   // 关键：客户端 hydrate 后才能读到 window.location.search（lazy state 在 SSR 首次执行时
@@ -297,7 +304,6 @@ export default function WorkflowsAdminPage() {
       name: wf.name,
       description: wf.description,
       category: wf.category,
-      sortOrder: wf.sort_order,
       enabled: wf.enabled,
       visibleTo,
       categoryIds: wf.categoryIds ?? [],
@@ -324,7 +330,6 @@ export default function WorkflowsAdminPage() {
         name: wfForm.name,
         description: wfForm.description,
         category: wfForm.category,
-        sortOrder: wfForm.sortOrder,
         enabled: wfForm.enabled,
         visibleTo: wfForm.visibleTo,
         categoryIds: wfForm.categoryIds,
@@ -654,56 +659,8 @@ export default function WorkflowsAdminPage() {
     return agents.find((a) => a.id === agentId) ?? null;
   };
 
-  // ── WF Category CRUD ──────────────────────────────────────────
-  async function addWfCategory() {
-    if (!newCatName.trim()) {
-      setCatNameHint("请输入分类名称");
-      return;
-    }
-    await addCatGuard.submit(async (idempotencyKey) => {
-      await fetch("/api/admin/wf-categories", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ name: newCatName.trim() }) });
-      setNewCatName(""); load();
-    });
-  }
-
-  async function saveEditWfCat(id: string) {
-    if (!editingCatName.trim()) return;
-    await fetch(`/api/admin/wf-categories/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: editingCatName.trim() }) });
-    setEditingCatId(null); setEditingCatName(""); load();
-  }
-
-  function deleteWfCat(cat: Category) {
-    showConfirm(`确认删除分类「${cat.name}」？`, async () => {
-      const res = await fetch(`/api/admin/wf-categories/${cat.id}`, { method: "DELETE" });
-      if (!res.ok) { const d = await res.json(); alert(d.error ?? "删除失败"); return; }
-      load();
-    });
-  }
-
-  async function handleWfCatIcon(catId: string, e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch(`/api/admin/wf-categories/${catId}/icon`, { method: "POST", body: fd });
-    if (res.ok) {
-      const data = await res.json();
-      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: data.url } : c));
-    } else {
-      const d = await res.json();
-      alert(d.error ?? "图标上传失败");
-    }
-    e.target.value = "";
-  }
-
-  function removeWfCatIcon(catId: string) {
-    showConfirm("确认删除此分类的图标？", async () => {
-      const res = await fetch(`/api/admin/wf-categories/${catId}/icon`, { method: "DELETE" });
-      if (res.ok) {
-        setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: null } : c));
-      }
-    });
-  }
+  // 6.5up · addWfCategory / saveEditWfCat / deleteWfCat / handleWfCatIcon / removeWfCatIcon
+  //        已抽到 /admin/tags 页面（不动后端 API，仅前端搬迁）
 
   return (
     <AdminLayout>
@@ -711,23 +668,28 @@ export default function WorkflowsAdminPage() {
         <PageHeader
           icon={<GitBranch size={20} />}
           title="工作流管理"
-          subtitle="管理工作流、步骤与分类"
+          subtitle="管理工作流与步骤"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {workflows.length} 个</span>}
           actions={
             <>
-              <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">
-                {(["workflows", "categories"] as const).map((tab) => (
-                  <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-1.5 rounded-[8px] text-[13px] font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                    {tab === "workflows" ? "工作流列表" : "分类管理"}
-                  </button>
-                ))}
-              </div>
-              {activeTab === "workflows" && <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>}
+              {/* 6.3up R1.1 · 工作流配置入口（仅 super/system_admin 可见，与服务端 isWorkflowConfigAdmin 一致） */}
+              {(adminRole === "super_admin" || adminRole === "system_admin") && (
+                <Button
+                  variant="outline"
+                  onClick={() => router.push("/admin/workflow-config")}
+                  className="gap-2"
+                  title="按组织 / 部门 / 小组配置工作流的展示与排序"
+                >
+                  <Layers size={16} /> 工作流配置
+                </Button>
+              )}
+              <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>
             </>
           }
         />
 
-        {activeTab === "workflows" && <>
+        {/* 6.5up · 工作流列表主体（旧分类管理 Tab 已抽到 /admin/tags） */}
+        <>
 
         {/* 筛选栏 */}
         <Card padding="md" className="flex flex-wrap gap-3 items-center">
@@ -736,7 +698,7 @@ export default function WorkflowsAdminPage() {
             <input className="w-full h-10 border border-gray-200 rounded-[10px] pl-9 pr-3 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" placeholder="搜索工作流名称…" value={wfSearch} onChange={e => setWfSearch(e.target.value)} />
           </div>
           <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfCatFilter} onChange={e => setWfCatFilter(e.target.value)}>
-            <option value="">全部分类</option>
+            <option value="">全部标签</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfVisibleFilter} onChange={e => setWfVisibleFilter(e.target.value)}>
@@ -792,7 +754,7 @@ export default function WorkflowsAdminPage() {
             if (!wfCatFilter) {
               const uncat = filteredWorkflows.filter((wf) => (wf.categoryIds ?? []).length === 0);
               if (uncat.length > 0) {
-                sections.push({ id: "__uncategorized__", name: "未分类", icon_url: null, workflows: uncat });
+                sections.push({ id: "__uncategorized__", name: "未设置标签", icon_url: null, workflows: uncat });
               }
             }
             return sections.filter((s) => s.workflows.length > 0);
@@ -806,21 +768,35 @@ export default function WorkflowsAdminPage() {
           <div className="space-y-6">
             {/* 5.16up R6 方案乙 · 按工作流分类分区展示（不改 DB，非真隔离） */}
             <p className="text-[12px] text-gray-400 px-1">
-              按分类分区展示；区内仍按全局顺序排列 —— 分区视图，非各分类独立排序。
+              按标签分区展示；区内仍按全局顺序排列 —— 分区视图，非各标签独立排序。
             </p>
-            {groupedWfSections.map((section) => (
+            {groupedWfSections.map((section) => {
+            const sectionExpanded = expandedWfSections.has(section.id);
+            return (
             <div key={section.id}>
-              <div className="flex items-center gap-2 px-1 mb-2">
+              {/* R1.7 · 分类 header · 卡片化（与下面工作流卡片视觉一致）+ chevron 折叠 */}
+              <button
+                type="button"
+                onClick={() => toggleWfSection(section.id)}
+                className="card card-hover w-full flex items-center gap-3 px-5 py-4 mb-3 text-left"
+              >
+                {sectionExpanded
+                  ? <ChevronDown size={18} className="text-gray-500 shrink-0" />
+                  : <ChevronRight size={18} className="text-gray-500 shrink-0" />}
                 {section.icon_url ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={section.icon_url} alt={section.name} className="w-4 h-4 rounded-[3px] object-contain" />
+                  <img src={section.icon_url} alt={section.name} className="w-7 h-7 rounded-[8px] object-contain shrink-0" />
                 ) : (
-                  <Tag size={13} className="text-[#002FA7]" />
+                  <div className="w-7 h-7 rounded-[8px] bg-[#002FA7]/10 flex items-center justify-center shrink-0">
+                    <Tag size={15} className="text-[#002FA7]" />
+                  </div>
                 )}
-                <span className="text-[13px] font-semibold text-gray-700">{section.name}</span>
-                <span className="text-[11px] text-gray-400">{section.workflows.length} 个</span>
-              </div>
-              <div className="space-y-3">
+                <span className="text-[16px] font-semibold text-gray-800">{section.name}</span>
+                <span className="text-[12px] text-gray-400 font-medium ml-auto">{section.workflows.length} 个工作流</span>
+              </button>
+              {sectionExpanded && (
+              // R1.14 · 仅靠左缩进表达从属关系（去掉竖线，更简洁）
+              <div className="space-y-3 ml-5 mb-3">
             {section.workflows.map((wf) => {
               const isExpanded = expandedId === wf.id;
               const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
@@ -840,75 +816,11 @@ export default function WorkflowsAdminPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-medium text-gray-900">{wf.name}</p>
-                        {(wf.categoryIds ?? []).map((cid) => {
-                          const cat = categories.find((c) => c.id === cid);
-                          if (!cat) return null;
-                          return (
-                            <span key={cid} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
-                              {/* 小图标（<20px），next/image 优化收益低 */}
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              {cat.icon_url ? <img src={cat.icon_url} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
-                              {cat.name}
-                            </span>
-                          );
-                        })}
-                        {wf.visible_to === "org_only" && (() => {
-                          // 5.9up · 区分两种 'org_only' 语义：
-                          //   - 无 scope=org permission（5.7up 之前的"任意组织用户可见"老语义）→ "仅组织用户"
-                          //   - 有 scope=org permission（5.7up+ org_admin 路径，限定特定组织）→ "指定组织：XXX"
-                          const orgRules = (wf.permissions ?? []).filter((r) => r.scope_type === "org");
-                          if (orgRules.length === 0) {
-                            return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>;
-                          }
-                          const names = orgRules
-                            .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id)
-                            .filter(Boolean) as string[];
-                          const label = `指定组织：${names.join("、")}`;
-                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={names.join("、")}>{label}</span>;
-                        })()}
-                        {wf.visible_to === "personal_only" && <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>}
-                        {wf.visible_to === "custom" && (() => {
-                          const rules = wf.permissions ?? [];
-                          const firstType = rules[0]?.scope_type;
-                          const typeLabel = firstType === "dept" ? "指定部门"
-                                         : firstType === "team" ? "指定小组"
-                                         : "指定组织";
-                          // 5.9up · 把 scope_id 解析成可读名称；dept/team 带上母公司前缀，便于跨组织辨认
-                          const names = rules.map((r) => {
-                            if (r.scope_type === "org") {
-                              return tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id;
-                            }
-                            if (r.scope_type === "dept") {
-                              const d = allDepts.find((x) => x.id === r.scope_id);
-                              if (!d) return r.scope_id;
-                              const tenant = tenants.find((t) => t.code === d.tenant_code)?.name;
-                              return tenant ? `${tenant} / ${d.name}` : d.name;
-                            }
-                            if (r.scope_type === "team") {
-                              const tm = allTeams.find((x) => x.id === r.scope_id);
-                              if (!tm) return r.scope_id;
-                              const d = allDepts.find((x) => x.id === tm.dept_id);
-                              const tenant = d ? tenants.find((t) => t.code === d.tenant_code)?.name : null;
-                              if (tenant && d) return `${tenant} / ${d.name} / ${tm.name}`;
-                              if (d) return `${d.name} / ${tm.name}`;
-                              return tm.name;
-                            }
-                            return r.scope_id;
-                          }).filter(Boolean) as string[];
-                          const label = `${typeLabel}：${names.join("、")}`;
-                          return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={names.join("、")}>{label}</span>;
-                        })()}
-                        {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
-                        {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 font-medium" title={`指定组织可见：${wf.visible_to}`}>指定组织可见</span>}
+                        {/* 6.3up · 分类标签 chip + 简介 + 可见范围 chip 下沉到展开区，折叠态保留停用 + 创建者 */}
                         {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
-                        {/* 5.12up · 创建者徽章：只显示角色（用户名查审计记录） */}
-                        {wf.created_by_role && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-500 border border-gray-200" title="具体创建者请查审计记录">
-                            {ROLE_LABEL_MAP[wf.created_by_role] ?? wf.created_by_role}
-                          </span>
-                        )}
+                        {/* 6.3up · 创建者徽章已下沉到展开区 chip 行 */}
                       </div>
-                      {wf.description && <p className="text-xs text-gray-400 mt-0.5 truncate">{wf.description}</p>}
+                      {/* 6.3up · 简介下沉到展开区（不再 truncate）*/}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <span className="text-xs text-gray-400 mr-2">{steps.length} 个步骤</span>
@@ -932,22 +844,107 @@ export default function WorkflowsAdminPage() {
                   {/* Steps */}
                   {isExpanded && (
                     <div className="border-t border-gray-50 px-5 pb-4 pt-3">
-                      {/* 4.27up 阶段一：视图切换 Tab */}
-                      <div className="flex items-center gap-1 mb-3 p-0.5 bg-gray-100 rounded-[8px] w-fit">
-                        {(["list", "flow"] as const).map((mode) => (
-                          <button
-                            key={mode}
-                            onClick={() => setViewMode(wf.id, mode)}
-                            className={`px-3 py-1 text-xs rounded-[6px] transition-colors ${
-                              getViewMode(wf.id) === mode
-                                ? "bg-white text-[#002FA7] shadow-sm font-medium"
-                                : "text-gray-500 hover:text-gray-700"
-                            }`}
-                          >
-                            {mode === "flow" ? "流程图" : "列表"}
-                          </button>
-                        ))}
+                      {/* 4.27up 阶段一：视图切换 Tab · 6.3up · 右侧紧邻分类标签 chip（折叠态从头部下沉）*/}
+                      <div className="flex items-center gap-3 mb-3 flex-wrap">
+                        <div className="flex items-center gap-1 p-0.5 bg-gray-100 rounded-[8px] w-fit shrink-0">
+                          {(["list", "flow"] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              onClick={() => setViewMode(wf.id, mode)}
+                              className={`px-3 py-1 text-xs rounded-[6px] transition-colors ${
+                                getViewMode(wf.id) === mode
+                                  ? "bg-white text-[#002FA7] shadow-sm font-medium"
+                                  : "text-gray-500 hover:text-gray-700"
+                              }`}
+                            >
+                              {mode === "flow" ? "流程图" : "列表"}
+                            </button>
+                          ))}
+                        </div>
+                        {/* 6.3up · 分类标签 + 可见范围 聚合 chip 行（紧贴 Tab 右侧；都是图标按钮 + 点击 popup）*/}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {/* 分类标签 chip · 聚合为单按钮 · 点击 popup 显示所有标签名 + 图标 */}
+                          <ChipPopover
+                            label="标签"
+                            theme="green"
+                            triggerIcon={<Tag size={12} />}
+                            items={(wf.categoryIds ?? [])
+                              .map((cid) => {
+                                const cat = categories.find((c) => c.id === cid);
+                                if (!cat) return null;
+                                return { name: cat.name, iconUrl: cat.icon_url };
+                              })
+                              .filter(Boolean) as ChipItem[]}
+                          />
+                          {/* 6.3up · 可见范围 chip · 「指定 XXX」改为 Home 按钮 + 点击 popup */}
+                          {wf.visible_to === "org_only" && (() => {
+                            // 5.9up · 区分两种 'org_only' 语义：
+                            //   - 无 scope=org permission → "仅组织用户" 文字 chip（无 popup）
+                            //   - 有 scope=org permission → Home 按钮 + popup
+                            const orgRules = (wf.permissions ?? []).filter((r) => r.scope_type === "org");
+                            if (orgRules.length === 0) {
+                              return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">仅组织用户</span>;
+                            }
+                            const items: ChipItem[] = orgRules
+                              .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id ?? "")
+                              .filter((n): n is string => !!n)
+                              .map((name) => ({ name }));
+                            return <ChipPopover label="指定组织" theme="amber" triggerIcon={<Home size={12} />} items={items} />;
+                          })()}
+                          {wf.visible_to === "personal_only" && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">仅个人用户</span>
+                          )}
+                          {wf.visible_to === "custom" && (() => {
+                            const rules = wf.permissions ?? [];
+                            const firstType = rules[0]?.scope_type;
+                            const typeLabel = firstType === "dept" ? "指定部门"
+                                           : firstType === "team" ? "指定小组"
+                                           : "指定组织";
+                            // 5.9up · 把 scope_id 解析成可读名称；dept/team 带上母公司前缀，便于跨组织辨认
+                            const items: ChipItem[] = rules.map((r): ChipItem => {
+                              if (r.scope_type === "org") {
+                                return { name: tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id ?? "" };
+                              }
+                              if (r.scope_type === "dept") {
+                                const d = allDepts.find((x) => x.id === r.scope_id);
+                                if (!d) return { name: r.scope_id ?? "" };
+                                const tenant = tenants.find((t) => t.code === d.tenant_code)?.name;
+                                return { name: tenant ? `${tenant} / ${d.name}` : d.name };
+                              }
+                              if (r.scope_type === "team") {
+                                const tm = allTeams.find((x) => x.id === r.scope_id);
+                                if (!tm) return { name: r.scope_id ?? "" };
+                                const d = allDepts.find((x) => x.id === tm.dept_id);
+                                const tenant = d ? tenants.find((t) => t.code === d.tenant_code)?.name : null;
+                                if (tenant && d) return { name: `${tenant} / ${d.name} / ${tm.name}` };
+                                if (d) return { name: `${d.name} / ${tm.name}` };
+                                return { name: tm.name };
+                              }
+                              return { name: r.scope_id ?? "" };
+                            }).filter((it) => !!it.name);
+                            return <ChipPopover label={typeLabel} theme="amber" triggerIcon={<Home size={12} />} items={items} />;
+                          })()}
+                          {/* 兼容旧数据：visible_to 不是任何预设也不是 custom，走旧的逗号分隔组织码格式 */}
+                          {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && (
+                            <ChipPopover label="指定组织可见" theme="amber" triggerIcon={<Home size={12} />} items={[{ name: wf.visible_to }]} />
+                          )}
+                          {/* 5.12up 创建者徽章 · 6.3up 下沉到此处 · Lock 按钮 + popup 显示可修改本工作流的管理员 */}
+                          {wf.created_by_role && (() => {
+                            const creatorLevel = ROLE_LEVEL_MAP[wf.created_by_role] ?? 0;
+                            const allowedRoles = (["super_admin", "system_admin", "org_admin"] as const)
+                              .filter((role) => (ROLE_LEVEL_MAP[role] ?? 0) >= creatorLevel);
+                            const items: ChipItem[] = allowedRoles.map((role) => ({
+                              name: ROLE_LABEL_MAP[role] ?? role,
+                            }));
+                            return <ChipPopover label="可修改本工作流的管理员" theme="gray" triggerIcon={<Lock size={12} />} items={items} />;
+                          })()}
+                        </div>
                       </div>
+
+                      {/* 6.3up · 完整简介行（不 truncate · 多行 wrap · 折叠态从头部下沉）*/}
+                      {wf.description && (
+                        <p className="text-sm text-gray-500 mb-3 leading-relaxed whitespace-pre-wrap">{wf.description}</p>
+                      )}
 
                       {getViewMode(wf.id) === "flow" ? (
                         <WorkflowFlowView
@@ -1083,92 +1080,15 @@ export default function WorkflowsAdminPage() {
               );
             })}
               </div>
+              )}
             </div>
-            ))}
+            );
+            })}
           </div>
         );
         })()}
 
-        </>}
-
-        {/* 分类管理 Tab */}
-        {activeTab === "categories" && (
-          <Card padding="lg">
-            <div className="flex items-center gap-2 mb-4">
-              <input
-                className={`flex-1 h-10 border rounded-[10px] px-4 text-sm focus:outline-none transition-colors ${
-                  catNameHint
-                    ? "border-red-400 placeholder:text-red-500 focus:border-red-500"
-                    : "border-gray-200 focus:border-[#002FA7]"
-                }`}
-                placeholder={catNameHint || "新分类名称…"}
-                value={newCatName}
-                onChange={(e) => {
-                  setNewCatName(e.target.value);
-                  if (catNameHint) setCatNameHint("");
-                }}
-                onFocus={() => {
-                  if (catNameHint) setCatNameHint("");
-                }}
-                onKeyDown={(e) => e.key === "Enter" && addWfCategory()}
-              />
-              <Button size="sm" onClick={addWfCategory} className="gap-1"><Plus size={14} /> 添加</Button>
-            </div>
-            <div className="space-y-2">
-              {categories.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-6">暂无分类，在上方输入名称后回车或点击添加</p>
-              ) : categories.map((cat) => (
-                <div key={cat.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-[12px]">
-                  {editingCatId === cat.id ? (
-                    <div className="flex items-center gap-2 flex-1">
-                      <Tag size={15} className="text-[#002FA7] shrink-0" />
-                      <input
-                        autoFocus
-                        className="flex-1 h-9 border border-[#002FA7]/40 rounded-[8px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
-                        value={editingCatName}
-                        onChange={(e) => setEditingCatName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveEditWfCat(cat.id);
-                          if (e.key === "Escape") { setEditingCatId(null); setEditingCatName(""); }
-                        }}
-                      />
-                      <button onClick={() => saveEditWfCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认" aria-label="确认"><Check size={13} /></button>
-                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消" aria-label="取消"><X size={13} /></button>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-3">
-                        {cat.icon_url ? (
-                          <div className="w-8 h-8 rounded-[8px] overflow-hidden bg-white border border-gray-200 flex items-center justify-center">
-                            {/* 用户上传图标，URL 动态不在 next/image remotePatterns 内 */}
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={cat.icon_url} alt={cat.name} className="w-full h-full object-contain" />
-                          </div>
-                        ) : (
-                          <div className="w-8 h-8 rounded-[8px] bg-[#002FA7]/8 flex items-center justify-center">
-                            <Tag size={15} className="text-[#002FA7]" />
-                          </div>
-                        )}
-                        <span className="font-medium text-gray-800">{cat.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <label className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors cursor-pointer" title={cat.icon_url ? "替换图标" : "上传图标"}>
-                          <input type="file" accept=".png,.jpg,.jpeg,.svg,.webp" className="hidden" onChange={(e) => handleWfCatIcon(cat.id, e)} />
-                          <ImageIcon size={13} />
-                        </label>
-                        {cat.icon_url && (
-                          <button onClick={() => removeWfCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标" aria-label="删除图标"><X size={13} /></button>
-                        )}
-                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Pencil size={13} /></button>
-                        <button onClick={() => deleteWfCat(cat)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={13} /></button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
-        )}
+        </>
 
       </div>
 
@@ -1184,9 +1104,9 @@ export default function WorkflowsAdminPage() {
                 <textarea rows={2} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="简短描述工作流用途…" value={wfForm.description} onChange={(e) => setWfForm({ ...wfForm, description: e.target.value })} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-gray-700">所属分类（可多选）</label>
+                <label className="text-sm font-medium text-gray-700">所属标签（可多选）</label>
                 {categories.length === 0 ? (
-                  <p className="text-xs text-gray-400">暂无分类，请先在「分类管理」Tab 中创建</p>
+                  <p className="text-xs text-gray-400">暂无标签，请先在「标签管理」中创建</p>
                 ) : (
                   <>
                     <div className="border border-gray-200 rounded-[12px] p-3 max-h-36 overflow-y-auto space-y-1.5">
@@ -1210,11 +1130,11 @@ export default function WorkflowsAdminPage() {
                         );
                       })}
                     </div>
-                    <p className="text-xs text-gray-400">不选则此工作流不出现在任何分类筛选下</p>
+                    <p className="text-xs text-gray-400">不选则此工作流不出现在任何标签筛选下</p>
                   </>
                 )}
               </div>
-              <Input label="排序（数字越小越靠前）" type="number" value={String(wfForm.sortOrder)} onChange={(e) => setWfForm({ ...wfForm, sortOrder: Number(e.target.value) })} />
+              {/* R1.8 · 删除"排序"输入框 —— 全局排序由「分层级配置」管理；新建自动接末尾；DB 字段保留作为兜底键 */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
                 {/* 5.9up · org_admin 限定本组织范围三档可选 */}
@@ -1968,5 +1888,77 @@ function AgentBindPopover(props: {
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── 6.3up · 通用 ChipPopover · 按钮 + 点击 popup 看列表 ────────────
+// 用于可见范围（橙色 Home）+ 分类标签（绿色 Tag）等聚合场景。
+// 单个时只显示图标；多个时图标 + 数字徽章；点击弹小窗列出全部 items。
+// 用 backdrop fixed inset-0 实现 outside click 关闭，无新依赖。
+type ChipItem = { name: string; iconUrl?: string | null };
+const CHIP_THEME = {
+  amber: { bg: "bg-amber-50", text: "text-amber-600", hover: "hover:bg-amber-100" },
+  green: { bg: "bg-green-50", text: "text-green-700", hover: "hover:bg-green-100" },
+  gray:  { bg: "bg-gray-50",  text: "text-gray-500",  hover: "hover:bg-gray-100"  },
+} as const;
+
+function ChipPopover({
+  label,
+  items,
+  triggerIcon,
+  theme,
+}: {
+  label: string;
+  items: ChipItem[];
+  triggerIcon: React.ReactNode;
+  theme: keyof typeof CHIP_THEME;
+}) {
+  const [open, setOpen] = useState(false);
+  const count = items.length;
+  if (count === 0) return null;
+  const colors = CHIP_THEME[theme];
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium transition-colors ${colors.bg} ${colors.text} ${colors.hover}`}
+        title={`${label}（共 ${count} 项）`}
+        aria-label={`${label} 详情`}
+      >
+        {triggerIcon}
+        {count > 1 && <span>{count}</span>}
+      </button>
+      {open && (
+        <>
+          {/* backdrop · 点击外部关闭 */}
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="absolute z-50 top-full left-0 mt-1 min-w-[240px] max-w-[360px] bg-white rounded-[10px] shadow-lg border border-gray-100 p-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <span className={colors.text}>{triggerIcon}</span>
+              <span className="text-xs font-medium text-gray-700 whitespace-nowrap">{label}</span>
+              <span className="ml-auto text-[10px] text-gray-400 whitespace-nowrap">{count} 项</span>
+            </div>
+            <ul className="space-y-1 max-h-48 overflow-y-auto">
+              {items.map((item, i) => (
+                <li key={i} className="flex items-center gap-2 text-xs text-gray-600 px-1 py-0.5 hover:bg-gray-50 rounded">
+                  {item.iconUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={item.iconUrl} alt="" className="w-3.5 h-3.5 rounded-[3px] object-contain shrink-0" />
+                  )}
+                  <span className="break-all">{item.name}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
+    </span>
   );
 }

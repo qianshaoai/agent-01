@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { buildVisibilityCtx, isWorkflowVisible } from "@/lib/workflow-visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -89,11 +90,16 @@ export async function POST(req: NextRequest) {
   // 验证工作流存在且启用
   const { data: wf } = await db
     .from("workflows")
-    .select("id, name")
+    .select("id, name, visible_to")
     .eq("id", workflowId)
     .eq("enabled", true)
     .single();
   if (!wf) return NextResponse.json({ error: "工作流不存在" }, { status: 404 });
+
+  // 6.3up R1.1 · 可见性闸门：之前只校验 enabled，知 id 即可创会话（信息泄露 + 越权）。
+  const ctx = await buildVisibilityCtx(user);
+  const visible = await isWorkflowVisible(wf.id, wf.visible_to ?? null, ctx);
+  if (!visible) return NextResponse.json({ error: "工作流不存在" }, { status: 404 });
 
   const { data: dbUser } = await db
     .from("users")

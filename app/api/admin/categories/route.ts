@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { isTagAdmin } from "@/lib/admin-permissions";
 
 export async function GET(req: NextRequest) {
   { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
@@ -20,6 +21,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
 
   const { name } = await req.json();
   if (!name?.trim()) return apiError("分类名称不能为空", "VALIDATION_ERROR");

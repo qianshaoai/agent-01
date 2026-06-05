@@ -19,6 +19,7 @@ import {
   Plug,
   Hammer,
   BookOpen,
+  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +40,8 @@ const SUPER_ONLY: AdminRole[] = ["super_admin"];
 //   原本独占 super + system，5.30up 放权 org_admin 后两个菜单都切到 RBAC_SCOPED_ROLES，
 //   无其它消费方，按 lint 要求删除以保持代码清洁。
 const RBAC_SCOPED_ROLES: AdminRole[] = ["super_admin", "system_admin", "org_admin"];
+// 6.5up · 标签管理仅 super + system（与 isTagAdmin 服务端拦截一致 · org_admin 隐藏菜单）
+const TAG_ADMIN_ROLES: AdminRole[] = ["super_admin", "system_admin"];
 
 const navGroups: NavGroup[] = [
   {
@@ -63,6 +66,7 @@ const navGroups: NavGroup[] = [
       { href: "/admin/knowledge-bases", label: "知识库管理", icon: BookOpen,  allowedRoles: RBAC_SCOPED_ROLES },
       { href: "/admin/agents",          label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES },
       { href: "/admin/workflows",       label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES },
+      { href: "/admin/tags",            label: "标签管理",   icon: Tag,       allowedRoles: TAG_ADMIN_ROLES },
       { href: "/admin/notices",         label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES },
     ],
   },

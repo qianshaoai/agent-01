@@ -2,21 +2,32 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireFullUser } from "@/lib/auth";
 import { getActiveUser } from "@/lib/session";
 import { db } from "@/lib/db";
+import { buildVisibilityCtx, filterVisibleWorkflows } from "@/lib/workflow-visibility";
 
 export const dynamic = "force-dynamic";
+
+// R1.5 · 强制浏览器层不缓存
+// 起因：dynamic="force-dynamic" 只保证服务端不缓存；但前端用普通 fetch("/api/workflows")
+// 时，浏览器会按 HTTP 启发式缓存返回旧响应，导致管理员改了用户 dept/team 后
+// F5 软刷新仍看旧排序（必须 Ctrl+Shift+R 或重新登录）。这里在 server 响应直接
+// 声明 no-store，避免任何调用方踩这个坑（前端 fetch 也会显式标注 no-store）。
+const NO_STORE_HEADERS = { "Cache-Control": "no-store, max-age=0" } as const;
 
 export async function GET(req: NextRequest) {
   // 5.7up · 用 getActiveUser（DB-fresh role）而非 getCurrentUser（JWT 快照）
   // 这样 admin 改完用户 role 后，用户**刷新即可切换**可见工作流，无需重登
   const user = await getActiveUser();
-  if (!user) return NextResponse.json({ error: "未登录" }, { status: 401 });
+  if (!user) return NextResponse.json({ error: "未登录" }, { status: 401, headers: NO_STORE_HEADERS });
   const guard = requireFullUser(user);
   if (guard) return guard;
 
   const { searchParams } = new URL(req.url);
   const categoryId = searchParams.get("categoryId");
 
-  // 硬上限 500，防止组织规模过大时前台一次拉取过量数据
+  // 6.3up R1.2 Finding 2 修复：去掉 .limit(500)。
+  // 旧版在可见性过滤 + scope 排序前就按全局 sort_order 截断 500 条，导致
+  // 团队/部门排序靠前但全局排在 500 名外的工作流永远出不来。
+  // 业务上 enabled 工作流总量在百级，全量拉的成本可接受；未来真到上千级再上分页。
   let query = db
     .from("workflows")
     .select(`
@@ -27,8 +38,7 @@ export async function GET(req: NextRequest) {
       )
     `)
     .eq("enabled", true)
-    .order("sort_order", { ascending: true })
-    .limit(500);
+    .order("sort_order", { ascending: true });
 
   // 如果指定了分类，先查出属于该分类的工作流 ID
   if (categoryId && categoryId !== "__all__") {
@@ -38,126 +48,43 @@ export async function GET(req: NextRequest) {
       .eq("category_id", categoryId);
 
     const ids = (links ?? []).map((l: { workflow_id: string }) => l.workflow_id);
-    if (ids.length === 0) return NextResponse.json([]);
+    if (ids.length === 0) return NextResponse.json([], { headers: NO_STORE_HEADERS });
 
     query = query.in("id", ids);
   }
 
   const { data, error } = await query;
-  if (error) return NextResponse.json([]);
+  if (error) return NextResponse.json([], { headers: NO_STORE_HEADERS });
 
-  const tenantCode = user.tenantCode ?? "";
-  const isPersonal = user.isPersonal ?? !tenantCode;
   const workflows = data ?? [];
 
-  // 5.7up · system_admin 用户端跳过可见性过滤，直接返回所有 enabled 工作流
-  if (user.role === "system_admin") {
-    const result = workflows.map((wf) => ({
-      ...wf,
-      workflow_steps: (wf.workflow_steps ?? [])
-        .filter((s: { enabled: boolean }) => s.enabled)
-        .sort((a: { step_order: number }, b: { step_order: number }) => a.step_order - b.step_order),
-    }));
-    return NextResponse.json(result);
-  }
+  // 6.3up R1.1 · 统一可见性 helper（顶替原 5.7up org_admin 豁免 + 各 visible_to 判定）
+  // helper 内含：system_admin 全放行 / org_admin 本组织豁免 / all/org_only/custom/personal_only
+  //   /旧逗号分隔租户码 兼容；org_only 改为查 permissions（修复跨组织泄露）。
+  const ctx = await buildVisibilityCtx(user);
+  const visibleIds = await filterVisibleWorkflows(
+    workflows.map((wf) => ({ id: wf.id, visible_to: wf.visible_to ?? null })),
+    ctx
+  );
 
-  // 需要查权限表的工作流 ID（visible_to === 'custom' 或旧的逗号分隔格式）
-  const customIds = workflows
-    .filter((wf) => {
-      if (!wf.visible_to) return false;
-      return wf.visible_to === "custom" || !["all", "org_only", "personal_only"].includes(wf.visible_to);
-    })
-    .map((wf) => wf.id);
-
-  // 取当前用户的 dept_id / team_id（可能为空）
-  let userDeptId: string | null = null;
-  let userTeamId: string | null = null;
-  if (!isPersonal) {
-    const { data: userRow } = await db
-      .from("users")
-      .select("dept_id, team_id")
-      .eq("id", user.userId)
-      .single();
-    userDeptId = userRow?.dept_id ?? null;
-    userTeamId = userRow?.team_id ?? null;
-  }
-
-  // 5.7up · org_admin 在用户端享受"本组织所有工作流"豁免：
-  //   除了正常匹配规则外，凡是 resource_permissions 里 scope=本组织/部门/小组 的工作流都可见
-  let orgAdminScopedWorkflowIds = new Set<string>();
-  if (user.role === "org_admin" && tenantCode) {
-    // 取本组织下所有部门 / 小组 id
-    const [{ data: depts }, { data: teams }] = await Promise.all([
-      db.from("departments").select("id").eq("tenant_code", tenantCode),
-      db.from("teams").select("id").eq("tenant_code", tenantCode),
-    ]);
-    const deptIds = (depts ?? []).map((d: { id: string }) => d.id);
-    const teamIds = (teams ?? []).map((t: { id: string }) => t.id);
-
-    const orFilters: string[] = [`and(scope_type.eq.org,scope_id.eq.${tenantCode})`];
-    if (deptIds.length > 0) {
-      orFilters.push(`and(scope_type.eq.dept,scope_id.in.(${deptIds.join(",")}))`);
-    }
-    if (teamIds.length > 0) {
-      orFilters.push(`and(scope_type.eq.team,scope_id.in.(${teamIds.join(",")}))`);
-    }
-
-    const { data: scoped } = await db
-      .from("resource_permissions")
-      .select("resource_id")
-      .eq("resource_type", "workflow")
-      .or(orFilters.join(","));
-    orgAdminScopedWorkflowIds = new Set(
-      (scoped ?? []).map((r: { resource_id: string }) => r.resource_id)
-    );
-  }
-
-  // 批量查询这些 custom 工作流的权限规则
-  const permMap = new Map<string, { scope_type: string; scope_id: string | null }[]>();
-  if (customIds.length > 0) {
-    const { data: perms } = await db
-      .from("resource_permissions")
-      .select("resource_id, scope_type, scope_id")
-      .eq("resource_type", "workflow")
-      .in("resource_id", customIds);
-    for (const p of (perms ?? []) as { resource_id: string; scope_type: string; scope_id: string | null }[]) {
-      const arr = permMap.get(p.resource_id) ?? [];
-      arr.push({ scope_type: p.scope_type, scope_id: p.scope_id });
-      permMap.set(p.resource_id, arr);
+  // 6.3up R1.1 · Phase 4 · 层级排序回退（team > dept > org > workflows.sort_order）
+  // system_admin 跳过排序（保持现状全量按 workflows.sort_order）；其它角色调 RPC。
+  const scopeOrderMap = new Map<string, number>();
+  if (user.role !== "system_admin") {
+    const { data: orderRows } = await db.rpc("get_user_workflow_order", { p_user_id: user.userId });
+    for (const row of (orderRows ?? []) as { workflow_id: string; sort_order: number }[]) {
+      scopeOrderMap.set(row.workflow_id, row.sort_order);
     }
   }
 
-  // 权限过滤
-  const visible = workflows.filter((wf) => {
-    // 5.7up · org_admin 豁免：只要工作流的权限规则覆盖了本组织/本组织部门/本组织小组就可见
-    if (user.role === "org_admin" && orgAdminScopedWorkflowIds.has(wf.id)) {
-      return true;
-    }
+  const visible = workflows.filter((wf) => visibleIds.has(wf.id));
 
-    if (wf.visible_to === "all") return true;
-    if (wf.visible_to === "org_only") return !isPersonal;
-    if (wf.visible_to === "personal_only") return isPersonal;
-
-    // custom 模式：查权限规则
-    if (wf.visible_to === "custom") {
-      const rules = permMap.get(wf.id) ?? [];
-      if (rules.length === 0) return false;  // custom 但没规则 → 不可见
-      return rules.some((r) => {
-        switch (r.scope_type) {
-          case "all": return true;
-          case "org":  return !!tenantCode && r.scope_id === tenantCode;
-          case "dept": return !!userDeptId && r.scope_id === userDeptId;
-          case "team": return !!userTeamId && r.scope_id === userTeamId;
-          case "user_type": return r.scope_id === (isPersonal ? "personal" : "organization");
-          case "user": return r.scope_id === user.userId;
-          default: return false;
-        }
-      });
-    }
-
-    // 兼容旧数据：逗号分隔的组织码（未迁移到 custom + resource_permissions 的情况）
-    const allowed = wf.visible_to.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean);
-    return allowed.includes(tenantCode.toUpperCase());
+  // 最终排序：COALESCE(scope_order, workflows.sort_order, 999999) ASC, id ASC
+  visible.sort((a, b) => {
+    const aOrder = scopeOrderMap.get(a.id) ?? a.sort_order ?? 999999;
+    const bOrder = scopeOrderMap.get(b.id) ?? b.sort_order ?? 999999;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
   const result = visible.map((wf) => ({
@@ -167,5 +94,5 @@ export async function GET(req: NextRequest) {
       .sort((a: { step_order: number }, b: { step_order: number }) => a.step_order - b.step_order),
   }));
 
-  return NextResponse.json(result);
+  return NextResponse.json(result, { headers: NO_STORE_HEADERS });
 }

@@ -12,6 +12,7 @@ import type { KbSearchResult } from "@/lib/kb/types";
 
 import { CHAT } from "@/lib/config";
 import { humanizeChatError } from "@/lib/chat-error";
+import { filterVisibleWorkflows, type UserVisibilityCtx } from "@/lib/workflow-visibility";
 const MAX_CONTEXT_TURNS = CHAT.MAX_CONTEXT_TURNS;
 
 // 5.19up 知识库B · 组织用户对某 agent 是否有访问权 —— 与前台智能体列表 / 工作流同口径。
@@ -76,27 +77,23 @@ async function orgUserCanSeeAgent(
     .in("id", candidateWfIds)
     .eq("enabled", true);
   const wfRows = (enabledWfRows ?? []) as { id: string; visible_to: string | null }[];
-  const wfIds = wfRows.map((w) => w.id);
-  if (wfIds.length === 0) return false;
+  if (wfRows.length === 0) return false;
 
-  // 2a. 工作流命中用户权限行（新口径）
-  const { data: wfHit } = await db
-    .from("resource_permissions")
-    .select("resource_id")
-    .eq("resource_type", "workflow")
-    .in("resource_id", wfIds)
-    .or(orFilter)
-    .limit(1);
-  if (wfHit && wfHit.length > 0) return true;
-
-  // 2b. 兼容旧数据：workflows.visible_to 为 "all" 或逗号分隔组织码（未迁到权限表的工作流）
-  const tc = (tenantCode ?? "").toUpperCase();
-  for (const w of wfRows) {
-    const vt = String(w.visible_to ?? "");
-    if (vt === "all") return true;
-    if (vt.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean).includes(tc)) return true;
-  }
-  return false;
+  // 6.3up R1.1 · 用统一 helper 做工作流可见性判定，替换原 2a/2b 分支
+  //   helper 内含：org_admin 豁免 / all / org_only(查 permissions) / custom / 旧逗号分隔兼容
+  //   ctx.role 这里设 'user'（org user 路径）；isPersonal=false（函数入口已是 org user）
+  //   dept/team/group 已在函数顶部查过，直接组装传入避免重复查询。
+  const ctx: UserVisibilityCtx = {
+    userId,
+    tenantCode: tenantCode ?? null,
+    isPersonal: false,
+    role: "user",
+    deptId,
+    teamId,
+    groupIds,
+  };
+  const visibleSet = await filterVisibleWorkflows(wfRows, ctx);
+  return visibleSet.size > 0;
 }
 
 export const POST = withRequestLog(async (

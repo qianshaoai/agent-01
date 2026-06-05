@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { buildVisibilityCtx, isWorkflowVisible } from "@/lib/workflow-visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export async function GET(
   const { data: workflow, error } = await db
     .from("workflows")
     .select(`
-      id, name, description,
+      id, name, description, visible_to,
       workflow_steps (
         id, step_order, title, description, exec_type, agent_id, button_text, enabled,
         agents:agent_id ( id, agent_code, name, agent_type, external_url )
@@ -29,6 +30,14 @@ export async function GET(
     .single();
 
   if (error || !workflow) {
+    return NextResponse.json({ error: "工作流不存在" }, { status: 404 });
+  }
+
+  // 6.3up R1.1 · 可见性闸门：之前只校验 enabled，知 id 即可取步骤。
+  // 不可见返回 404（与"工作流不存在"同口径，避免靠错误信息探测存在性）。
+  const ctx = await buildVisibilityCtx(user);
+  const visible = await isWorkflowVisible(workflow.id, workflow.visible_to ?? null, ctx);
+  if (!visible) {
     return NextResponse.json({ error: "工作流不存在" }, { status: 404 });
   }
 

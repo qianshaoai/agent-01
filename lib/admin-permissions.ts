@@ -48,3 +48,33 @@ export function roleLabel(role: AdminRole | null | undefined): string {
 export function noWritePermissionMessage(creatorRole: AdminRole | null | undefined): string {
   return `无权操作：该工作流由${roleLabel(creatorRole)}创建，需要同级或更高权限`;
 }
+
+/**
+ * 6.5up · 标签管理（含 category_agent_display）写操作权限闸门。
+ * 范围：super_admin + system_admin；org_admin 拒绝。
+ *
+ * 调用方：
+ *  - 服务端 10 个写 endpoint：`if (!isTagAdmin(admin.role)) return apiError(...)`
+ *  - 页面级 guard：必须等 me 加载完成（role 非 null）后再判断，避免初始 null 误跳
+ *
+ * role 为 null/undefined（未登录/me 未返回）→ false（拒绝）。
+ */
+export function isTagAdmin(role: AdminRole | null | undefined): boolean {
+  return role === "super_admin" || role === "system_admin";
+}
+
+/**
+ * 6.3up R1.1 · 工作流分层级配置（/admin/workflow-config）写操作权限闸门。
+ * 范围：super_admin + system_admin；org_admin 拒绝（跨组织配置应集中在平台管理员）。
+ *
+ * 决策点 3 拍板：(a) super + system_admin；org_admin 后续如有需求再放开。
+ *
+ * 调用方：
+ *  - 服务端 4 个写 endpoint：`if (!isWorkflowConfigAdmin(admin.role)) return apiError(...)`
+ *  - 页面级 guard / 入口按钮（/admin/workflows 头部）的角色隐藏
+ *
+ * role 为 null/undefined（未登录/me 未返回）→ false（拒绝）。
+ */
+export function isWorkflowConfigAdmin(role: AdminRole | null | undefined): boolean {
+  return role === "super_admin" || role === "system_admin";
+}

@@ -217,7 +217,9 @@ export default function HomePage() {
           fetch(`/api/notices?tenantCode=${meData.tenantCode}`)
             .then((r) => r.json())
             .catch(() => []),
-          fetch("/api/workflows")
+          // R1.5 · 显式 no-store：管理员改 dept/team 后 F5 必须能立刻拿到新排序，
+          // 不走浏览器 HTTP 缓存（后端响应也声明了 no-store，双层兜底）
+          fetch("/api/workflows", { cache: "no-store" })
             .then((r) => r.json())
             .catch(() => []),
           fetch("/api/workflow-sessions")

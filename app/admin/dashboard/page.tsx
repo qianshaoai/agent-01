@@ -39,7 +39,7 @@ export default function DashboardPage() {
   const cards = [
     { label: "组织管理", desc: "新增/编辑/禁用组织，配置额度与到期", icon: Building2, href: "/admin/tenants", count: data?.totalTenants ?? "—", countLabel: "家组织", color: "bg-blue-50 text-blue-600" },
     { label: "用户管理", desc: "用户账号、角色与分组管理", icon: Users, href: "/admin/users", count: userCount || "—", countLabel: "用户总数", color: "bg-indigo-50 text-indigo-600" },
-    { label: "智能体管理", desc: "管理分类与智能体，配置 API 对接", icon: Bot, href: "/admin/agents", count: agentCount || "—", countLabel: "个智能体", color: "bg-purple-50 text-purple-600" },
+    { label: "智能体管理", desc: "管理智能体与权限，配置 API 对接", icon: Bot, href: "/admin/agents", count: agentCount || "—", countLabel: "个智能体", color: "bg-purple-50 text-purple-600" },
     { label: "公告管理", desc: "配置全局公告与组织专属公告", icon: Megaphone, href: "/admin/notices", count: noticeCount || "—", countLabel: "条公告", color: "bg-amber-50 text-amber-600" },
     { label: "用量看板", desc: "组织用量统计与 Top 智能体分析", icon: BarChart3, href: "/admin/analytics", count: data?.totalCalls ?? "—", countLabel: "总调用次数", color: "bg-green-50 text-green-600" },
     { label: "操作日志", desc: "登录、调用、失败等全量日志查询", icon: FileText, href: "/admin/logs", count: "实时", countLabel: "审计日志", color: "bg-gray-50 text-gray-600" },

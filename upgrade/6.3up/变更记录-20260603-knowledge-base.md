@@ -1,0 +1,326 @@
+### 6.4up 变更记录
+
+日期：2026-06-03
+分支：`feature/6.2up-platform-input`（沿用 6.2up/6.3up 分支叠加）
+依据：[方案-知识库综合优化-20260603.md](./方案-知识库综合优化-20260603.md)（R0→R1→R1.1→R1.2 四审通过）
+位置：`upgrade/6.3up/`（原 6.4up · 6/3 合并）
+
+---
+
+## 背景
+
+用户 2026-06-03 dev 实测「办公环境管理智能体（anthropic / claude-opus-4-8）+ KB」
+发现 3 个痛点：
+
+1. RAG 召回率低 · 「我第一次轮值是啥时候」语义距离 > threshold 0.5 → 0 chunks
+2. 多轮记忆丢失 · 每轮独立检索，旧 chunks 立即丢失
+3. 无监控工具 · prompt / chunks / token 都看不到
+
+四轮方案评审收口路线 `1-E + 2-B+ + 3-A`：
+- 1-E: 降 threshold 0.5→0.35 + history-aware 历史拼接 query
+- 2-B+: 大记忆池（64）+ 小注入窗口（12/16/8 按模型档位）
+- 3-A: KB_DEBUG_PROMPT=1 双开关的 dev 调试日志
+
+---
+
+## 实施清单（一次性 commit）
+
+### Phase -1 · DB（先于代码）
+
+[supabase/migration_v45_kb_context_state.sql](../../supabase/migration_v45_kb_context_state.sql)（独立 commit `7ed2a30`）
+
+- 新表 `kb_context_state(conversation_id, chunk_id, first_seen_at, last_hit_at, hit_count, last_similarity)` + 2 索引 + 2 FK CASCADE
+- RPC `bump_kb_context_state(p_rows jsonb)`：atomic upsert + hit_count++ + is_current 控制 last_similarity 写入（R1.2-5 fail-loud）
+- RPC `trim_kb_context_state(p_conversation_id, p_max_size)`：按 last_hit_at desc 排，删 rn > p_max_size
+- RPC `rank_kb_context_chunks(p_chunk_ids, p_query vector, p_kb_ids)`：池内重排（R1.2-2 解决"旧资料随机复活"）
+- 与 migration_v42 RPC 同口径：active KB + done 文档 双 EXISTS
+
+[supabase/MIGRATIONS.md](../../supabase/MIGRATIONS.md) 加 v45 索引【🔑 6.4up 必跑】
+
+**用户已在 supabase Dashboard 跑通（2026-06-03）**
+
+### Phase 0a · `lib/kb/config.ts` · 新增 6 个常量
+
+```ts
+// 6.4up R1.1-1A · threshold 0.5 → 0.35
+export const KB_SIMILARITY_THRESHOLD = 0.35;
+
+// 6.4up R1.2 · 2-B+ 配置
+export const KB_MEMORY_POOL_SIZE = 64;
+export const KB_INJECT_K_BY_MODEL_TIER = { large: 16, default: 12, compact: 8 } as const;
+export const KB_INJECT_SCORE_WEIGHTS = {
+  is_current: 2.0, similarity: 1.5, hit_count: 0.3, recency: 0.5,
+} as const;
+export const KB_RETRIEVE_HISTORY_TURNS = 2;
+export const KB_RETRIEVE_QUERY_MAX_CHARS = 800;
+```
+
+### Phase 0b · `lib/kb/intent.ts` · R1.1-G 白名单收窄
+
+```diff
+- if (historyLength > 0 && t.length <= 6) return true;
++ const CONFIRM_OR_ACK_RE = /^(好的|好|嗯+|明白|收到|了解|知道了|清楚了|清楚|谢谢|多谢|可以|行|ok|OK)[。.！!~]?$/;
++ if (historyLength > 0 && t.length <= 6 && CONFIRM_OR_ACK_RE.test(t)) return true;
+```
+
+「职责呢?」「时间呢?」「谁负责?」等多轮短追问不再被前置过滤拦死。
+
+### Phase 0c · `lib/kb/retrieve.ts` · 拆 helper + 新加 fetchActiveChunksByIds
+
+- 新增 `buildKbExpandedQuery(query, history)`：1-C 历史拼接，去 `[参考：xx]` + `[附件内容]` 段，总长 ≤ 800 字符
+- 新增 `retrieveKbChunksByVec(kbIds, queryVec)`：底层 RPC 调用（chat route 复用 queryVec）
+- 老 `retrieveKbChunks(kbIds, query, history?)` 改薄壳：build + embed + retrieveByVec（test-chat 用）
+- 新增 `fetchActiveChunksByIds(chunkIds, agentKbIds)`：按 chunk_id 回查正文，**R1.2-4 严格按入参顺序 Map<id,row> + chunkIds.map 重排**，过滤 active KB + done 文档 + agentKbIds（与 migration_v42 同口径）
+
+### Phase 0d · 新建 `lib/kb/inject.ts` · 主流程收口
+
+- `pickInjectK(model)` 用正则匹配档位（LARGE_TIER_RE / COMPACT_TIER_RE）
+- `scoreCandidate(c, now)` 综合分公式（α·is_current + β·similarity + γ·log(hit_count) + δ·exp(-age/60min)）
+- `injectKbForTurn(args)` 完整流程（10 步）：
+  1+2. buildKbExpandedQuery + embedQuery
+  3. retrieveKbChunksByVec（本轮 RPC 命中）
+  4. SELECT kb_context_state（拉池）
+  5. RPC rank_kb_context_chunks（**R1.2-2 池内重排用本轮 queryVec**）
+  6. 综合分排序 → top K_inject
+  7. fetchActiveChunksByIds（回查正文 + 过滤）
+  8. RPC bump_kb_context_state（upsert + hit_count++ + **R1.2-5 is_current bool 明示**）
+  9. RPC trim_kb_context_state（容量裁剪）
+  10. SELECT count 池大小（日志用）
+- 返回 `{ injectedChunks, currentChunks, poolSize, expandedQuery }`
+
+### Phase 0e · 改 `app/api/agents/[id]/chat/route.ts`
+
+```diff
+- import { retrieveKbChunks } from "@/lib/kb/retrieve";
++ import { injectKbForTurn, pickInjectK } from "@/lib/kb/inject";
++ import type { KbSearchResult } from "@/lib/kb/types";
+
+// R1.1-H · 移除 wfCtx 短路
+- const skipKbForThisTurn = wfCtx !== null || isMetaOrChitchatMessage(message, history.length);
++ const skipKbForThisTurn = isMetaOrChitchatMessage(message, history.length);
+
+// KB 检索段：inline 检索 → injectKbForTurn 调用
+- const chunks = await retrieveKbChunks(kbIds, message);
+- kbInjectText = buildKbStrictAnswerPrompt(chunks);
+- retrievedChunks = chunks;
++ const result = await injectKbForTurn({
++   conversationId: convId, agentKbIds: kbIds, query: message, history,
++   model: (resolvedModelParams.model as string | undefined) ?? "",
++ });
++ kbInjectText = buildKbStrictAnswerPrompt(result.injectedChunks);
++ retrievedChunks = result.injectedChunks;
++ // R1.1-I 日志收集
++ dbgExpandedQuery = result.expandedQuery;
++ dbgCurrentChunksCount = result.currentChunks.length;
++ dbgPoolSize = result.poolSize;
+```
+
+R1.1-I 双开关日志在 messages 数组组装后：
+
+```ts
+if (process.env.NODE_ENV === "development" && process.env.KB_DEBUG_PROMPT === "1") {
+  console.log("[KB_DEBUG]", JSON.stringify({
+    agent, conversationId, platform, model, injectK,
+    currentQuery, expandedQueryPreview,
+    currentChunksCount, memoryPoolSize, injectedChunksCount,
+    injectedChunksDetail: [{ id, similarity, preview }],
+    messagesPreview: [{ role, preview }],
+    estimatedTokens,
+  }, null, 2));
+}
+```
+
+### Phase 0f · 改 `app/api/admin/agent-drafts/[id]/test-chat/route.ts`
+
+R1.2-1 · test-chat 不接 DB 记忆池：
+
+```diff
+- const chunks = await retrieveKbChunks(kbIds, message);
++ // 启用 1-C 历史拼接，但不接 DB 记忆池（草稿无正式 conversation_id）
++ const chunks = await retrieveKbChunks(kbIds, message, history);
+```
+
+### Phase 0g · 改 `app/admin/agent-builder/[id]/page.tsx`
+
+R1.2-1 · 测试聊天小字补「不累积 KB 记忆」：
+
+```diff
+- ? "测试不入库 / 不扣额度"
++ ? "测试不入库 / 不扣额度 / 不累积 KB 记忆"
+```
+
+### Phase 0h · 改 `.env.local.example`
+
+加 KB_DEBUG_PROMPT 注释行（默认关闭，开发者手动开）。
+
+---
+
+## 自动化验收
+
+- `npm run ci:typecheck` 通过
+- `npm run ci:lint` 通过（仅 `app/agents/[id]/page.tsx:778` pre-existing warning，与本改动无关）
+
+修复中遇到一次 TS 错误：`KbSearchResult.id` 是 optional 但 RPC 返回一定有 id，inject.ts 内加防御性 narrow（`if (!c.id) continue;`）后通过。
+
+---
+
+## 人工待跑（dev 实测 16 项）
+
+按方案 R1.1-M（10 项）+ R1.2-8（6 项）：
+
+**1-E 召回**：
+1. 降 threshold 0.35 后「我第一次轮值是啥时候」能命中 KB（旧 0.5 卡掉）
+2. 历史拼接 query：「轮值表」+「刚才那个职责是啥」连续问，第二条能命中第一条命中过的 chunk
+
+**R1.1-G 短追问**：
+3. 输入「好的」「明白」「ok」→ skipKbForThisTurn=true（日志可见）
+4. 输入「职责呢?」「时间呢?」→ 进 KB 检索（kbInjectText 非空）
+
+**R1.1-H wfCtx 不再跳 KB**：
+5. 工作流第 N 步首条问知识 → 不再被 wfCtx 短路；日志 currentChunksCount > 0
+
+**2-B+ 记忆累积**：
+6. 第 1 轮命中 [A,B]，第 2 轮命中 [C]，第 3 轮注入应 ≥ 3 个；前端 references 显示 ≥ 3
+7. injectK 按模型档位（Opus 16 / haiku 12 / flash 8，看日志 `injectK` 字段）
+8. 单 conversation 跑 30+ 轮独立问题，`SELECT count(*) FROM kb_context_state` ≤ 64
+9. admin 停用一个 KB → 下一轮该 KB 旧 chunks 不再出现在 injectedChunks
+
+**R1.1-I 双开关日志**：
+10. `KB_DEBUG_PROMPT=1` 时打 10 项字段；不设时不打
+
+**R1.2-1 test-chat**：
+11. 搭建器测试聊天 5 轮后 `SELECT count(*) FROM kb_context_state` 不增长
+12. 搭建器测试聊天区域可见「不累积 KB 记忆」小字
+
+**R1.2-2 池内重排**：
+13. 先聊话题 A 让池堆 8 个 A-chunks，切话题 B 问 1 轮 → injectedChunks 应以 B 相关为主，A-chunks 因 current_similarity 低被挤出
+
+**R1.2-3 expandedQuery 日志**：
+14. `KB_DEBUG_PROMPT=1` 日志含 `expandedQueryPreview` 字段（≠ currentQuery）
+
+**R1.2-4 注入顺序**：
+15. `injectedChunksDetail` 顺序 == `messagesPreview` user prefix 资料段顺序
+
+**R1.2-5 is_current 写入**：
+16. 跑 1 轮后 `SELECT chunk_id, last_similarity, hit_count FROM kb_context_state`：本轮 RPC 命中的 last_similarity = 真分；池里被注入但未 RPC 命中的保持旧值
+
+---
+
+## 改动文件清单
+
+| 状态 | 路径 | 行数变化 |
+|---|---|---|
+| 改 | `lib/kb/config.ts` | +33 / -3 |
+| 改 | `lib/kb/intent.ts` | +6 / -2 |
+| 改 | `lib/kb/retrieve.ts` | +106 / -38 |
+| 新建 | `lib/kb/inject.ts` | +199 |
+| 改 | `app/api/agents/[id]/chat/route.ts` | +60 / -23 |
+| 改 | `app/api/admin/agent-drafts/[id]/test-chat/route.ts` | +5 / -1 |
+| 改 | `app/admin/agent-builder/[id]/page.tsx` | +1 / -1 |
+| 改 | `.env.local.example` | +6 / 0 |
+| 新建 | `supabase/migration_v45_kb_context_state.sql` | +154（前 commit）|
+| 改 | `supabase/MIGRATIONS.md` | +1（前 commit）|
+| 新建 | `upgrade/6.4up/方案-知识库综合优化-20260603.md` | 已 commit |
+| 新建 | `upgrade/6.4up/变更记录-20260603.md`（本文件）| 当前 |
+
+---
+
+## 下一步
+
+1. 用户跑 dev 实测 16 项（开 `KB_DEBUG_PROMPT=1` 看日志验证）
+2. 通过 → PR 到 master2（与 6.2up + 6.3up 合并 PR 或独立看用户决定）
+3. 如有问题 follow-up commit fix
+
+---
+
+## R1.3 追加修订（2026-06-03 当日，Phase 0 已实施后补强）
+
+### 触发
+
+用户 dev 实测启动后两个观察：
+
+1. 池内 `rank_kb_context_chunks` 重排是"纯计算不过滤"，本轮 `currentChunks=[]` 时旧话题 chunks 可能靠 `hit_count + recency` 被靠分挤进 prompt → 污染回答
+2. 前端「引用知识库片段 0%」—— similarity 数字未传到 `messages.references` 落库
+
+小B 四审补 2 项实现约束 + Phase 0 自查发现 0% similarity 回填缺失。同时落地。
+
+### R1.3-1 · 池内重排最低相似度门槛
+
+[lib/kb/config.ts](../../lib/kb/config.ts) 新增：
+
+```ts
+export const KB_MEMORY_RECALL_MIN_SIMILARITY = 0.30;
+```
+
+[lib/kb/inject.ts](../../lib/kb/inject.ts) 池内 ranked 后加 `.filter`：
+
+```ts
+poolRanked = ((rankData ?? []) as RankRow[])
+  .filter((r) => r.current_similarity >= KB_MEMORY_RECALL_MIN_SIMILARITY);
+```
+
+**关键行为变化**：
+- `currentChunks` 不受影响（仍按 `KB_SIMILARITY_THRESHOLD=0.35` 控制）
+- 池内历史 chunks 必须满足 `current_similarity >= 0.30` 才能复活
+- 若本轮 `currentChunks=[]` 且池内全 < 0.30 → `injectedChunks=[]` → 走"未找到资料"分支（不再硬塞旧话题）
+
+### R1.3-2 · 归一化 helper
+
+[lib/kb/inject.ts](../../lib/kb/inject.ts) 新增：
+
+```ts
+type KbChunkWithId = KbSearchResult & { id: string; similarity: number };
+function normalizeKbChunksForMemory(chunks: KbSearchResult[]): KbChunkWithId[] { ... }
+```
+
+入口处 `rawCurrentChunks → normalize`；`InjectKbForTurnResult` 字段类型从 `KbSearchResult[]` 收紧为 `KbChunkWithId[]`；移除原先「`if (!c.id) continue` 防御 narrow」（已被 normalize 替代）。
+
+### 0% similarity 回填 fix
+
+[lib/kb/inject.ts](../../lib/kb/inject.ts) 候选选中后旁记 Map：
+
+```ts
+const selected = candidates.slice(0, k);
+const selectedIds = selected.map((c) => c.chunk_id);
+const simById = new Map<string, number>(selected.map((c) => [c.chunk_id, c.similarity]));
+
+const fetched = await fetchActiveChunksByIds(selectedIds, agentKbIds);
+const injectedChunks: KbChunkWithId[] = fetched
+  .filter((c): c is KbSearchResult & { id: string } => typeof c.id === "string" && c.id.length > 0)
+  .map((c) => ({ ...c, similarity: simById.get(c.id) ?? 0 }));
+```
+
+**修前 bug**：`fetchActiveChunksByIds` 只回查正文，硬塞 `similarity: 0` → 落库 → 前端引用率全 0%
+**修后**：current chunks 用 RPC 真分（0.35-1.0）；pool 复活的用 rank RPC 重算分（0.30-1.0）
+
+### 不动 retrieve.ts 的理由
+
+R1.3-2 方案文档说"可选"改 `fetchActiveChunksByIds` 返回类型。grep 确认只 `inject.ts` 一个调用方，且 `inject.ts` 已 `filter + map` 做防御 narrow + 回填 similarity。改 retrieve.ts 需 export `KbChunkWithId` 跨文件，反而增加耦合。维持现状。
+
+### 验收补充（在原 16 项基础上）
+
+17. 正式 chat 聊话题 A 累积池，再问明显无关话题 C；日志 `injectedChunksDetail` 不应出现 A chunks（current_similarity < 0.30 被门槛拦截）
+18. 正式 chat 聊话题 A 后短追问回到 A；A chunks 应能被重新注入（current_similarity ≥ 0.30 通过门槛）
+19. `npm run ci:typecheck` 不应因 `string | undefined` 传给 `Set/candidates/RPC row` 报错 ✅ 已验
+20. 前端「引用知识库片段」展示的相似度数字不再全是 0%（current 真分 / pool 重算分）
+
+### 改动文件 · R1.3
+
+| 类型 | 文件 | 行数 |
+|---|---|---|
+| 改 | `lib/kb/config.ts` | +8 |
+| 改 | `lib/kb/inject.ts` | +30 / -10 |
+| 改 | `upgrade/6.4up/方案-知识库综合优化-20260603.md` | +128（R1.3 章节，前 commit）|
+| 改 | `upgrade/6.4up/变更记录-20260603.md`（本文件）| 当前 |
+
+---
+
+## Commits（截至 R1.3）
+
+```
+7ed2a30 feat(6.4up Phase -1): migration_v45 KB 会话级记忆池 · 表 + 2 索引 + 3 RPC
+b86d143 feat(6.4up Phase 0): KB 综合优化 · 1-E + 2-B+ + 3-A 实施
+<new>  docs(6.4up): R1.3 收口小B 四审 2 项实现约束
+<new>  feat(6.4up R1.3): KB_MEMORY_RECALL_MIN_SIMILARITY + 归一化 helper
+<new>  fix(6.4up): injectedChunks similarity 字段未回填 · 前端引用率不再 0%
+```

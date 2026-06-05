@@ -8,8 +8,14 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, CheckCircle2, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, Pencil, Check, X, Building2, Image as ImageIcon, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight } from "lucide-react";
+import { Plus, Edit2, Key, Settings2, Bot, Tag, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, X, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight, ChevronDown, ChevronRight } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
+import {
+  schemaForPlatform,
+  parseAdvancedJson,
+  validateNumberField,
+  type PlatformSchema,
+} from "@/lib/platform-param-schema";
 
 type WorkflowRef = { id: string; name: string };
 type UsedByEntry = { id: string; name: string; stepCount: number };
@@ -38,6 +44,7 @@ type Agent = {
   permissions?: { scope_type: string; scope_id: string | null }[];
   workflows?: WorkflowRef[];
 };
+type ApiProvider = { id: string; name: string; platform: string; enabled: boolean };
 type Category = { id: string; name: string; icon_url?: string | null };
 type Tenant = { id: string; code: string; name: string };
 type Permission = { id: string; scope_type: string; scope_id: string | null; scope_label: string };
@@ -59,7 +66,58 @@ const PLATFORMS = ["coze", "dify", "qingyan", "yuanqi", "openai", "other"];
 // 5.15up PR-2 · 智能体平台 → API category（决定 API 配置下拉拉哪类命名 API）
 const AGENT_PLATFORMS = ["coze", "dify", "yuanqi", "qingyan"];
 const EMPTY_AGENT = { id: "", name: "", description: "", categoryIds: [] as string[], platform: "coze", agentType: "chat", externalUrl: "" };
-const EMPTY_API = { modelParams: '{"temperature": 0.7, "max_tokens": 2000}', providerId: "" };
+// 6.2up · API 配置弹窗状态：inputs（按 schema 拉的字段值） + advancedJson（schema 之外的 key） + 折叠展开状态
+type ApiFormState = {
+  providerId: string;
+  inputs: Record<string, string>;
+  advancedJson: string;
+  advancedOpen: boolean;
+};
+const EMPTY_API: ApiFormState = { providerId: "", inputs: {}, advancedJson: "", advancedOpen: false };
+
+function resolveEffectivePlatform(providerId: string, providers: ApiProvider[], agent: Agent): string {
+  const selectedProvider = providers.find((p) => p.id === providerId);
+  if (selectedProvider) return selectedProvider.platform;
+  if (providerId && providerId === agent.provider_id && agent.provider?.platform) return agent.provider.platform;
+  return agent.platform;
+}
+
+// 把存量 model_params（任意 key → value）按 schema 分流成 inputs / advancedJson 两段
+function splitParamsBySchema(
+  params: Record<string, unknown>,
+  schema: PlatformSchema,
+): { inputs: Record<string, string>; advancedJson: string } {
+  const inputs: Record<string, string> = {};
+  const extra: Record<string, unknown> = {};
+  const schemaKeys = new Set(schema.fields.map((f) => f.key));
+  for (const [k, v] of Object.entries(params)) {
+    if (schemaKeys.has(k)) inputs[k] = v === null || v === undefined ? "" : String(v);
+    else extra[k] = v;
+  }
+  return {
+    inputs,
+    advancedJson: Object.keys(extra).length > 0 ? JSON.stringify(extra, null, 2) : "",
+  };
+}
+
+// provider 切换 / apiProviders 异步加载时收集当前 form 已填的全部参数（用于 re-split）
+// JSON 解析失败时退到空，避免切换被卡（仍保留 inputs 里的值）
+function collectCurrentParams(form: ApiFormState, schema: PlatformSchema): Record<string, unknown> {
+  const adv = parseAdvancedJson(form.advancedJson);
+  const extra = adv.ok ? adv.value : {};
+  const inputParams: Record<string, unknown> = {};
+  for (const f of schema.fields) {
+    const raw = form.inputs[f.key] ?? "";
+    if (raw === "") continue;
+    if (f.type === "number") {
+      const n = Number(raw);
+      inputParams[f.key] = Number.isFinite(n) ? n : raw;
+    } else {
+      inputParams[f.key] = raw;
+    }
+  }
+  return { ...extra, ...inputParams };
+}
 
 export default function AgentsAdminPage() {
   const { toast } = useToast();
@@ -99,7 +157,17 @@ export default function AgentsAdminPage() {
       .catch(() => {});
   }, []);
   const isOrgAdmin = adminRole === "org_admin";
-  const [activeTab, setActiveTab] = useState<"agents" | "categories">("agents");
+  // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留智能体列表（无 Tab 切换）
+  // 6.3up · 智能体管理改风格 · 分类分组默认折叠 · 点 chevron 展开
+  const [expandedAgentSections, setExpandedAgentSections] = useState<Set<string>>(new Set());
+  function toggleAgentSection(id: string) {
+    setExpandedAgentSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [showApiModal, setShowApiModal] = useState<Agent | null>(null);
   const [showDisplayModal, setShowDisplayModal] = useState<Agent | null>(null);
@@ -107,15 +175,39 @@ export default function AgentsAdminPage() {
   const [displayLoading, setDisplayLoading] = useState(false);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [form, setForm] = useState(EMPTY_AGENT);
-  const [apiForm, setApiForm] = useState(EMPTY_API);
+  const [apiForm, setApiForm] = useState<ApiFormState>(EMPTY_API);
   // 5.15up PR-2 · API 配置弹窗的「命名 API」下拉选项
-  const [apiProviders, setApiProviders] = useState<{ id: string; name: string; platform: string; enabled: boolean }[]>([]);
+  const [apiProviders, setApiProviders] = useState<ApiProvider[]>([]);
+  // 6.2up · 记录上一次 effectivePlatform，用于在 provider 切换 / apiProviders 异步加载时触发 re-split
+  const prevEffPlatRef = useRef<string | null>(null);
+
+  // 6.2up · provider 切换 / apiProviders 异步加载时按新 schema 重做分流
+  // 通用字段（model/temperature/max_tokens）继续显示；平台专属字段（bot_id 等）归入高级 JSON，不静默丢弃
+  useEffect(() => {
+    if (!showApiModal) {
+      prevEffPlatRef.current = null;
+      return;
+    }
+    const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
+    if (prevEffPlatRef.current === effPlat) return;
+    const oldPlat = prevEffPlatRef.current;
+    prevEffPlatRef.current = effPlat;
+    if (oldPlat === null) return; // 首次由 openApi 设置，不重做
+    const oldSchema = schemaForPlatform(oldPlat);
+    const collected = collectCurrentParams(apiForm, oldSchema);
+    const newSchema = schemaForPlatform(effPlat);
+    const reSplit = splitParamsBySchema(collected, newSchema);
+    setApiForm((prev) => ({
+      ...prev,
+      inputs: reSplit.inputs,
+      advancedJson: reSplit.advancedJson,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiForm.inputs/advancedJson 故意不放依赖：避免输入时无限 re-split
+  }, [showApiModal, apiForm.providerId, apiProviders]);
   // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
-  // 三个独立的 guard，对应三个 modal 的保存按钮
+  // 6.5up · saveCatAssignGuard / addCatGuard 已抽到 /admin/tags
   const saveAgentGuard = useSubmitGuard();
   const saveApiGuard = useSubmitGuard();
-  const saveCatAssignGuard = useSubmitGuard();
-  const addCatGuard = useSubmitGuard();
   const [agentTypeFilter, setAgentTypeFilter] = useState("");
   const [agentCategoryFilter, setAgentCategoryFilter] = useState("");
   const [agentStatusFilter, setAgentStatusFilter] = useState("");
@@ -131,12 +223,7 @@ export default function AgentsAdminPage() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [userGroups, setUserGroups] = useState<{ id: string; name: string }[]>([]);
   const [formError, setFormError] = useState("");
-  const [newCatName, setNewCatName] = useState("");
-  const [catNameHint, setCatNameHint] = useState(""); // 5.7up · 空值 inline 提示
-  const [editingCatId, setEditingCatId] = useState<string | null>(null);
-  const [editingCatName, setEditingCatName] = useState("");
-  const [showCatAssignModal, setShowCatAssignModal] = useState<Category | null>(null);
-  const [selectedCatTenants, setSelectedCatTenants] = useState<string[]>([]);
+  // 6.5up · 分类管理 state（newCatName / editingCatId / showCatAssignModal 等）已抽到 /admin/tags
 
   // 5.16up R4 · 完整展示：分页循环拉完所有智能体（parsePagination MAX_PAGE_SIZE=100）
   async function fetchAllAgents(): Promise<Agent[]> {
@@ -205,14 +292,38 @@ export default function AgentsAdminPage() {
     setTimeout(() => setHighlightedRowId(null), 1500);
   }, [focusAgentId, loading, agents, toast]);
 
+  // 6.3up · focus 跳转时自动展开 target 所在 section（避免目标在折叠分类里看不到）
+  useEffect(() => {
+    if (!focusAgentId) return;
+    const target = agents.find((a) => a.id === focusAgentId);
+    if (!target) return;
+    const sectionIds: string[] = (target.categoryIds ?? []).length > 0
+      ? target.categoryIds!
+      : ["__uncategorized__"];
+    setExpandedAgentSections((prev) => {
+      const next = new Set(prev);
+      for (const sid of sectionIds) next.add(sid);
+      return next;
+    });
+  }, [focusAgentId, agents]);
+
   function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   async function openApi(a: Agent) {
     setShowApiModal(a);
+    // 6.2up · 首次分流不依赖 apiProviders 异步结果；
+    // 仅原绑定 provider 可用 agent.provider.platform 兜底，解绑时回退 agent.platform。
+    const initialPlatform = resolveEffectivePlatform(a.provider_id ?? "", [], a);
+    const initialSchema = schemaForPlatform(initialPlatform);
+    const params = (a.model_params ?? {}) as Record<string, unknown>;
+    const split = splitParamsBySchema(params, initialSchema);
     setApiForm({
       providerId: a.provider_id ?? "",
-      modelParams: a.model_params ? JSON.stringify(a.model_params, null, 2) : '{"temperature": 0.7, "max_tokens": 2000}',
+      inputs: split.inputs,
+      advancedJson: split.advancedJson,
+      advancedOpen: false, // 默认收起
     });
+    prevEffPlatRef.current = initialPlatform;
     // 按 agent 平台拉对应类别的命名 API 作下拉选项
     setApiProviders([]);
     const cat = AGENT_PLATFORMS.includes(a.platform) ? "agent" : "model";
@@ -373,15 +484,38 @@ export default function AgentsAdminPage() {
 
   async function handleSaveApi() {
     if (!showApiModal) return;
+    // 6.2up · 按 effectivePlatform 取 schema，校验高级 JSON + 各 input 字段，input 优先合并
+    const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
+    const schema = schemaForPlatform(effPlat);
+    // 1. 解析高级 JSON
+    const adv = parseAdvancedJson(apiForm.advancedJson);
+    if (!adv.ok) { toast(adv.msg); return; }
+    // 2. 校验 input 字段（number 越界 / NaN / required）
+    const inputParams: Record<string, unknown> = {};
+    for (const f of schema.fields) {
+      const raw = apiForm.inputs[f.key] ?? "";
+      if (f.type === "number") {
+        const r = validateNumberField(f, raw);
+        if (!r.ok) { toast(r.msg); return; }
+        if (Number.isFinite(r.value)) inputParams[f.key] = r.value;
+      } else if (raw !== "") {
+        inputParams[f.key] = raw;
+      }
+    }
+    for (const f of schema.fields) {
+      if (f.required && (inputParams[f.key] === undefined || inputParams[f.key] === "")) {
+        toast(`「${f.label}」必填`); return;
+      }
+    }
+    // 3. input 优先合并：高级 JSON 提供兜底，input 覆盖同名 key
+    const finalParams = { ...adv.value, ...inputParams };
     await saveApiGuard.submit(async () => {
-      let params: Record<string, unknown> = {};
-      try { params = JSON.parse(apiForm.modelParams); } catch {}
       // 5.15up PR-2 · 只提交 providerId（绑定/解绑命名 API）+ modelParams；
       // 旧 apiEndpoint/apiKey 不再从此入口写入。PATCH 天然幂等。
       const res = await fetch(`/api/admin/agents/${showApiModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providerId: apiForm.providerId, modelParams: params }),
+        body: JSON.stringify({ providerId: apiForm.providerId, modelParams: finalParams }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -392,66 +526,8 @@ export default function AgentsAdminPage() {
     });
   }
 
-  async function openCatAssign(cat: Category) {
-    setShowCatAssignModal(cat);
-    const data = await fetch(`/api/admin/categories/${cat.id}`).then((r) => r.json()).catch(() => ({}));
-    setSelectedCatTenants(data.tenant_codes ?? []);
-  }
-
-  async function handleCatAssign() {
-    if (!showCatAssignModal) return;
-    await saveCatAssignGuard.submit(async () => {
-      // PATCH 天然幂等，不带 Idempotency-Key
-      await fetch(`/api/admin/categories/${showCatAssignModal.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tenantCodes: selectedCatTenants }) });
-      setShowCatAssignModal(null);
-    });
-  }
-
-  async function addCategory() {
-    if (!newCatName.trim()) {
-      setCatNameHint("请输入分类名称");
-      return;
-    }
-    await addCatGuard.submit(async (idempotencyKey) => {
-      await fetch("/api/admin/categories", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ name: newCatName.trim() }) });
-      setNewCatName(""); load();
-    });
-  }
-
-  async function saveEditCat(id: string) {
-    const newName = editingCatName.trim();
-    if (!newName) return;
-    const res = await fetch(`/api/admin/categories/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newName }) });
-    if (res.ok) {
-      setCategories((prev) => prev.map((c) => c.id === id ? { ...c, name: newName } : c));
-    }
-    setEditingCatId(null);
-    setEditingCatName("");
-  }
-
-  async function handleCatIcon(catId: string, e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch(`/api/admin/categories/${catId}/icon`, { method: "POST", body: fd });
-    if (res.ok) {
-      const data = await res.json();
-      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: data.url } : c));
-    } else {
-      const d = await res.json();
-      alert(d.error ?? "图标上传失败");
-    }
-    e.target.value = "";
-  }
-
-  async function removeCatIcon(catId: string) {
-    if (!confirm("确认删除此分类的图标？")) return;
-    const res = await fetch(`/api/admin/categories/${catId}/icon`, { method: "DELETE" });
-    if (res.ok) {
-      setCategories((prev) => prev.map((c) => c.id === catId ? { ...c, icon_url: null } : c));
-    }
-  }
+  // 6.5up · openCatAssign / handleCatAssign / addCategory / saveEditCat / handleCatIcon / removeCatIcon
+  //        已抽到 /admin/tags 页面（不动后端 API，仅前端搬迁）
 
   const platformColor: Record<string, string> = { coze: "bg-blue-100 text-blue-700", dify: "bg-purple-100 text-purple-700", zhipu: "bg-green-100 text-green-700", openai: "bg-gray-100 text-gray-600", other: "bg-gray-100 text-gray-600" };
 
@@ -480,7 +556,7 @@ export default function AgentsAdminPage() {
     if (!agentCategoryFilter) {
       const uncategorized = filteredAgents.filter((a) => (a.categoryIds ?? []).length === 0);
       if (uncategorized.length > 0) {
-        sections.push({ id: "__uncategorized__", name: "未分类", icon_url: null, agents: uncategorized });
+        sections.push({ id: "__uncategorized__", name: "未设置标签", icon_url: null, agents: uncategorized });
       }
     }
     return sections.filter((s) => s.agents.length > 0);
@@ -492,27 +568,17 @@ export default function AgentsAdminPage() {
         <PageHeader
           icon={<Bot size={20} />}
           title="智能体管理"
-          subtitle="管理所有智能体、分类与权限配置"
+          subtitle="管理所有智能体与权限配置"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {agents.length} 个</span>}
           actions={
-            <>
-              <div className="flex gap-1 p-1 bg-gray-100/70 rounded-[10px]">
-                {/* 5.7up · org_admin 不显示"分类管理"Tab（分类是写操作，归 super/system） */}
-                {(isOrgAdmin ? (["agents"] as const) : (["agents", "categories"] as const)).map((tab) => (
-                  <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-1.5 rounded-[8px] text-[13px] font-medium transition-all ${activeTab === tab ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                    {tab === "agents" ? "智能体列表" : "分类管理"}
-                  </button>
-                ))}
-              </div>
-              {!isOrgAdmin && (
-                <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
-              )}
-            </>
+            !isOrgAdmin ? (
+              <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
+            ) : null
           }
         />
 
-        {activeTab === "agents" && (
-          <>
+        {/* 6.5up · 智能体列表主体（旧分类管理 Tab 已抽到 /admin/tags） */}
+        <>
           <Card padding="md" className="flex flex-wrap gap-3 items-center">
             <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentTypeFilter} onChange={e => setAgentTypeFilter(e.target.value)}>
               <option value="">全部类型</option>
@@ -520,7 +586,7 @@ export default function AgentsAdminPage() {
               <option value="external">外链型</option>
             </select>
             <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentCategoryFilter} onChange={e => setAgentCategoryFilter(e.target.value)}>
-              <option value="">全部分类</option>
+              <option value="">全部标签</option>
               {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
             <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentStatusFilter} onChange={e => setAgentStatusFilter(e.target.value)}>
@@ -542,30 +608,59 @@ export default function AgentsAdminPage() {
               <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体，点击右上角新增" : "没有符合筛选条件的智能体"}</p></div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm table-sticky-head">
+                <table className="w-full text-sm table-sticky-head table-fixed">
+                  {/* 6.3up · 固定列宽 · 防止折叠/展开时列宽抖动导致表头偏移 */}
+                  <colgroup>
+                    <col className="w-[28%]" />
+                    <col className="w-[18%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[22%]" />
+                    <col className="w-[18%]" />
+                  </colgroup>
                   <thead>
                     <tr>
-                      {["编号/名称", "分类", "类型/平台", "引用工作流", "操作"].map((h) => <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                      {/* 6.3up · 表头居中（除"编号/名称"列保持左对齐，避免长名字行视觉偏移）*/}
+                      {(["编号/名称", "标签", "类型/平台", "引用工作流", "操作"] as const).map((h) => (
+                        <th
+                          key={h}
+                          className={`px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider ${
+                            h === "编号/名称" ? "text-left" : "text-center"
+                          }`}
+                        >
+                          {h}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   {/* 5.16up R4 · 按分类分组展示；多分类智能体在每个所属分类下各出现一次 */}
-                  {groupedSections.map((section) => (
+                  {/* 6.3up · 风格靠近工作流卡片 · 分类 header 加 chevron 折叠/展开，默认折叠 */}
+                  {groupedSections.map((section) => {
+                  const isExpanded = expandedAgentSections.has(section.id);
+                  return (
                   <tbody key={section.id} className="divide-y divide-gray-50">
-                    <tr className="bg-gray-50/80 border-t border-gray-100">
-                      <td colSpan={5} className="px-5 py-2.5">
-                        <div className="flex items-center gap-2">
+                    <tr
+                      className="bg-gray-50/80 border-t border-gray-100 hover:bg-gray-100/80 cursor-pointer transition-colors"
+                      onClick={() => toggleAgentSection(section.id)}
+                    >
+                      <td colSpan={5} className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          {isExpanded
+                            ? <ChevronDown size={18} className="text-gray-500 shrink-0" />
+                            : <ChevronRight size={18} className="text-gray-500 shrink-0" />}
                           {section.icon_url ? (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={section.icon_url} alt={section.name} className="w-4 h-4 rounded-[3px] object-contain" />
+                            <img src={section.icon_url} alt={section.name} className="w-6 h-6 rounded-[6px] object-contain" />
                           ) : (
-                            <Tag size={13} className="text-[#002FA7]" />
+                            <div className="w-6 h-6 rounded-[6px] bg-[#002FA7]/10 flex items-center justify-center shrink-0">
+                              <Tag size={14} className="text-[#002FA7]" />
+                            </div>
                           )}
-                          <span className="text-[13px] font-semibold text-gray-700">{section.name}</span>
-                          <span className="text-[11px] text-gray-400">{section.agents.length} 个</span>
+                          <span className="text-[16px] font-semibold text-gray-800">{section.name}</span>
+                          <span className="text-[12px] text-gray-400 font-medium">{section.agents.length} 个</span>
                         </div>
                       </td>
                     </tr>
-                    {section.agents.map((a) => (
+                    {isExpanded && section.agents.map((a) => (
                       <tr
                         key={a.id}
                         data-agent-row={a.id}
@@ -587,7 +682,7 @@ export default function AgentsAdminPage() {
                         </td>
                         <td className="px-5 py-4">
                           {a.categoriesAll && a.categoriesAll.length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
+                            <div className="flex flex-wrap items-center justify-center gap-1">
                               {a.categoriesAll.map((c) => (
                                 <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
                                   {/* 小图标（<20px），next/image 优化收益低 */}
@@ -598,11 +693,11 @@ export default function AgentsAdminPage() {
                               ))}
                             </div>
                           ) : (
-                            <Badge variant="muted">未分类</Badge>
+                            <div className="flex justify-center"><Badge variant="muted">未设置标签</Badge></div>
                           )}
                         </td>
                         <td className="px-5 py-4">
-                          <div className="flex items-center gap-1.5 flex-wrap">
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
                             {a.agent_type === "external" ? (
                               <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-700 flex items-center gap-1"><ExternalLink size={10} />外链</span>
                             ) : (
@@ -612,9 +707,9 @@ export default function AgentsAdminPage() {
                         </td>
                         <td className="px-5 py-4 relative">
                           {(a.workflows?.length ?? 0) === 0 ? (
-                            <span className="text-[11px] text-gray-400">未被工作流引用</span>
+                            <div className="flex justify-center"><span className="text-[11px] text-gray-400">未被工作流引用</span></div>
                           ) : (
-                            <div className="flex flex-wrap items-center gap-1.5">
+                            <div className="flex flex-wrap items-center justify-center gap-1.5">
                               {a.workflows!.slice(0, 2).map((w) => (
                                 <button
                                   key={w.id}
@@ -676,9 +771,9 @@ export default function AgentsAdminPage() {
                         <td className="px-5 py-4">
                           {/* 5.7up · org_admin 只读，整个操作列不显示 */}
                           {isOrgAdmin ? (
-                            <span className="text-xs text-gray-300">仅可查看</span>
+                            <div className="flex justify-center"><span className="text-xs text-gray-300">仅可查看</span></div>
                           ) : (
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center justify-center gap-1">
                             <button
                               onClick={() => toggleAgentEnabled(a)}
                               className={`p-1.5 rounded-[8px] transition-colors ${a.enabled ? "text-green-600 hover:bg-green-50" : "text-gray-400 hover:bg-gray-100"}`}
@@ -693,7 +788,7 @@ export default function AgentsAdminPage() {
                               <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置" aria-label="API 配置"><Key size={14} /></button>
                             )}
                             <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置" aria-label="权限设置"><Settings2 size={14} /></button>
-                            <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="分类展示配置" aria-label="分类展示配置"><LayoutGrid size={14} /></button>
+                            <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="标签展示配置" aria-label="标签展示配置"><LayoutGrid size={14} /></button>
                             <button onClick={() => setDeletingAgent(a)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
                           </div>
                           )}
@@ -701,91 +796,13 @@ export default function AgentsAdminPage() {
                       </tr>
                     ))}
                   </tbody>
-                  ))}
+                  );
+                  })}
                 </table>
               </div>
             )}
           </Card>
-          </>
-        )}
-
-        {activeTab === "categories" && (
-          <Card padding="lg">
-            <div className="flex items-center gap-2 mb-4">
-              <input
-                className={`flex-1 h-10 border rounded-[10px] px-4 text-sm focus:outline-none transition-colors ${
-                  catNameHint
-                    ? "border-red-400 placeholder:text-red-500 focus:border-red-500"
-                    : "border-gray-200 focus:border-[#002FA7]"
-                }`}
-                placeholder={catNameHint || "新分类名称…"}
-                value={newCatName}
-                onChange={(e) => {
-                  setNewCatName(e.target.value);
-                  if (catNameHint) setCatNameHint("");
-                }}
-                onFocus={() => {
-                  if (catNameHint) setCatNameHint("");
-                }}
-                onKeyDown={(e) => e.key === "Enter" && addCategory()}
-              />
-              <Button size="sm" onClick={addCategory} className="gap-1"><Plus size={14} /> 添加</Button>
-            </div>
-            <div className="space-y-2">
-              {categories.length === 0 ? <p className="text-sm text-gray-400 text-center py-6">暂无分类</p> : categories.map((cat) => (
-                <div key={cat.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-[12px]">
-                  {editingCatId === cat.id ? (
-                    <div className="flex items-center gap-2 flex-1">
-                      <Tag size={15} className="text-[#002FA7] shrink-0" />
-                      <input
-                        autoFocus
-                        className="flex-1 h-9 border border-[#002FA7]/40 rounded-[8px] px-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
-                        value={editingCatName}
-                        onChange={(e) => setEditingCatName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveEditCat(cat.id);
-                          if (e.key === "Escape") { setEditingCatId(null); setEditingCatName(""); }
-                        }}
-                      />
-                      <button onClick={() => saveEditCat(cat.id)} className="p-1.5 rounded-[6px] bg-[#002FA7] text-white hover:bg-[#002FA7]/90 transition-colors" title="确认" aria-label="确认"><Check size={13} /></button>
-                      <button onClick={() => { setEditingCatId(null); setEditingCatName(""); }} className="p-1.5 rounded-[6px] hover:bg-gray-200 text-gray-400 transition-colors" title="取消" aria-label="取消"><X size={13} /></button>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-3">
-                        {cat.icon_url ? (
-                          <div className="w-8 h-8 rounded-[8px] overflow-hidden bg-white border border-gray-200 flex items-center justify-center">
-                            {/* 用户上传图标，URL 动态不在 next/image remotePatterns 内 */}
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={cat.icon_url} alt={cat.name} className="w-full h-full object-contain" />
-                          </div>
-                        ) : (
-                          <div className="w-8 h-8 rounded-[8px] bg-[#002FA7]/8 flex items-center justify-center">
-                            <Tag size={15} className="text-[#002FA7]" />
-                          </div>
-                        )}
-                        <span className="font-medium text-gray-800">{cat.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <label className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors cursor-pointer" title={cat.icon_url ? "替换图标" : "上传图标"}>
-                          <input type="file" accept=".png,.jpg,.jpeg,.svg,.webp" className="hidden" onChange={(e) => handleCatIcon(cat.id, e)} />
-                          <ImageIcon size={13} />
-                        </label>
-                        {cat.icon_url && (
-                          <button onClick={() => removeCatIcon(cat.id)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除图标" aria-label="删除图标">
-                            <X size={13} />
-                          </button>
-                        )}
-                        <button onClick={() => openCatAssign(cat)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="组织分配" aria-label="组织分配"><Building2 size={13} /></button>
-                        <button onClick={() => { setEditingCatId(cat.id); setEditingCatName(cat.name); }} className="p-1.5 rounded-[8px] hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Pencil size={13} /></button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
-        )}
+        </>
       </div>
 
       {/* Agent Modal */}
@@ -798,9 +815,9 @@ export default function AgentsAdminPage() {
               <Input label="名称" placeholder="如 营销文案助手" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">简介</label><textarea rows={3} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="简短描述功能…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-gray-700">所属分类（可多选）</label>
+                <label className="text-sm font-medium text-gray-700">所属标签（可多选）</label>
                 {categories.length === 0 ? (
-                  <p className="text-xs text-gray-400">暂无分类，请先在&quot;分类管理&quot;Tab 中创建</p>
+                  <p className="text-xs text-gray-400">暂无标签，请先在&quot;标签管理&quot;中创建</p>
                 ) : (
                   <>
                     <div className="border border-gray-200 rounded-[12px] p-3 max-h-40 overflow-y-auto space-y-1.5">
@@ -830,7 +847,7 @@ export default function AgentsAdminPage() {
                         );
                       })}
                     </div>
-                    <p className="text-xs text-gray-400">可为智能体勾选多个分类，便于在多个分类下显示。不选则不出现在任何分类下。</p>
+                    <p className="text-xs text-gray-400">可为智能体勾选多个标签，便于在多个标签下显示。不选则不出现在任何标签下。</p>
                   </>
                 )}
               </div>
@@ -895,7 +912,76 @@ export default function AgentsAdminPage() {
                 </p>
               </div>
 
-              <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">模型参数（JSON）</label><textarea rows={4} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none" value={apiForm.modelParams} onChange={(e) => setApiForm({ ...apiForm, modelParams: e.target.value })} /></div>
+              {/* 6.2up · 模型参数：按 effectivePlatform 渲染 input 列表 + 折叠 JSON */}
+              {(() => {
+                const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
+                const schema = schemaForPlatform(effPlat);
+                // dify 在 advancedJson 空时隐藏折叠；其它平台（含 other）始终允许打开
+                const showJsonAdvanced = !schema.hideJsonIfEmpty || apiForm.advancedJson.trim().length > 0;
+                return (
+                  <>
+                    <div className="border-t border-gray-100 pt-3 -mx-1 px-1">
+                      <div className="flex items-baseline justify-between mb-2">
+                        <label className="text-sm font-medium text-gray-700">模型参数</label>
+                        <span className="text-[11px] text-gray-400">按平台 {effPlat}</span>
+                      </div>
+                      {schema.fields.length === 0 && schema.noFieldsHint && (
+                        <p className="text-xs text-gray-500 bg-gray-50 rounded-[8px] px-3 py-2">{schema.noFieldsHint}</p>
+                      )}
+                      {schema.fields.map((f) => {
+                        const inputType = f.type === "password" ? "password" : f.type === "number" ? "number" : "text";
+                        return (
+                          <div key={f.key} className="flex flex-col gap-1 mt-3">
+                            <label className="text-xs font-medium text-gray-600">
+                              {f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}
+                            </label>
+                            <input
+                              type={inputType}
+                              min={f.min}
+                              max={f.max}
+                              step={f.step}
+                              placeholder={f.placeholder}
+                              className="w-full h-10 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
+                              value={apiForm.inputs[f.key] ?? ""}
+                              onChange={(e) => setApiForm((prev) => ({ ...prev, inputs: { ...prev.inputs, [f.key]: e.target.value } }))}
+                            />
+                            {f.hint && <p className="text-[11px] text-gray-400">{f.hint}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {showJsonAdvanced && (
+                      <div className="border-t border-gray-100 pt-3">
+                        <button
+                          type="button"
+                          onClick={() => setApiForm((prev) => ({ ...prev, advancedOpen: !prev.advancedOpen }))}
+                          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          <span className="font-mono">{apiForm.advancedOpen ? "▼" : "▶"}</span>
+                          <span>高级（JSON）</span>
+                          {apiForm.advancedJson.trim().length > 0 && (
+                            <span className="text-[10px] text-amber-600 ml-1">· 已保留旧参数</span>
+                          )}
+                        </button>
+                        {apiForm.advancedOpen && (
+                          <>
+                            <textarea
+                              rows={4}
+                              placeholder="{}"
+                              className="mt-2 w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none"
+                              value={apiForm.advancedJson}
+                              onChange={(e) => setApiForm((prev) => ({ ...prev, advancedJson: e.target.value }))}
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">
+                              仅用于覆盖 input 之外的额外字段；同名 key 时 input 值优先。
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
             <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowApiModal(null)}>取消</Button><Button onClick={handleSaveApi} loading={saveApiGuard.loading}>保存配置</Button></div>
           </div>
@@ -906,9 +992,9 @@ export default function AgentsAdminPage() {
       {showDisplayModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
-            <h2 className="font-semibold text-gray-900 mb-1">分类展示配置</h2>
+            <h2 className="font-semibold text-gray-900 mb-1">标签展示配置</h2>
             <p className="text-sm text-gray-500 mb-2">
-              {showDisplayModal.name} — 控制此智能体在各分类「智能体展示」中的可见性
+              {showDisplayModal.name} — 控制此智能体在各标签「智能体展示」中的可见性
             </p>
             {!displayLoading && displayConfig.length > 0 && (
               <div className="flex items-center gap-2 mb-3">
@@ -932,7 +1018,7 @@ export default function AgentsAdminPage() {
             {displayLoading ? (
               <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-12 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
             ) : displayConfig.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-6">暂无分类</p>
+              <p className="text-sm text-gray-400 text-center py-6">暂无标签</p>
             ) : (
               <div className="space-y-2 max-h-72 overflow-y-auto">
                 {displayConfig.map((cfg) => (
@@ -950,7 +1036,7 @@ export default function AgentsAdminPage() {
                       {/* 手动添加（仅对非自动同步的有意义） */}
                       <button
                         onClick={() => toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isManual", cfg.is_manual)}
-                        title={cfg.is_manual ? "取消手动添加" : "手动添加到此分类展示"}
+                        title={cfg.is_manual ? "取消手动添加" : "手动添加到此标签展示"}
                         className={`p-1.5 rounded-[8px] transition-colors ${cfg.is_manual ? "bg-green-100 text-green-600" : "hover:bg-gray-200 text-gray-400"}`}
                       >
                         <PlusCircle size={14} />
@@ -958,7 +1044,7 @@ export default function AgentsAdminPage() {
                       {/* 隐藏（对自动同步和手动添加的都有效） */}
                       <button
                         onClick={() => toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isHidden", cfg.is_hidden)}
-                        title={cfg.is_hidden ? "取消隐藏" : "在此分类中隐藏"}
+                        title={cfg.is_hidden ? "取消隐藏" : "在此标签中隐藏"}
                         className={`p-1.5 rounded-[8px] transition-colors ${cfg.is_hidden ? "bg-red-100 text-red-500" : "hover:bg-gray-200 text-gray-400"}`}
                       >
                         {cfg.is_hidden ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -1080,33 +1166,6 @@ export default function AgentsAdminPage() {
           </div>
         </div>
       )}
-      {/* Category Assign Tenants Modal */}
-      {showCatAssignModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
-            <h2 className="font-semibold text-gray-900 mb-1">组织分配</h2>
-            <p className="text-sm text-gray-500 mb-2">{showCatAssignModal.name} — 选择可以看到此分类的组织</p>
-            <div className="flex items-center gap-2 mb-3">
-              <button onClick={() => setSelectedCatTenants(tenants.map(t => t.code))} className="text-xs text-[#002FA7] hover:underline">一键全选</button>
-              <span className="text-gray-300">·</span>
-              <button onClick={() => setSelectedCatTenants([])} className="text-xs text-gray-400 hover:text-gray-600 hover:underline">全部取消</button>
-              <span className="ml-auto text-xs text-gray-400">已选 {selectedCatTenants.length} / {tenants.length}</span>
-            </div>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {tenants.map((t) => (
-                <label key={t.code} className="flex items-center gap-3 p-3 bg-gray-50 rounded-[10px] cursor-pointer hover:bg-gray-100 transition-colors">
-                  <input type="checkbox" className="accent-[#002FA7] w-4 h-4" checked={selectedCatTenants.includes(t.code)} onChange={(e) => setSelectedCatTenants((prev) => e.target.checked ? [...prev, t.code] : prev.filter((c) => c !== t.code))} />
-                  <div><p className="text-sm font-medium text-gray-800">{t.name}</p><code className="text-xs text-gray-400 font-mono">{t.code}</code></div>
-                  {selectedCatTenants.includes(t.code) && <CheckCircle2 size={15} className="text-[#002FA7] ml-auto" />}
-                </label>
-              ))}
-              {tenants.length === 0 && <p className="text-sm text-gray-400 text-center py-4">暂无组织，请先新增</p>}
-            </div>
-            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowCatAssignModal(null)}>取消</Button><Button onClick={handleCatAssign} loading={saveCatAssignGuard.loading}>保存分配</Button></div>
-          </div>
-        </div>
-      )}
-
       {/* 4.29up：删除智能体二次确认 */}
       {deletingAgent && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
