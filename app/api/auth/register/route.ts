@@ -55,26 +55,19 @@ export const POST = withRequestLog(async (req: NextRequest) => {
         return NextResponse.json({ error: "该组织码已到期，请联系管理员" }, { status: 400 });
       }
       tenantName = tenant.name;
+    }
 
-      const { count: phoneCount } = await db
-        .from("users")
-        .select("id", { count: "exact", head: true })
-        .eq("phone", normalizedPhone)
-        .eq("tenant_code", normalizedCode)
-        .in("status", ["active", "disabled"]);
-      if (phoneCount && phoneCount > 0) {
-        return NextResponse.json({ error: "该手机号在此组织下已注册" }, { status: 409 });
-      }
-    } else {
-      const { count: phoneCount } = await db
-        .from("users")
-        .select("id", { count: "exact", head: true })
-        .eq("phone", normalizedPhone)
-        .eq("tenant_code", "PERSONAL")
-        .in("status", ["active", "disabled"]);
-      if (phoneCount && phoneCount > 0) {
-        return NextResponse.json({ error: "该手机号已注册" }, { status: 409 });
-      }
+    // ── 6.5up · 手机号全表唯一校验（跨组织 + 跨 user_type 均不允许重复） ──
+    //   原逻辑按 (phone, tenant_code) 分别校验，允许同号在多组织各注册一次；
+    //   6.5up 新需求："每个手机号锁死一个用户" → 全表查；deleted / cancelled
+    //   不占名额（与 migration_v50 partial unique 过滤条件一致）。
+    const { count: phoneCount } = await db
+      .from("users")
+      .select("id", { count: "exact", head: true })
+      .eq("phone", normalizedPhone)
+      .in("status", ["active", "disabled"]);
+    if (phoneCount && phoneCount > 0) {
+      return NextResponse.json({ error: "该手机号已注册" }, { status: 409 });
     }
 
     // ── 用户名唯一性校验（只统计有效用户；deleted 的占用已在删除时改写为墓碑值）──
