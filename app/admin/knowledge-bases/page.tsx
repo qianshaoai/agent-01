@@ -106,16 +106,13 @@ export default function KnowledgeBasesPage() {
         {/* 顶部 section header + 新建按钮 */}
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="w-5 h-5 rounded-full bg-[#002FA7]/10 flex items-center justify-center shrink-0">
-                <BookOpen size={11} className="text-[#002FA7]" />
+            <div className="flex items-center gap-2.5">
+              <span className="w-8 h-8 rounded-full bg-[#002FA7]/10 flex items-center justify-center shrink-0">
+                <BookOpen size={16} className="text-[#002FA7]" />
               </span>
-              <h2 className="text-[15px] font-semibold text-gray-900">知识库</h2>
-              <span className="text-[12px] text-gray-400">({list.length})</span>
+              <h2 className="h-page">知识库</h2>
+              <span className="text-[13px] text-gray-400 font-medium">({list.length})</span>
             </div>
-            <p className="text-[13px] text-gray-500 leading-relaxed max-w-2xl">
-              给「智能体搭建器」搭的智能体配知识库；上传的文档会被切块、向量化后供对话检索。
-            </p>
           </div>
           <button
             onClick={() => {
