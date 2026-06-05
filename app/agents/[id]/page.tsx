@@ -88,47 +88,9 @@ type ChatMsgProps = {
   onRegenerate: () => void;
 };
 
-// 5.28up · B · 知识库引用面板（折叠 / 展开）
-function KbReferencesPanel({ refs }: { refs: KbReference[] }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mt-2 pt-2 border-t border-gray-100">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="text-[11px] text-[#002FA7] hover:underline flex items-center gap-1"
-      >
-        <Library size={11} />
-        引用了 {refs.length} 个知识库片段
-        <span className="text-gray-400">{open ? "收起 ▴" : "展开 ▾"}</span>
-      </button>
-      {open && (
-        <div className="mt-2 space-y-2">
-          {refs.map((r, i) => (
-            <div
-              key={r.id ?? `${r.document_id}-${i}`}
-              className="rounded-[8px] border border-gray-100 bg-gray-50/60 px-3 py-2"
-            >
-              <div className="flex items-center gap-2 text-[11px] text-gray-600">
-                <FileText size={11} className="text-gray-400 shrink-0" />
-                <span className="font-medium truncate">{r.filename}</span>
-                {r.similarity !== null && (
-                  <span className="text-gray-400 shrink-0">
-                    相似度 {Math.round(r.similarity * 100)}%
-                  </span>
-                )}
-              </div>
-              <p className="mt-1 text-[12px] text-gray-700 leading-relaxed whitespace-pre-wrap line-clamp-4">
-                {r.snippet}
-                {r.snippet.length >= 300 && "…"}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+// 6.5up · 知识库引用面板已下线（不在前端展示来源；后端 RAG 检索 + 注入仍然保留，
+//   msg.references 字段保留在 stream 链路中以减少改动面，未来如需对管理员或别的
+//   可见角色恢复展示，重建组件 + 一行渲染即可）
 
 const ChatMessage = memo(function ChatMessage({
   msg,
@@ -281,11 +243,7 @@ const ChatMessage = memo(function ChatMessage({
               已停止
             </div>
           )}
-          {/* 5.28up · B · 知识库引用面板：仅 assistant 气泡 + 命中 ≥ 1 段时显示。
-              展开后列每段：文档名 · 相似度 · 片段预览（最长 300 字）。 */}
-          {isAssistant && msg.references && msg.references.length > 0 && (
-            <KbReferencesPanel refs={msg.references} />
-          )}
+          {/* 6.5up · 知识库引用面板已下线（用户侧不展示来源），渲染点删除 */}
         </div>
         {/* hover 工具栏：复制 / 时间 / 编辑 / 重新生成 */}
         {!isEditing && (msg.content || msg.aborted) && (
@@ -350,7 +308,6 @@ import {
   Bot,
   User,
   FileText,
-  Library,
   Menu,
   Square,
   Copy,
