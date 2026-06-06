@@ -232,10 +232,16 @@ function RoleEditModal({
   const [perms, setPerms] = useState<Set<string>>(new Set(initial.permissions));
   const [saving, setSaving] = useState(false);
 
-  const grouped = meta.keys.reduce<Record<string, PermissionKeyMeta[]>>((acc, k) => {
-    (acc[k.resource] ??= []).push(k);
-    return acc;
-  }, {});
+  // 6.4up 验收修复 · 自定义角色当前仅支持 workflow 权限（后端 custom-roles 校验只放过
+  //   WORKFLOW_PERMISSION_KEYS；agent/kb/provider 等走 admin-overrides 通道）。
+  //   旧实现把 permission-keys 全集都列出来可勾，勾了非 workflow 的保存即报
+  //   "权限项 X 不在 workflow 自定义角色合法清单中"。这里只渲染 workflow 资源块。
+  const grouped = meta.keys
+    .filter((k) => k.resource === "workflow")
+    .reduce<Record<string, PermissionKeyMeta[]>>((acc, k) => {
+      (acc[k.resource] ??= []).push(k);
+      return acc;
+    }, {});
 
   function toggle(key: string) {
     setPerms((s) => {
@@ -342,7 +348,9 @@ function RoleEditModal({
 
         {/* 权限矩阵：固定高度滚动窗口，避免资源块过多把弹窗撑出视口 */}
         <div>
-          <p className="text-[12px] text-gray-500 mb-1.5">权限矩阵（在下面窗口内滚动勾选）</p>
+          <p className="text-[12px] text-gray-500 mb-1.5">
+            权限矩阵 · 自定义角色当前仅支持<span className="text-gray-700 font-medium">工作流</span>权限（在下面窗口内勾选）
+          </p>
           <div className="max-h-[40vh] overflow-y-auto rounded-[10px] border border-gray-200 bg-gray-50/40 p-2 space-y-2.5">
         {Object.entries(grouped).map(([resource, keys]) => (
           <div key={resource} className="border border-gray-200 rounded-[10px] p-3 bg-white">
@@ -362,8 +370,11 @@ function RoleEditModal({
                       {ACTION_LABEL[action] ?? action}
                     </span>
                     {rowKeys.map((k) => (
-                      <label
+                      <button
                         key={k.key}
+                        type="button"
+                        aria-pressed={perms.has(k.key)}
+                        onClick={() => toggle(k.key)}
                         className={
                           "text-[12px] px-3 py-1 rounded-full border cursor-pointer transition-colors " +
                           (perms.has(k.key)
@@ -371,17 +382,11 @@ function RoleEditModal({
                             : "bg-white text-gray-600 border-gray-200 hover:border-[#002FA7]/40")
                         }
                       >
-                        <input
-                          type="checkbox"
-                          className="sr-only"
-                          checked={perms.has(k.key)}
-                          onChange={() => toggle(k.key)}
-                        />
                         {SCOPE_LABEL[k.scope] ?? k.scope}
                         {k.requiresSuperToGrant && (
                           <span className="ml-1 text-[10px] opacity-70">（限超管）</span>
                         )}
-                      </label>
+                      </button>
                     ))}
                   </div>
                 );
