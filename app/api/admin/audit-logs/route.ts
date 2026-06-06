@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
-import { parsePagination, paginatedResponse } from "@/lib/api-error";
+import { apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
+// 6.4up v2 Phase C · audit 走 env-gated hasPermission（不走 facade，列表无 row）
+import { isResourceEnforced } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +13,18 @@ export async function GET(req: NextRequest) {
   if (admin instanceof Response) return admin;
   // 5.11up · 所有管理员（含 org_admin）可访问审计记录入口
   // org_admin 看到的内容按本组织过滤（见下方 OR 条件）
+
+  // Phase C · env-gated v2 check（list-level，HC2：不走 requireAccess）
+  if (isResourceEnforced("audit") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "audit.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "audit.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   const { page, pageSize, start } = parsePagination(req, 50);
   const sp = req.nextUrl.searchParams;

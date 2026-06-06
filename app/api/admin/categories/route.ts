@@ -3,9 +3,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase C · enforce 叠加（env "category" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 export async function GET(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+
+  // Phase C HC2 · list 走 env-gated hasPermission 粗粒度 check
+  if (isResourceEnforced("category") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const ok = await hasPermission(actor, "category.read.all");
+    if (!ok) return apiError("权限不足", "FORBIDDEN");
+  }
 
   const { page, pageSize, start } = parsePagination(req, 100);
   const { data, count } = await db
@@ -20,6 +31,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase C · v2 第二闸 create（platform-level，category.create.all）
+  if (isResourceEnforced("category")) {
+    const actor = await buildPermissionActor(admin);
+    const accessErr = await requireAccess(actor, "category", "create");
+    if (accessErr) return accessErr;
+  }
 
   const { name } = await req.json();
   if (!name?.trim()) return apiError("分类名称不能为空", "VALIDATION_ERROR");

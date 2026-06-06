@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase C · enforce 叠加（icon POST/DELETE 在 v2 体系下都映射到 category.update.all）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +18,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const { id } = await params;
+
+  // Phase C · v2 第二闸（icon 上传 = category.update.all）
+  if (isResourceEnforced("category")) {
+    const actor = await buildPermissionActor(admin);
+    const accessErr = await requireAccess(actor, "category", "update", { row: { id } });
+    if (accessErr) return accessErr;
+  }
+
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
   if (!file) return apiError("未提供文件", "VALIDATION_ERROR");
@@ -45,7 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   return NextResponse.json({ url: publicUrl });
 }
 
-// 删除分类图标
+// 删除分类图标（v2 中等价 category.update.all：仅清空 icon_url 字段；不是 category.delete）
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
@@ -54,6 +65,14 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   }
 
   const { id } = await params;
+
+  // Phase C · v2 第二闸（icon 清空 = category.update.all，非 delete）
+  if (isResourceEnforced("category")) {
+    const actor = await buildPermissionActor(admin);
+    const accessErr = await requireAccess(actor, "category", "update", { row: { id } });
+    if (accessErr) return accessErr;
+  }
+
   const { error } = await db.from("categories").update({ icon_url: null }).eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({

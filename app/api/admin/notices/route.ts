@@ -3,12 +3,28 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase C · enforce 叠加（env "notice" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase C HC2 · list 走 env-gated hasPermission 粗粒度 check（不走 requireAccess 因为没 row）
+  // 任一 scope 通过即放行；旧 org_admin filter 继续叠加（保留全局公告可见性）
+  if (isResourceEnforced("notice") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "notice.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "notice.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   const { page, pageSize, start } = parsePagination(req, 50);
   let query = db
@@ -29,6 +45,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase C · v2 第二闸 create（env-gated；空时 no-op）
+  if (isResourceEnforced("notice")) {
+    const actor = await buildPermissionActor(admin);
+    const accessErr = await requireAccess(actor, "notice", "create");
+    if (accessErr) return accessErr;
+  }
 
   const { tenantCode, content } = await req.json();
   if (!content?.trim()) {
