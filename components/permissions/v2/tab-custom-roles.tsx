@@ -340,8 +340,12 @@ function RoleEditModal({
           </div>
         )}
 
+        {/* 权限矩阵：固定高度滚动窗口，避免资源块过多把弹窗撑出视口 */}
+        <div>
+          <p className="text-[12px] text-gray-500 mb-1.5">权限矩阵（在下面窗口内滚动勾选）</p>
+          <div className="max-h-[40vh] overflow-y-auto rounded-[10px] border border-gray-200 bg-gray-50/40 p-2 space-y-2.5">
         {Object.entries(grouped).map(([resource, keys]) => (
-          <div key={resource} className="border border-gray-200 rounded-[10px] p-3">
+          <div key={resource} className="border border-gray-200 rounded-[10px] p-3 bg-white">
             <p className="text-[13px] font-semibold text-gray-700 mb-2">
               {RESOURCE_LABEL[resource] ?? resource}
               <code className="ml-2 text-[11px] text-gray-400 font-mono font-normal">
@@ -385,8 +389,10 @@ function RoleEditModal({
             </div>
           </div>
         ))}
+          </div>
+        </div>
 
-        <div className="flex justify-end gap-2 pt-2">
+        <div className="sticky bottom-0 -mx-5 -mb-5 px-5 py-3 bg-white border-t border-gray-100 flex justify-end gap-2">
           <Button variant="ghost" onClick={() => onClose()}>
             取消
           </Button>
@@ -629,8 +635,8 @@ function ModalShell({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center p-4 bg-black/40 overflow-y-auto">
-      <div className="bg-white rounded-[14px] shadow-xl w-full max-w-[680px] my-10">
-        <div className="flex items-center justify-between px-5 h-12 border-b border-gray-100">
+      <div className="bg-white rounded-[14px] shadow-xl w-full max-w-[680px] my-10 max-h-[calc(100vh-5rem)] flex flex-col">
+        <div className="flex items-center justify-between px-5 h-12 border-b border-gray-100 shrink-0">
           <h2 className="text-[15px] font-semibold text-gray-900">{title}</h2>
           <button
             onClick={onClose}
@@ -639,7 +645,7 @@ function ModalShell({
             <X size={16} />
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-5 overflow-y-auto">{children}</div>
       </div>
     </div>
   );
