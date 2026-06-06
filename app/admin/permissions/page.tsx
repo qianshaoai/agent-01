@@ -87,8 +87,8 @@ function PermissionsAdminPageInner() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (!d) return;
-        // Phase A 返回结构含 admin: string[]
-        if (Array.isArray(d.admin)) setAdminKeys(d.admin);
+        // permission-keys API 返回 describeKey() 对象数组；Tab 1 / 2 矩阵只需要原始 key 字符串。
+        if (Array.isArray(d.admin)) setAdminKeys(d.admin.map((x: { key: string }) => x.key));
       })
       .catch(() => {});
   }, [permissionGuard]);
