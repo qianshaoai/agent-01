@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 // 6.4up v2 Phase C · enforce 叠加（env "notice" 启用时生效；空时完全 no-op）
 // R1：notice 的 POST 因业务转换（org_admin 强制 / 全局-vs-组织）不走 facade，直接 hasPermission
+// R3：POST 改为 OR-check（.all || .org），修 R1 在 finalTenantCode != null 时漏 .all 兜底的窄分支
 import { isResourceEnforced } from "@/lib/access-facade";
 import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
@@ -60,17 +61,21 @@ export async function POST(req: NextRequest) {
     finalTenantCode = admin.tenantCode;
   }
 
-  // Phase C R1 · v2 第二闸 create（env-gated；按 finalTenantCode 双形态分支）
-  //   _generic.buildTenantOwnedAdapter.checkCreate 只允许 actor.tenantCode 存在时走 .org scope，
-  //   会把 "system_admin 创建全局公告（finalTenantCode=null）" 误拒。
-  //   notice 的 create 路径走 route 层直接 hasPermission，与 HC2 list 模式一致：
-  //     finalTenantCode === null → notice.create.all
-  //     finalTenantCode != null  → notice.create.org + org scope = finalTenantCode
+  // Phase C R3 · v2 第二闸 create（env-gated；OR-check 双形态，与 HC2 GET list 同款）
+  //   背景：R1 把 create 拆成 finalTenantCode 双分支，但 finalTenantCode != null 时
+  //         只查 .org —— 而 v2 lib isScopeWithinActorRange 对 .org + actor.tenantCode=null
+  //         直接返回 false（permission-actor.ts:452-455），导致 sys（无 tenantCode）
+  //         哪怕 v52 同时给了 .all 和 .org，也会被 .org scope 校验误拒。Phase C R2 dev
+  //         smoke 行 4 抓到此点。
+  //   修：先算 okAll；finalTenantCode != null 时 okAll || .org（OR 兜底）。
+  //   语义："actor 有 .all → 任何形态都允许；否则再看 .org 是否覆盖目标 org"。
+  //   不动 v2 lib，不动 adapter，不动 seed —— R3 仅 route 层一处。
   if (isResourceEnforced("notice") && admin.role !== "super_admin") {
     const actor = await buildPermissionActor(admin);
+    const okAll = await hasPermission(actor, "notice.create.all");
     const ok = finalTenantCode === null
-      ? await hasPermission(actor, "notice.create.all")
-      : await hasPermission(actor, "notice.create.org", [
+      ? okAll
+      : okAll || await hasPermission(actor, "notice.create.org", [
           { scope_type: "org", scope_id: finalTenantCode },
         ]);
     if (!ok) return apiError("权限不足", "FORBIDDEN");

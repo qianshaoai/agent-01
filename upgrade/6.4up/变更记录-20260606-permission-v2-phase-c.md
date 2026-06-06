@@ -358,3 +358,197 @@ if (isResourceEnforced("notice") && admin.role !== "super_admin") {
 - 用户：`.env.local` 设 `PERMISSION_V2_ENFORCE_RESOURCES=notice,category` → 实测 R0 + R1 全部 7 项 → 验通
 - 用户：env 加 `analytics,audit` → 实测两类 → 验通
 - Phase C 收口
+
+---
+
+## R2 · dev enforce function-level smoke（2026-06-06）
+
+执行：小A 跑 `scripts/phase-c-smoke.ts`（不动 `.env.local` / `next dev` / staging / prod）
+DB：dev Supabase `ysgdmdqygbvfthzylhqn`（5.28up 起独立隔离）
+状态：26 行 **25 ✅ / 1 ❌**；终态干净（`overrides=0`、`system=109`、`org=64`）
+
+### 跑法
+
+- 直接调 `buildPermissionActor()` + `hasPermission()` 真打 dev DB，覆盖 Phase C 引入的全部 v2 plumbing（actor.v2Loaded 开关、loadEffectivePermissions tagged union、effective set 合成、isScopeWithinActorRange、R1 .all vs .org 分支、HC1 audit→analytics key 复用、HC2 list-level）
+- **临时 sys admin**：dev DB 无 system_admin 行，脚本 `INSERT` 一条 `pwd_hash` 无效占位的 admin 进 `admins` 表（无法登录），`main()` 走完或抛错都在 finally 里 `DELETE`
+- **override 即写即删**：4 组 revoke 测试都用 try/finally 包 INSERT/DELETE，admin_source 按 actor.source（admin_table / user_admin）匹配
+- **静态推导 4 行**：route-layer 业务转换 / icon 上传走 `category.update.all` 这类纯路由结构事实，标 ✅ 并写文件:行号
+- 终态：脚本内部 count + `check-phase-c-pre.ts` 二次 ✅
+
+### 26 行结果
+
+| # | 路径 | 结果 |
+|---|---|---|
+| 1 | super POST 全局 notice | ✅ hasPermission(notice.create.all)=true |
+| 2 | super POST 组织 notice | ✅ hasPermission(notice.create.org,DEMO)=true |
+| 3 ★ | sys POST 全局 notice（R1 关键路径）| ✅ hasPermission(notice.create.all)=true |
+| **4** | **sys POST 组织 notice** | **❌ 期望 true 实际 false（R1 不完整；R3 待修，见下）** |
+| 5 | org POST 任意 tenant → 强制 DEMO | ✅ 静态：notices/route.ts:57-61（业务转换在 v2 闸前） |
+| 6 | sys GET notice list | ✅ hasPermission(notice.read.all)=true（HC2） |
+| 7 | org GET notice list | ✅ hasPermission(notice.read.org,DEMO)=true（HC2） |
+| 8 | revoke sys notice.create.all → 全局拒 | ✅ hasPermission=false |
+| 9 | 同 revoke → DEMO 也拒（sys 的 .org scope 不可达） | ✅ hasPermission=false（与 v2 scope 语义一致） |
+| 10 | revoke org notice.create.org → 组织拒 | ✅ hasPermission=false |
+| 11 | super POST category | ✅ super shortcut |
+| 12 | super PATCH category | ✅ super shortcut |
+| 13 | super 上传 category icon | ✅ 静态：categories/[id]/icon/route.ts:22-27（POST → category.update.all） |
+| 14 | super 删除 category icon | ✅ 静态：categories/[id]/icon/route.ts:69-74（DELETE → category.update.all） |
+| 15 | sys POST category | ✅ hasPermission(category.create.all)=true |
+| 16 | org category v2 层（v52 显式给）| ✅ hasPermission=true（HTTP 路由仍被 pre-v2 role 闸拒 403） |
+| 17 | super DELETE category | ✅ super shortcut |
+| 18 | revoke sys category.create.all → 拒 | ✅ hasPermission=false |
+| 19 | super GET analytics | ✅ super shortcut |
+| 20 | sys GET analytics | ✅ hasPermission(audit.read.all)=true（HC1 复用 audit key） |
+| 21 ★ | org GET analytics（HC1 + scope）| ✅ hasPermission(audit.read.org,DEMO)=true |
+| 22 | super GET audit-logs | ✅ super shortcut |
+| 23 | sys GET audit-logs | ✅ hasPermission(audit.read.all)=true |
+| 24 | org GET audit-logs | ✅ hasPermission(audit.read.org,DEMO)=true |
+| 25 | revoke audit.read.all → audit-logs 拒 | ✅ hasPermission=false |
+| 26 ★ | 同 revoke → analytics 拒（HC1 复用证明）| ✅ hasPermission=false |
+| 终态 | overrides=0 | ✅ 实际 0 |
+| 终态 | 默认包 109/64 | ✅ 实际 109/64 |
+
+### 关键 ★ 路径全过
+
+- 行 3（R1 修复点）✅：`finalTenantCode=null` 走 `.all` 不走 adapter，sys 创全局公告通
+- 行 21（HC1 + scope）✅：org_admin 的 analytics 复用 `audit.read.org` + DEMO scope 校验对
+- 行 26（HC1 复用证明）✅：一次 revoke `audit.read.all` 同时关掉 audit-logs 和 analytics
+
+### 行 4 失败 · R1 不完整（R3 提案，**待用户拍**）
+
+#### 现象
+
+`sys POST 组织公告（finalTenantCode=DEMO）` → 当前 `notices/route.ts:69-77` 只 `hasPermission(actor, "notice.create.org", scope=DEMO)` → sys 名义上有 `.org`，但 `isScopeWithinActorRange` 对 `.org` + `actor.tenantCode=null` 直接返回 false（[permission-actor.ts:452-455](g:/zhinengticang/agent-01/lib/permission-actor.ts#L452-L455)） → 拒。
+
+#### 为什么 R1 没接住
+
+R1 修法是"按 finalTenantCode 分支"：
+
+```ts
+const ok = finalTenantCode === null
+  ? await hasPermission(actor, "notice.create.all")          // ✓ 全局走 .all
+  : await hasPermission(actor, "notice.create.org", [...]);  // ✗ 组织只查 .org
+```
+
+sys 在 v52 同时有 `.all` 和 `.org`，但 v2 lib 的 `.org` 后缀严格绑 `actor.tenantCode`，sys（无 tenantCode）的 `.org` scope 不可达 → sys 创任何组织级 notice 都被这条分支误拒。
+
+#### R3 提案（与 HC2 GET list 同款 OR 模式）
+
+```ts
+const okAll = await hasPermission(actor, "notice.create.all");
+const ok = finalTenantCode === null
+  ? okAll
+  : okAll || await hasPermission(actor, "notice.create.org", [
+      { scope_type: "org", scope_id: finalTenantCode },
+    ]);
+if (!ok) return apiError("权限不足", "FORBIDDEN");
+```
+
+读作："如果 actor 有 `.all`，任何形态都允许；否则才看 `.org` + 目标 scope 是否落在 actor 自己 tenant 内"。
+
+#### 这样改之后
+
+| 行 | 之前 | 之后 |
+|---|---|---|
+| 行 3（sys 全局，.all 还在）| ✅ 已通 | 仍 ✅ |
+| **行 4（sys DEMO，.all 还在）** | **❌ 误拒** | **✅ 通**（.all 兜底）|
+| 行 8（sys revoke .all → 全局）| ✅ 已拒 | 仍 ✅ |
+| 行 9（同 revoke → DEMO）| ✅ 已拒 | 仍 ✅（.all 没了，.org scope 也不可达）|
+| 行 10（org revoke .org → 组织）| ✅ 已拒 | 仍 ✅（org 本就没 .all）|
+
+无回归；只把行 4 从误拒改成正确放行。
+
+#### 不动什么
+
+- v2 lib（`isScopeWithinActorRange` 行为不变，避免破坏其它资源）
+- v52 seed（不动表，不改 seed）
+- 其它 3 个 Phase C 资源（category / analytics / audit 都不存在这种"sys 在双形态资源里"的撞型）
+
+#### CI 预期
+
+route 一处改动；`typecheck` / `lint` / `build` 不会出新问题；smoke 行 4 变 ✅；`seed:check` 不动。
+
+#### 拍板
+
+- (a) **同意 R3，按上述 patch 落代码**（推荐）
+- (b) 暂留行 4 为 known limitation，写进 5/19 后 follow-up
+- (c) 改 v2 lib：让 `isScopeWithinActorRange` 对 builtin sys（无 tenantCode）的 `.org` suffix 视为"任意 org"（更通用但风险更大）
+
+我倾向 (a)。等你拍。
+
+---
+
+## R3 收口（2026-06-06）
+
+用户拍板 **(a)**。GO。
+
+### 落地点
+
+仅 [`app/api/admin/notices/route.ts`](g:/zhinengticang/agent-01/app/api/admin/notices/route.ts) POST 一处：
+
+```ts
+// 改前（R1）
+const ok = finalTenantCode === null
+  ? await hasPermission(actor, "notice.create.all")
+  : await hasPermission(actor, "notice.create.org", [...]);
+
+// 改后（R3）
+const okAll = await hasPermission(actor, "notice.create.all");
+const ok = finalTenantCode === null
+  ? okAll
+  : okAll || await hasPermission(actor, "notice.create.org", [...]);
+```
+
+### 边界
+
+按用户约束：
+
+- **不改** `lib/permission-actor.ts`（`isScopeWithinActorRange` 行为不变）
+- **不改** `lib/access-facade.ts` / `lib/access-facade-types.ts` / `lib/access-registry.ts`
+- **不改** `lib/adapters/access.ts` 及任何 13 个具体 adapter
+- **不改** v52 seed / migration
+- **不改** 其它 3 个 Phase C 资源（category / analytics / audit 不撞型）
+
+### CI（R3 收口后）
+
+| 项 | 结果 |
+|---|---|
+| `npm run ci:typecheck` | ✅ 0 errors |
+| `npm run ci:lint` | ✅ 0 errors（新增 24 个 warning 全在 `scripts/phase-c-smoke.ts` 的三元式 dev tooling，不阻塞 build） |
+| `npm run ci:build` | ✅ Compiled successfully · 56/56 pages |
+| `npm run seed:check` | ✅ 0 diff vs v52 |
+
+### Smoke 复跑（function-level，dev DB）
+
+26 行 **全 ✅**：
+
+- 行 3（R1 关键，sys POST 全局）✅
+- **行 4（R3 关键，sys POST 组织 OR-check）✅**（之前 ❌，R3 后 `okAll=true` 短路通）
+- 行 8（revoke sys .all → 全局）✅
+- 行 9（同 revoke → DEMO 也拒，sys `.org` scope 不可达）✅
+- 行 10（revoke org `.org` → 组织拒）✅
+- 行 21（HC1 + scope）✅
+- 行 26（HC1 复用证明）✅
+- 其它 19 行（含 5/13/14 三个 route-layer 静态推导）✅
+
+### 终态确认
+
+```
+admin_permission_overrides count = 0
+builtin_role_permissions: system=109, org=64
+✅ dev 两表与 v52 seed 一致 + 无 override，可直接开 enforce 联调
+```
+
+`npx tsx scripts/check-phase-c-pre.ts` 二次过。
+
+### Smoke 实现要点（给后续 Phase 复用参考）
+
+- 路径：`scripts/phase-c-smoke.ts`，函数级（不走 HTTP / 不重启 next dev / 不动 `.env.local`）
+- 临时 `system_admin` 处理：dev DB 默认无 system_admin 行，脚本 `INSERT` 占位 `pwd_hash` 无效的 admin，`main` 走完或抛错都在 `cleanup()` 里 `DELETE`
+- override CRUD 必须按 `actor.source`（`admin_table` vs `user_admin`）匹配，否则 `loadEffectivePermissions` load 不到
+- route-layer OR/AND 复合逻辑必须在 smoke 里"镜像"（不能只调单条 hasPermission），否则会假阴假阳
+- 终态 = 脚本内 `count()` + `scripts/check-phase-c-pre.ts` 二次确认
+
+### Phase D 状态
+
+仍 **不开**。Phase C R3 收口后等用户 / 小B 验收再讨论。
