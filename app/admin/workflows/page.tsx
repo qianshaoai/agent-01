@@ -900,7 +900,10 @@ export default function WorkflowsAdminPage() {
               workflows: filteredWorkflows.filter((wf) => (wf.categoryIds ?? []).includes(c.id)),
             }));
             if (!wfCatFilter) {
-              const uncat = filteredWorkflows.filter((wf) => (wf.categoryIds ?? []).length === 0);
+              // 验收修复 · 兜底：归不进任一已加载标签区的工作流（无标签 / 标签未加载 / 标签已删）
+              //   一律进"未设置标签"，不再静默丢弃（曾因 custom admin 读不到 wf-categories 导致带标签工作流整批消失）
+              const shownIds = new Set(sections.flatMap((s) => s.workflows.map((w) => w.id)));
+              const uncat = filteredWorkflows.filter((wf) => !shownIds.has(wf.id));
               if (uncat.length > 0) {
                 sections.push({ id: "__uncategorized__", name: "未设置标签", icon_url: null, workflows: uncat });
               }
