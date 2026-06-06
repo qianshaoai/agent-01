@@ -89,9 +89,13 @@ export async function PATCH(
       return apiError("无权将用户设置为该角色（不能高于或等于自己）", "FORBIDDEN");
     }
 
-    // 6.4up v2 Phase A · role 从 'user' 变为 builtin admin 时调 RPC：
+    // 6.4up v2 Phase A R1 · role 从 'user' 变为 builtin admin 时强依赖 RPC：
     //   一次事务完成 UPDATE users.role + DELETE user_custom_roles + INSERT audit_logs
     //   防止双通道权限叠加（方案 §1.3 双通道隔离硬规则）
+    //
+    // R1 移除 42883 fallback：v52 RPC 必跑（MIGRATIONS.md 已标 🔑），缺失视为部署事故，
+    // 直接返 dbError（500/400）让人看见；旧 fallback 会留 user_custom_roles 不清 +
+    // 审计写 clearedCustomRoles:true 撒谎，比硬失败更糟。
     const isPromotingToBuiltinAdmin =
       target.role === "user" &&
       ["super_admin", "system_admin", "org_admin"].includes(role);
@@ -102,15 +106,7 @@ export async function PATCH(
         p_new_role: role,
         p_actor_id: admin.adminId,
       });
-      if (rpcErr) {
-        // 兼容降级：如果 v52 RPC 未跑（user 仍走旧的 update 路径），fallback
-        if (rpcErr.code === "42883" /* function does not exist */) {
-          const { error: updErr } = await db.from("users").update({ role }).eq("id", id);
-          if (updErr) return dbError(updErr);
-        } else {
-          return dbError(rpcErr);
-        }
-      }
+      if (rpcErr) return dbError(rpcErr);
     } else {
       const { error } = await db.from("users").update({ role }).eq("id", id);
       if (error) return dbError(error);

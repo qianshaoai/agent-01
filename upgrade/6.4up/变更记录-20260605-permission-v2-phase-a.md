@@ -194,3 +194,127 @@ Phase C-E enforce 启用前必须按 resource 精化：
 - **Phase C**（~4h）：低风险路由接入 `requireAccess` —— `notice / category / analytics / audit`；CSV 加 `"notice,category"` 开 enforce
 
 本次 commit 已具备 Phase B 启动条件。
+
+---
+
+## R1 收口（2026-06-06）
+
+**方案** [`方案-权限管理v2-PhaseA-R1修订-20260606.md`](./方案-权限管理v2-PhaseA-R1修订-20260606.md)
+**触发** 小B Phase A 验收退回 5 阻断 + 1 建议
+**决策** D1=fail-closed / D2=升 checkCreate / D3=放脚本（用户拍板）
+
+### F1 · actor 模式开关解耦 `effectivePermissions.size`
+
+[`lib/permission-actor.ts`](../../lib/permission-actor.ts)：
+
+- `PermissionActor` 加 `v2Loaded: boolean` 显式字段
+- `loadEffectivePermissions` 改 tagged union（`skipped` / `loaded`）；DB 查询失败 → `throw new Error` 让 `buildBuiltinAdminActor` 不 catch、上游框架返 500（fail-closed）
+- 5 个 `PermissionActor` 构造点（admin_table 命中 / user_admin 命中 / 双源 fallback / custom emptyActor / custom 正常）都补 `v2Loaded` 字段
+- `hasPermission` builtin 路径用 `actor.v2Loaded` 而非 `effectivePermissions.size > 0`
+
+修复语义：
+- v2 启用 + 全 revoke → 空 set + v2Loaded=true → 显式无权（不再回退旧 fallback）
+- v2 启用 + role 未 seed → 同上
+- v2 启用 + DB 查询失败 → throw → 500（不再悄悄 fail-open）
+
+### F2 · set-role 删 42883 fallback
+
+[`app/api/admin/users/[id]/route.ts`](../../app/api/admin/users/[id]/route.ts)：
+
+- 删 `rpcErr.code === "42883"` 兜底分支，改 `if (rpcErr) return dbError(rpcErr)`
+- 注释说明 v52 RPC 必跑硬依赖，缺失视为部署事故
+
+[`supabase/MIGRATIONS.md`](../../supabase/MIGRATIONS.md) v52 行追加 **R1 强依赖** 注释，提示"未跑 v52 + set-role 升 admin → 500"。
+
+### F3 · 拆 access-registry + access-facade-types · adapter 自动 bootstrap
+
+新增 [`lib/access-facade-types.ts`](../../lib/access-facade-types.ts)（接口 + 工具 type；纯 type-only，无 runtime side-effect）。
+
+新增 [`lib/access-registry.ts`](../../lib/access-registry.ts)（REGISTRY Map + register/get）。
+
+[`lib/access-facade.ts`](../../lib/access-facade.ts) 重写：
+- **顶部 `import "./adapters/access";`** —— 自动触发 13 个 adapter 注册；consumer 路由不再需要任何额外 import
+- `registerAccessAdapter` / `getAccessAdapter` re-export 自 access-registry
+- `ResourceAccessAdapter` / `QueryModifier` / `RequireAccessOpts` re-export 自 access-facade-types
+- `isResourceEnforced` 保留在 facade 内（已 export）
+
+[`lib/adapters/access/_generic.ts`](../../lib/adapters/access/_generic.ts) + [`lib/adapters/access/setting.ts`](../../lib/adapters/access/setting.ts) 的 import 改自 access-registry / access-facade-types，断开 facade 循环。
+
+依赖关系：
+```
+access-facade-types  ← access-registry  ← adapter 文件
+                      ↘                  ↗
+                       access-facade  ← consumer 路由
+                          ↓ (side-effect import)
+                       lib/adapters/access/index.ts → 13 adapter
+```
+无循环；REGISTRY 在 facade module 加载时就绪。
+
+### F4 · `checkCreate` 升为接口方法
+
+[`lib/access-facade-types.ts`](../../lib/access-facade-types.ts) 的 `ResourceAccessAdapter` 接口加 `checkCreate(actor, payload?): Promise<boolean>`。
+
+[`lib/access-facade.ts`](../../lib/access-facade.ts) `requireAccess` create 分支改：
+- 旧：`adapter.checkWrite(actor, null as never, "create")` —— 通用 adapter NPE
+- 新：`adapter.checkCreate(actor)` —— 显式不传 row，try/catch 独立
+
+[`lib/adapters/access/_generic.ts`](../../lib/adapters/access/_generic.ts)：
+- `buildTenantOwnedAdapter` 补 `checkCreate(actor)`：`actor.tenantCode` 必填 + `${prefix}.create.org` key + scope=tenantCode
+- `buildPlatformAdapter` 补 `checkCreate(actor)`：`${prefix}.create.all` key
+
+[`lib/adapters/access/setting.ts`](../../lib/adapters/access/setting.ts) 手写 adapter 补 `checkCreate(actor) => actor.builtinRole === "super_admin"`（super 已在 facade 顶部放行，到这里都是非 super → 拒）。
+
+### F5 · seed 生成脚本 · diff=0 验收
+
+新增 [`scripts/generate-permission-seed.ts`](../../scripts/generate-permission-seed.ts) ~170 行：
+
+- 输入：`lib/permission-keys/admin.ts` 的 `KEYS_BY_RESOURCE` + `ADMIN_PERMISSION_KEYS`
+- 业务规则：脚本里显式列两个排除集（`SYSTEM_ADMIN_EXCLUDE` 8 keys / `ORG_ADMIN_EXCLUDE` 2 keys）+ 一个例外集（`ORG_ADMIN_EXTRA_NON_ORG` 5 keys）
+- 自检：所有 seed 列出的 key 都必须在 `ADMIN_PERMISSION_KEYS`，所有 `KEYS_BY_RESOURCE` 的 resource 都必须有中文注释行
+- 输出：可粘到 migration 的 `INSERT … VALUES … ON CONFLICT DO NOTHING;` 段（按 resource 分组 + 中文小注释）
+
+验证命令：
+```bash
+npx tsx scripts/generate-permission-seed.ts > /tmp/script-out.sql
+diff \
+  <(awk '/INSERT INTO builtin_role_permissions/,/ON CONFLICT \(role, permission_key\) DO NOTHING;/' supabase/migration_v52_permission_v2.sql) \
+  <(awk '/INSERT INTO builtin_role_permissions/,/ON CONFLICT \(role, permission_key\) DO NOTHING;/' /tmp/script-out.sql)
+```
+本次结果：**0 行 diff** ✓。
+
+未来 keys 变化 → 改脚本里的 KEYS（在 admin.ts）+ 规则集 → 重跑 → 与 v52 段 diff > 0 → 新 migration 内贴最新输出。
+
+### N1（建议落地）· admin-overrides POST 校验 target
+
+[`app/api/admin/admin-overrides/route.ts`](../../app/api/admin/admin-overrides/route.ts)：
+
+upsert 前增加：
+- 按 `adminSource` 选 `admins` / `users` 表查 `id, role`
+- target 不存在 → 404 (`apiError("目标管理员不存在", "NOT_FOUND")`)
+- target role 为 `super_admin` → 403（super 硬全权由公式第 1 行覆盖，override 无意义且会污染数据）
+
+### 不动
+
+- v52 migration 文件本体（seed 段保持手写；F5 脚本是"事后可复算证明"，diff=0 已验）
+- `lib/permission-keys/*` 文件
+- 13 个 adapter 中只走 `_generic` 模板的 11 个（agent / agent-draft / audit / category / dept / knowledge-base / model-provider / notice / team / tenant / user / workflow）—— import 路径都是 `./_generic`，无需修改
+- 旧 `effectivePermissions` 字段仍保留（v2 启用时承载 set；类型未变）
+
+### CI 验收（R1 落地后）
+
+| 项 | 结果 |
+|---|---|
+| `npm run ci:typecheck` | ✅ 0 errors |
+| `npm run ci:lint` | ✅ 0 errors（仅历史 `agents/[id]/page.tsx:778` hook deps warning） |
+| `npm run ci:build` | ✅ Compiled successfully + 56/56 pages |
+| seed 脚本 diff v52 | ✅ 0 行 |
+
+### 上线策略
+
+- 无新 migration（v52 不重发）
+- 合并：R1 作为 `e2e3aa7` 之后的 follow-up commit 留 `feature/6.4up`
+- 不进 5/19 上线包（权限 V2 仍按既定约定暂不上线）
+
+### Phase B / C 入口（不变）
+
+R1 落地 = Phase A 收口；Phase B 启动条件已具备。

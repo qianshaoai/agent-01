@@ -94,6 +94,24 @@ export async function POST(req: NextRequest) {
     return apiError("setting / permission 前缀不允许 override（仅 super 硬全权）", "FORBIDDEN");
   }
 
+  // R1 N1 · target admin 存在性 + 非 super 校验
+  //   - admin_table source → 查 admins.id
+  //   - user_admin source → 查 users.id（5.11up users.role 提升路径）
+  //   - 任一不存在 → 404；目标 role 为 super_admin → 403（super 硬全权不应被 override）
+  const tableMap = { admin_table: "admins", user_admin: "users" } as const;
+  const { data: targetRow, error: targetErr } = await db
+    .from(tableMap[adminSource])
+    .select("id, role")
+    .eq("id", adminId)
+    .maybeSingle();
+  if (targetErr) return dbError(targetErr);
+  if (!targetRow) {
+    return apiError("目标管理员不存在", "NOT_FOUND");
+  }
+  if ((targetRow as { role?: string | null }).role === "super_admin") {
+    return apiError("不允许给 super_admin override（super 硬全权由公式第 1 行覆盖）", "FORBIDDEN");
+  }
+
   // upsert
   const { error: upErr } = await db
     .from("admin_permission_overrides")

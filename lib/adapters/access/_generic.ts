@@ -6,12 +6,18 @@
  * 特殊路径（workflow 走 resource_permissions / agent 走 tenant_agents / user 走 5.11up
  * 上下级 / agent_draft 走 created_by 反查）单独写 adapter。
  *
+ * R1（2026-06-06）：
+ *   - F3：import 改自 access-registry / access-facade-types，断开 facade 循环
+ *   - F4：buildTenantOwnedAdapter / buildPlatformAdapter 都补 checkCreate 实现，
+ *         不再让 facade 把 row=null 喂给 checkWrite
+ *
  * 本 Phase 是骨架版：checkRead/checkWrite 内部委托给 hasPermission，行为完全等价
- * 6.4up（hasPermission builtin path 在 effectivePermissions 空时退回旧 role-based fallback）。
+ * 6.4up（hasPermission builtin path 在 v2Loaded=false 时退回旧 role-based fallback）。
  * Phase C-E enforce 启用时由 builtin_role_permissions seed 驱动，无需改 adapter。
  */
 
-import { ResourceAccessAdapter, registerAccessAdapter } from "@/lib/access-facade";
+import type { ResourceAccessAdapter } from "@/lib/access-facade-types";
+import { registerAccessAdapter } from "@/lib/access-registry";
 import { hasPermission, PermissionActor, ResourceScope } from "@/lib/permission-actor";
 import { db } from "@/lib/db";
 import { PermissionKey } from "@/lib/permission-keys";
@@ -58,6 +64,18 @@ export function buildTenantOwnedAdapter(config: {
       return await hasPermission(actor, key, scopesFromTenantRow(row));
     },
 
+    /**
+     * R1 F4 · create 不传 row：actor 必须有 tenantCode（个人 admin 无 tenant 不允许在
+     * org-scope 内建 tenant-owned 资源；future enforce 时如需"平台级建"路径，单独 adapter）
+     */
+    async checkCreate(actor) {
+      if (!actor.tenantCode) return false;
+      const key = `${config.permissionPrefix}.create.org` as PermissionKey;
+      return await hasPermission(actor, key, [
+        { scope_type: "org", scope_id: actor.tenantCode },
+      ]);
+    },
+
     resolveCreateOwnership(actor): Partial<TenantOwnedRow> {
       // 默认：注入 actor 的 tenantCode；adapter 调用方可手动 override
       return { tenant_code: actor.tenantCode };
@@ -90,9 +108,13 @@ export function buildPlatformAdapter(config: {
       return await hasPermission(actor, key);
     },
     async checkWrite(actor, _row, action) {
-      // _row 在 platform-level 不用，前缀下划线告诉 lint 这是有意丢弃
       void _row;
       const key = `${config.permissionPrefix}.${action}.all` as PermissionKey;
+      return await hasPermission(actor, key);
+    },
+    /** R1 F4 · platform-level create 用 .all 后缀 */
+    async checkCreate(actor) {
+      const key = `${config.permissionPrefix}.create.all` as PermissionKey;
       return await hasPermission(actor, key);
     },
     resolveCreateOwnership() {

@@ -1,6 +1,19 @@
 /**
  * 6.4up v2 Phase A · access-facade · 资源适配器 + 路由层 requireAccess
  *
+ * R1 改造（2026-06-06）：
+ *   - F3：REGISTRY + register/get 拆到 `lib/access-registry.ts`；接口 + opts 拆到
+ *         `lib/access-facade-types.ts`。本文件**顶部 import "./adapters/access"**
+ *         自动 bootstrap 13 个 adapter 注册，consumer 路由无需额外 import。
+ *   - F4：requireAccess create 分支改调 `adapter.checkCreate(actor)` 替代
+ *         `adapter.checkWrite(actor, null as never, "create")`，与新增的
+ *         `ResourceAccessAdapter.checkCreate` 接口方法对应。
+ *
+ * 对外 API 保持不变：
+ *   - 旧 `import { requireAccess, registerAccessAdapter, getAccessAdapter,
+ *           type ResourceAccessAdapter, type QueryModifier } from "@/lib/access-facade"`
+ *     全部 re-export，无破坏性。
+ *
  * 路由调用模板（方案 §1.5）：
  *
  *   const admin = await requireAdmin();
@@ -15,71 +28,36 @@
  *   const accessErr = await requireAccess(actor, "knowledge_base", "update", { row: existing });
  *   if (accessErr) return accessErr;
  *
- *   // 业务逻辑...
- *
  * Flag 控制（方案 §3.4）：
  *   - PERMISSION_V2_ENFORCE_RESOURCES CSV 不含该 resourceKind → requireAccess 完全 no-op
  *     - 不调 adapter 任何方法（不 load、不 check）
  *     - 不读 v52 两张新表
  *     - 直接 return null
  *   - 含该 resourceKind → 调 adapter，按规则判定
- *
- * 不允许（方案 R3）：路由层直接 import hasPermission；
- *   ESLint custom rule 在后续 Phase 加，本 Phase 仅文档约束。
  */
+
+// ─── 自动 bootstrap adapter REGISTRY（R1 F3）─────────────────────
+// 仅靠 side-effect import：13 个 adapter 文件在加载时调 registerAccessAdapter
+// 注册到 lib/access-registry.ts 的 REGISTRY。任何文件 import `@/lib/access-facade`
+// 都会触发本 import → REGISTRY 已就绪 → requireAccess 不会再撞空 registry 500。
+import "./adapters/access";
 
 import { PermissionActor } from "@/lib/permission-actor";
 import { apiError } from "@/lib/api-error";
+import { getAccessAdapter } from "@/lib/access-registry";
 
-// ─── ResourceAccessAdapter 接口 ──────────────────────────────────
+// ─── 对外 re-export（保持 @/lib/access-facade API 不变）──────────
 
-export type QueryModifier = (qb: unknown) => unknown;
+export {
+  registerAccessAdapter,
+  getAccessAdapter,
+} from "@/lib/access-registry";
 
-export interface ResourceAccessAdapter<TRow = unknown> {
-  /** 资源种类标识，与 PERMISSION_V2_ENFORCE_RESOURCES CSV 对齐 */
-  resourceKind: string;
-
-  /**
-   * list filter：返回 query modifier 以供 GET list 路由 chain；null = 不限制
-   * 不实现时调用方需自行处理 actor 维度可见性
-   */
-  listFilter(actor: PermissionActor): QueryModifier | null;
-
-  /**
-   * 按主键 load detail row，供 facade 内 PRE-check 用
-   * 找不到时返回 null（不抛错），facade 转 404
-   */
-  loadDetail(id: string): Promise<TRow | null>;
-
-  /** 读权限判定（结构性 + permission） */
-  checkRead(actor: PermissionActor, row: TRow): Promise<boolean>;
-
-  /**
-   * 写权限判定（结构性 + permission + sub-action）
-   * action 字符串：'update' / 'delete' / 'enable' / ... —— adapter 内部映射到 permission_key
-   */
-  checkWrite(actor: PermissionActor, row: TRow, action: string): Promise<boolean>;
-
-  /**
-   * 创建时的 ownership 注入（写入 patch 前调）
-   * 返回需要追加 / 覆盖的字段（如 tenant_code = actor.tenantCode）
-   */
-  resolveCreateOwnership(actor: PermissionActor, payload: Partial<TRow>): Partial<TRow>;
-}
-
-// ─── adapter 注册 ────────────────────────────────────────────────
-
-const REGISTRY = new Map<string, ResourceAccessAdapter<unknown>>();
-
-export function registerAccessAdapter<TRow>(adapter: ResourceAccessAdapter<TRow>): void {
-  REGISTRY.set(adapter.resourceKind, adapter as ResourceAccessAdapter<unknown>);
-}
-
-export function getAccessAdapter<TRow = unknown>(
-  resourceKind: string,
-): ResourceAccessAdapter<TRow> | null {
-  return (REGISTRY.get(resourceKind) ?? null) as ResourceAccessAdapter<TRow> | null;
-}
+export type {
+  ResourceAccessAdapter,
+  QueryModifier,
+  RequireAccessOpts,
+} from "@/lib/access-facade-types";
 
 // ─── flag 解析 ───────────────────────────────────────────────────
 
@@ -99,11 +77,6 @@ export function isResourceEnforced(resourceKind: string): boolean {
 
 // ─── requireAccess · 路由层统一闸 ────────────────────────────────
 
-export type RequireAccessOpts =
-  | { row: unknown }                    // 已 load row → 直接 check
-  | { id: string }                      // 路由提供 id → facade 内 load → check
-  | Record<string, never>;              // create / list 场景 → 仅按 actor 判定（不传 row 也不传 id）
-
 /**
  * 综合判定 actor 能否对 resourceKind 执行 action
  *
@@ -112,16 +85,15 @@ export type RequireAccessOpts =
  *   - Response：错误响应（403 / 404 / 500），路由直接 return
  *
  * action 语义：
- *   - 'read'：调 adapter.checkRead
- *   - 'create'：仅按 actor 判定（不需要 row），由 adapter.checkWrite 配合 action='create' 实现
- *     [本 Phase 简化：create 场景 facade 仅检 flag + actor 是否 super；具体 ownership 在 resolveCreateOwnership 处理]
- *   - 其它（'update' / 'delete' / 'enable' / 子动作）：调 adapter.checkWrite
+ *   - 'read'：调 adapter.checkRead（需 row）
+ *   - 'create'：调 adapter.checkCreate（R1 F4，不需要 row）
+ *   - 其它（'update' / 'delete' / 'enable' / 子动作）：调 adapter.checkWrite（需 row）
  */
 export async function requireAccess(
   actor: PermissionActor,
   resourceKind: string,
   action: string,
-  opts: RequireAccessOpts = {},
+  opts: import("@/lib/access-facade-types").RequireAccessOpts = {},
 ): Promise<Response | null> {
   // ─── flag gate：未启用该 resource → 完全 no-op ─────────────────
   if (!isResourceEnforced(resourceKind)) return null;
@@ -135,6 +107,18 @@ export async function requireAccess(
     // flag 列出了一个 resource 但 adapter 没注册 → 视为配置错误，500
     console.error(`[requireAccess] adapter not registered for resource: ${resourceKind}`);
     return apiError("权限校验未就绪", "INTERNAL_ERROR");
+  }
+
+  // ─── create 分支（R1 F4）：不需要 row，直接调 checkCreate ──────
+  if (action === "create") {
+    try {
+      const ok = await adapter.checkCreate(actor);
+      if (!ok) return apiError("权限不足", "FORBIDDEN");
+      return null;
+    } catch (e) {
+      console.error(`[requireAccess] adapter.checkCreate threw for ${resourceKind}`, e);
+      return apiError("权限校验失败", "INTERNAL_ERROR");
+    }
   }
 
   // ─── 拿 row（如 opts.row 已提供则复用，否则按 id load） ────────
@@ -154,7 +138,7 @@ export async function requireAccess(
     }
   }
 
-  // ─── 调 adapter check ─────────────────────────────────────────
+  // ─── 调 adapter check（read / 写动作）─────────────────────────
   try {
     if (action === "read") {
       if (row === null) {
@@ -162,15 +146,6 @@ export async function requireAccess(
         return apiError("权限不足", "FORBIDDEN");
       }
       const ok = await adapter.checkRead(actor, row);
-      if (!ok) return apiError("权限不足", "FORBIDDEN");
-      return null;
-    }
-
-    if (action === "create") {
-      // create 场景：facade 仅按 actor 判定有无 .{scope}.create.* 权限；
-      // adapter 在 resolveCreateOwnership 时注入归属字段。
-      // 本 Phase 简化：调 adapter.checkWrite 传 row=null（adapter 内部处理 null row 的 create 语义）
-      const ok = await adapter.checkWrite(actor, row as never, action);
       if (!ok) return apiError("权限不足", "FORBIDDEN");
       return null;
     }
