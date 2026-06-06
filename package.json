@@ -11,7 +11,7 @@
     "ci:lint": "npm run lint",
     "ci:typecheck": "tsc --noEmit",
     "ci:build": "npm run build",
-    "ci:test": "echo \"Tests pending (see M2.2 in 4.17up)\"",
+    "ci:test": "tsx scripts/phase-d-scope-utils.test.ts && npm run seed:check",
     "ci:check": "npm run ci:lint && npm run ci:typecheck && npm run ci:build && npm run ci:test",
     "seed:gen": "tsx scripts/generate-permission-seed.ts",
     "seed:check": "tsx scripts/check-permission-seed.ts"

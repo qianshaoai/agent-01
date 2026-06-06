@@ -4,6 +4,9 @@ import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { canReadRow } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 // 5.14up PR-B · 智能体草稿详情 / 保存 / 删除
 // 权限：super_admin + system_admin 可所有；org_admin 不可
@@ -36,6 +39,13 @@ export async function GET(
     return apiError("无权查看该草稿", "FORBIDDEN");
   }
 
+  // Phase D D-2 · v2 第二闸 read（env-gated）
+  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "agent_draft", "read", { id });
+    if (err) return err;
+  }
+
   return NextResponse.json(data);
 }
 
@@ -54,6 +64,14 @@ export async function PATCH(
     if (!own) return apiError("草稿不存在", "NOT_FOUND");
     if (own.created_by !== admin.adminId) return apiError("无权编辑该草稿", "FORBIDDEN");
   }
+
+  // Phase D D-2 · v2 第二闸 update（env-gated）
+  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "agent_draft", "update", { id });
+    if (err) return err;
+  }
+
   const body = await req.json().catch(() => ({}));
 
   const patch: Record<string, unknown> = {};
@@ -177,6 +195,13 @@ export async function DELETE(
   // 5.19up · org_admin 只能删除自己创建的草稿
   if (admin.role === "org_admin" && existing.created_by !== admin.adminId) {
     return apiError("无权删除该草稿", "FORBIDDEN");
+  }
+
+  // Phase D D-2 · v2 第二闸 delete（env-gated）
+  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "agent_draft", "delete", { id });
+    if (err) return err;
   }
 
   // 已发布的草稿：软删（status → archived），保留 published_agent_id 反查关系

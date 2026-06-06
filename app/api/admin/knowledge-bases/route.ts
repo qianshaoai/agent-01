@@ -10,6 +10,9 @@ import {
   validateTenantCode,
   ScopeAdminNoTenantError,
 } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用时生效；空时 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库列表 + 新建
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -23,6 +26,18 @@ const KB_WRITE_ROLES = ["super_admin", "system_admin", "org_admin"] as const;
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase D D-5 · list 走 env-gated hasPermission 粗粒度 check（HC2）；listScopeFilter ownership 下方保留
+  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "kb.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "kb.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   // 5.30up · B 半：所有 admin 角色都能读（含 org_admin），按 ownership 过滤
   const statusParam = req.nextUrl.searchParams.get("status");
@@ -73,6 +88,13 @@ export async function POST(req: NextRequest) {
   // 5.30up · R2 §1 双闸门：角色白名单 + org_admin tenantCode 非空兜底
   const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
   if (gate) return gate;
+
+  // Phase D D-5 · v2 第二闸 create（env-gated；generic checkCreate：.all 兜底 OR 自身 .org）
+  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "knowledge_base", "create");
+    if (err) return err;
+  }
 
   const body = await req.json();
   const name = String(body.name ?? "").trim();

@@ -1,7 +1,6 @@
-// 6.4up v2 Phase A · team resource access adapter
-// 注：teams 表无 tenant_code 列，需通过 dept_id 反查；本 Phase 用 generic stub，
-//   loadDetail 返回的 row 缺 tenant_code 时 fallback 到 .all scope —— 与现状 team
-//   route 内"按 dept.tenant_code 闸门"语义近似但不精确；Phase D enforce 启用前可补强。
+// 6.4up v2 Phase D · D-0 · team resource access adapter
+// R0.1 修正：teams 表自 migration_v13 起**有 tenant_code 列**（早期注释误写"无"）；
+//   故 generic tenant-owned adapter 列层面可用，loadDetail 的 select id, tenant_code 正常返回。
 import { buildTenantOwnedAdapter } from "./_generic";
 
 export const teamAccessAdapter = buildTenantOwnedAdapter({

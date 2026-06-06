@@ -4,6 +4,9 @@ import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { canReadRow } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 // 5.14up PR-B · 智能体草稿列表 + 新增
 // 权限：super_admin + system_admin 可见 / 创建；org_admin 不可
@@ -37,6 +40,18 @@ export async function GET() {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
 
+  // Phase D D-2 · list 走 env-gated hasPermission 粗粒度 check（HC2）
+  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "agent_draft.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "agent_draft.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
+
   // 5.19up · org_admin 可用搭建器，但列表只看自己创建的草稿
   let query = db
     .from("agent_drafts")
@@ -57,6 +72,13 @@ export async function POST(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
   // 5.19up · org_admin 可创建草稿（created_by 即本人，列表/编辑/发布均按此归属）
+
+  // Phase D D-2 · v2 第二闸 create（env-gated；adapter.checkCreate 按 actor 自身 org/all 判）
+  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "agent_draft", "create");
+    if (err) return err;
+  }
 
   const body = await req.json().catch(() => ({}));
   const name = String(body.name ?? "未命名智能体").trim() || "未命名智能体";

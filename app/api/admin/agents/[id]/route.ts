@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
+// 6.4up v2 Phase D · D-2 · agent enforce（env "agent" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +22,21 @@ export async function PATCH(
 
   const { id } = await params;
   const body = await req.json();
+
+  // Phase D D-2 · v2 第二闸（env-gated；org_admin 已在上方硬拒，到此仅 system_admin）：
+  //   改 enabled → agent.enable；改其它字段 → agent.basic.update（两者可同时触发）。
+  if (isResourceEnforced("agent") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    if (body.enabled !== undefined) {
+      const err = await requireAccess(actor, "agent", "enable", { id });
+      if (err) return err;
+    }
+    if (Object.keys(body).some((k) => k !== "enabled")) {
+      const err = await requireAccess(actor, "agent", "basic.update", { id });
+      if (err) return err;
+    }
+  }
+
   const updates: Record<string, unknown> = {};
 
   if (body.agentCode !== undefined) updates.agent_code = body.agentCode;
@@ -155,6 +173,13 @@ export async function DELETE(
 
   const { id } = await params;
   if (!id) return apiError("id 必填", "VALIDATION_ERROR");
+
+  // Phase D D-2 · v2 第二闸（env-gated；org_admin 已在上方硬拒）
+  if (isResourceEnforced("agent") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "agent", "delete", { id });
+    if (err) return err;
+  }
 
   // 1) 引用检查：聚合到工作流维度
   const { data: refs, error: refsErr } = await db

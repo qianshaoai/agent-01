@@ -3,10 +3,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase D · D-4 · dept enforce（env "dept" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase D D-4 · list 走 env-gated hasPermission 粗粒度 check（HC2）；org_admin tenant filter 下方保留
+  if (isResourceEnforced("dept") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "dept.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "dept.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   const { page, pageSize, start } = parsePagination(req, 100);
   let tenantCode = req.nextUrl.searchParams.get("tenantCode");
@@ -39,6 +54,13 @@ export async function POST(req: NextRequest) {
     if (!admin.tenantCode || admin.tenantCode.toUpperCase() !== targetTenant) {
       return apiError("无权在该组织下创建部门", "FORBIDDEN");
     }
+  }
+
+  // Phase D D-4 · v2 第二闸 create（env-gated；generic checkCreate：.all 兜底 OR 自身 .org）
+  if (isResourceEnforced("dept") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "dept", "create");
+    if (err) return err;
   }
 
   const { data, error } = await db

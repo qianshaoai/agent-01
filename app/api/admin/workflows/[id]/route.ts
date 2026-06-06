@@ -12,6 +12,9 @@ import {
   ResourceScope,
 } from "@/lib/permission-actor";
 import { PermissionKey } from "@/lib/permission-keys";
+// 6.4up v2 Phase D · D-3 · workflow builtin 路径 enforce（env "workflow" 启用时生效；空时 no-op）
+//   custom_admin 分支完全不走 requireAccess（R0.1 F3 双通道隔离）。
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 
 export const dynamic = "force-dynamic";
 
@@ -213,6 +216,21 @@ export async function PATCH(
   if (guard) return guard;
 
   const body = await req.json();
+
+  // Phase D D-3 · v2 第二闸（builtin 路径；env-gated）。custom 分支已在上方独立返回，不受影响。
+  //   ensureAdminHierarchyAllows(canActOnRole) + ensureOrgAdminCanTouch 保留在前（结构性优先）。
+  if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    if (body.enabled !== undefined) {
+      const e = await requireAccess(actor, "workflow", "enable", { id });
+      if (e) return e;
+    }
+    if (Object.keys(body).some((k) => k !== "enabled")) {
+      const e = await requireAccess(actor, "workflow", "update", { id });
+      if (e) return e;
+    }
+  }
+
   const updates: Record<string, unknown> = {};
 
   if (body.name !== undefined) updates.name = body.name;
@@ -312,6 +330,13 @@ export async function DELETE(
   if (hierarchyGuard) return hierarchyGuard;
   const guard = await ensureOrgAdminCanTouch(admin, id);
   if (guard) return guard;
+
+  // Phase D D-3 · v2 第二闸（builtin；env-gated）
+  if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const e = await requireAccess(actor, "workflow", "delete", { id });
+    if (e) return e;
+  }
 
   // 5.11up · DELETE 前先 snapshot 资源归属，避免删完后反查为 null 导致 org_admin 看不到这条审计
   const resourceTenantCode = await resolveResourceTenantCode("workflow", id);

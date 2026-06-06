@@ -11,6 +11,10 @@ import {
   validateTenantCode,
   ScopeAdminNoTenantError,
 } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-5 · provider enforce（resourceKind=model_provider；env "model_provider" 启用；空时 no-op）
+//   注：system_admin 现状被 requireWriteAccess 排除，seed 也无 provider 写 key，行为一致。
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 // 5.14up PR-A · 模型供应商列表 + 新增
 // 5.30up · A 半 RBAC 改造（R2 通过）：
@@ -64,6 +68,18 @@ function sanitize(row: ProviderRow) {
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase D D-5 · list 走 env-gated hasPermission 粗粒度 check（HC2）；listScopeFilter ownership 下方保留
+  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "provider.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "provider.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
   // 5.19up · org_admin 也可读供应商列表（搭建器选模型供应商需要）
   // 5.30up · A 半 · 按 ownership 过滤：org_admin 仅看公共 + own；super/system 全可见
 
@@ -98,6 +114,13 @@ export async function POST(req: NextRequest) {
   // 5.30up · R2 §1 双闸：写白名单 super + org_admin（**不放 system_admin**）+ tenantCode 兜底
   const gate = requireWriteAccess(admin, ["super_admin", "org_admin"]);
   if (gate) return gate;
+
+  // Phase D D-5 · v2 第二闸 create（env-gated；system_admin 已被上方白名单排除）
+  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "model_provider", "create");
+    if (err) return err;
+  }
 
   const body = await req.json();
   const provider_code = String(body.provider_code ?? "").trim();

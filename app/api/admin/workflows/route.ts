@@ -6,10 +6,13 @@ import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import {
   buildPermissionActor,
+  hasPermission,
   PermissionActor,
   listReadableScopes,
 } from "@/lib/permission-actor";
 import { PermissionKey, getPermissionScopeSuffix } from "@/lib/permission-keys";
+// 6.4up v2 Phase D · D-3 · workflow builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
+import { isResourceEnforced } from "@/lib/access-facade";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +96,18 @@ export async function GET(req: NextRequest) {
   }
 
   const { page, pageSize, start } = parsePagination(req, 50);
+
+  // Phase D D-3 · builtin 路径 v2 list 粗闸（env-gated；custom 分支下方独立处理，不受影响）
+  if (isResourceEnforced("workflow") && !isCustomAdminPayload(access) && access.role !== "super_admin") {
+    const actor = await buildPermissionActor(access);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "workflow.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "workflow.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   let scopedWfIds: string[] | null = null;
 
@@ -287,6 +302,19 @@ export async function POST(req: NextRequest) {
 
   // ── builtin admin 路径（保留原有 5.9up org_admin 校验） ──
   const admin = access;
+
+  // Phase D D-3 · builtin create v2 闸（env-gated；按 actor 自身 create 能力 OR .all/.org）
+  if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okAll = await hasPermission(actor, "workflow.create.all");
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "workflow.create.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    if (!okAll && !okOrg) return apiError("权限不足", "FORBIDDEN");
+  }
+
   let { visibleTo, permissions } = body;
 
   // 5.9up · org_admin 创建工作流：

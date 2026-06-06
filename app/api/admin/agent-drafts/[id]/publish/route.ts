@@ -4,6 +4,9 @@ import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { canReadRow } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 // 5.14up PR-C · 把草稿发布到正式 agents 表
 //
@@ -71,6 +74,13 @@ export async function POST(
   // 5.19up · org_admin 只能发布自己创建的草稿
   if (admin.role === "org_admin" && draft.created_by !== admin.adminId) {
     return apiError("无权发布该草稿", "FORBIDDEN");
+  }
+
+  // Phase D D-2 · v2 第二闸 publish（env-gated；保留下方资源可见性 + 范围校验）
+  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "agent_draft", "publish", { id });
+    if (err) return err;
   }
 
   // ── 校验 ──

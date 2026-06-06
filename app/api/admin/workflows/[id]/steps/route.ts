@@ -12,6 +12,8 @@ import {
   ResourceScope,
 } from "@/lib/permission-actor";
 import { PermissionKey } from "@/lib/permission-keys";
+// 6.4up v2 Phase D · D-3 · workflow step builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 
 /** 给步骤路由用：custom admin 持有的最高 update key */
 function pickStepUpdateKey(actor: PermissionActor): PermissionKey | null {
@@ -120,6 +122,12 @@ export async function POST(
     // org_admin 归属校验
     const orgGuard = await ensureOrgAdminCanTouch(access, workflowId);
     if (orgGuard) return orgGuard;
+    // Phase D D-3 · v2 第二闸（builtin；step 写视为 workflow update）
+    if (isResourceEnforced("workflow") && access.role !== "super_admin") {
+      const actorV2 = await buildPermissionActor(access);
+      const e = await requireAccess(actorV2, "workflow", "update", { id: workflowId });
+      if (e) return e;
+    }
     admin = {
       adminId: access.adminId,
       username: access.username,
@@ -204,6 +212,12 @@ export async function PUT(
     }
     const orgGuard = await ensureOrgAdminCanTouch(access, workflowId);
     if (orgGuard) return orgGuard;
+    // Phase D D-3 · v2 第二闸（builtin；step 重排视为 workflow update）
+    if (isResourceEnforced("workflow") && access.role !== "super_admin") {
+      const actorV2 = await buildPermissionActor(access);
+      const e = await requireAccess(actorV2, "workflow", "update", { id: workflowId });
+      if (e) return e;
+    }
     admin = {
       adminId: access.adminId,
       username: access.username,

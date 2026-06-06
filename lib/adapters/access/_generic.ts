@@ -65,10 +65,16 @@ export function buildTenantOwnedAdapter(config: {
     },
 
     /**
-     * R1 F4 · create 不传 row：actor 必须有 tenantCode（个人 admin 无 tenant 不允许在
-     * org-scope 内建 tenant-owned 资源；future enforce 时如需"平台级建"路径，单独 adapter）
+     * Phase D D-0 · R0.1 §5.5 / F2 双形态修复（与 Phase C R3 notice 的 OR 模式同款）：
+     *   先看 `.all`（system_admin 无 tenantCode 也能建全局资源，如 kb.create.all）；
+     *   否则看 `.org` + 自身 org scope。
+     * 修复前：无 tenantCode 直接 false → 持 `.all` 的 system_admin 建全局资源被误拒。
+     * 影响面：kb / dept / team create 等；原本 `.org` 能过的路径仍过，无回归。
      */
     async checkCreate(actor) {
+      if (await hasPermission(actor, `${config.permissionPrefix}.create.all` as PermissionKey)) {
+        return true;
+      }
       if (!actor.tenantCode) return false;
       const key = `${config.permissionPrefix}.create.org` as PermissionKey;
       return await hasPermission(actor, key, [
@@ -123,6 +129,29 @@ export function buildPlatformAdapter(config: {
   };
   registerAccessAdapter(adapter);
   return adapter;
+}
+
+/**
+ * Phase D D-0 共享 helper · 「actor 是否对 `prefix.action` 在 scopes 上有权」
+ *
+ * 按 suffixes 顺序逐个试 `prefix.action.suffix`，命中其一即 true（actor 可能持 .org 覆盖 dept/team）。
+ * hasPermission 内部对多 scope 做 AND（scopes 必须**全部**落在 actor 该 key 范围内）。
+ * workflow / agent / agent_draft / user adapter 共用，避免各写一份 suffix 循环。
+ *
+ * suffixes 默认四档；agent / agent_draft / user 这类只有 org/all 的资源传 ["all","org"]。
+ */
+export async function checkAnyScopedPermission(
+  actor: PermissionActor,
+  prefix: string,
+  action: string,
+  scopes: ResourceScope[],
+  suffixes: readonly ("all" | "org" | "dept" | "team")[] = ["all", "org", "dept", "team"],
+): Promise<boolean> {
+  for (const suffix of suffixes) {
+    const key = `${prefix}.${action}.${suffix}` as PermissionKey;
+    if (await hasPermission(actor, key, scopes)) return true;
+  }
+  return false;
 }
 
 // 让 imports 拿到引用以便 dev 调试，但本 Phase 不显式用

@@ -5,6 +5,20 @@ import { canAssignRole, canManageTarget } from "@/lib/auth";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase D · D-1 · user enforce（env "user" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
+
+// body.action → v2 sub-action key 中段映射（R0.1 §6；D10=a：set-dept 统一收 department.assign）
+const USER_SUBACTION: Record<string, string> = {
+  "set-status": "enable",
+  "set-role": "role.update",
+  "set-tenant": "tenant.transfer",
+  "set-dept": "department.assign",
+  "reset-password": "password.reset",
+  "soft-delete": "delete",
+  delete: "delete",
+};
 
 export async function PATCH(
   req: NextRequest,
@@ -36,6 +50,19 @@ export async function PATCH(
   if (MANAGE_ACTIONS.includes(body.action)) {
     if (!canManageTarget(admin.role, target.role)) {
       return apiError("无权管理该用户（对方等级不低于你）", "FORBIDDEN");
+    }
+  }
+
+  // Phase D D-1 · v2 第二闸（env-gated）：旧 canManageTarget/canAssignRole/org_admin tenant 闸保留在前，
+  //   按 body.action 映射 sub-action key 叠一道 requireAccess（任一不过即 403；R0.1 §6）。
+  if (isResourceEnforced("user") && admin.role !== "super_admin") {
+    const sub = USER_SUBACTION[body.action];
+    if (sub) {
+      const actor = await buildPermissionActor(admin);
+      const err = await requireAccess(actor, "user", sub, {
+        row: { id: target.id, tenant_code: target.tenant_code },
+      });
+      if (err) return err;
     }
   }
 

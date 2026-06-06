@@ -9,6 +9,9 @@ import { retrieveKbChunks } from "@/lib/kb/retrieve";
 import { buildKbStrictAnswerPrompt, buildKbUnavailablePrompt } from "@/lib/kb/prompt";
 import { isMetaOrChitchatMessage } from "@/lib/kb/intent";
 import { canReadRow } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 // 5.14up PR-C · 草稿测试聊天（SSE 流式，不入 messages 表，不扣额度）
 // 权限：super_admin + system_admin 可（system_admin 看不到 key 明文，调用通过后端代理）
@@ -80,6 +83,14 @@ export async function POST(
       && (draftRow as { created_by?: string }).created_by !== admin.adminId) {
     return apiError("无权测试该草稿", "FORBIDDEN");
   }
+
+  // Phase D D-2 · v2 第二闸 test（env-gated）
+  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "agent_draft", "test", { id });
+    if (err) return err;
+  }
+
   if (draft.agent_type !== "chat") {
     return apiError("外链型智能体不支持测试聊天", "VALIDATION_ERROR");
   }

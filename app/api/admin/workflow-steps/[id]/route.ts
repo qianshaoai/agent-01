@@ -12,6 +12,8 @@ import {
   ResourceScope,
 } from "@/lib/permission-actor";
 import { PermissionKey } from "@/lib/permission-keys";
+// 6.4up v2 Phase D · D-3 · workflow step builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 
 function pickStepUpdateKey(actor: PermissionActor): PermissionKey | null {
   const order: PermissionKey[] = [
@@ -96,6 +98,16 @@ export async function PATCH(
   } else {
     const guard = await ensureCanTouchStep(access, id);
     if (guard) return guard;
+    // Phase D D-3 · v2 第二闸（builtin；step 改视为 workflow update）
+    if (isResourceEnforced("workflow") && access.role !== "super_admin") {
+      const { data: st } = await db.from("workflow_steps").select("workflow_id").eq("id", id).maybeSingle();
+      if (!st) return apiError("步骤不存在", "NOT_FOUND");
+      const actorV2 = await buildPermissionActor(access);
+      const e = await requireAccess(actorV2, "workflow", "update", {
+        id: (st as { workflow_id: string }).workflow_id,
+      });
+      if (e) return e;
+    }
     admin = {
       adminId: access.adminId,
       username: access.username,
@@ -147,6 +159,16 @@ export async function DELETE(
   const { id } = await params;
   const guard = await ensureCanTouchStep(admin, id);
   if (guard) return guard;
+  // Phase D D-3 · v2 第二闸（builtin；step 删视为 workflow update）
+  if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
+    const { data: st } = await db.from("workflow_steps").select("workflow_id").eq("id", id).maybeSingle();
+    if (!st) return apiError("步骤不存在", "NOT_FOUND");
+    const actorV2 = await buildPermissionActor(admin);
+    const e = await requireAccess(actorV2, "workflow", "update", {
+      id: (st as { workflow_id: string }).workflow_id,
+    });
+    if (e) return e;
+  }
   const { data: step } = await db.from("workflow_steps").select("title").eq("id", id).maybeSingle();
   // 5.11up · 删除前缓存 tenant 归属，避免删完反查为 null
   const resourceTenantCode = await resolveResourceTenantCode("workflow_step", id);
