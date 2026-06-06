@@ -165,7 +165,6 @@ export async function GET(req: NextRequest) {
     .select(`
       id, name, description, category, sort_order, enabled, visible_to, created_at,
       created_by, created_by_role,
-      creator:created_by ( username ),
       workflow_categories ( category_id ),
       workflow_steps (
         id, step_order, title, description, exec_type, agent_id, button_text, enabled
@@ -191,15 +190,42 @@ export async function GET(req: NextRequest) {
     permMap.set(p.resource_id, arr);
   }
 
-  type CreatorJoin = { username: string } | null;
-  const result = (wfRes.data ?? []).map((wf) => {
-    const creator = wf.creator as unknown as CreatorJoin;
+  // 6.4up 验收修复 · 解析创建者 username（不再用 PostgREST FK 嵌套）
+  //   v51 起 workflows.created_by 的外键已 drop（custom admin 用 users.id 创建会撞 admins FK 23503），
+  //   且 created_by 现可能是 admins.id（内置）或 users.id（自定义角色）——单表 FK 嵌套既会 PGRST200 报错
+  //   又语义不全。改为按 created_by 手动反查 admins + users 两表拼 username 映射。
+  const creatorIds = Array.from(
+    new Set(
+      ((wfRes.data ?? []) as { created_by: string | null }[])
+        .map((wf) => wf.created_by)
+        .filter((id): id is string => !!id),
+    ),
+  );
+  const creatorNameMap = new Map<string, string>();
+  if (creatorIds.length > 0) {
+    const [adminRows, userRows] = await Promise.all([
+      db.from("admins").select("id, username").in("id", creatorIds),
+      db.from("users").select("id, username").in("id", creatorIds),
+    ]);
+    for (const a of (adminRows.data ?? []) as { id: string; username: string | null }[]) {
+      if (a.username) creatorNameMap.set(a.id, a.username);
+    }
+    for (const u of (userRows.data ?? []) as { id: string; username: string | null }[]) {
+      // admins 优先（内置创建者）；users 仅补 admins 未覆盖的 id（自定义角色创建者）
+      if (u.username && !creatorNameMap.has(u.id)) creatorNameMap.set(u.id, u.username);
+    }
+  }
+
+  const result = ((wfRes.data ?? []) as Array<{
+    id: string;
+    created_by: string | null;
+    workflow_categories?: { category_id: string }[] | null;
+  }>).map((wf) => {
     return {
       ...wf,
       categoryIds: (wf.workflow_categories ?? []).map((c: { category_id: string }) => c.category_id),
       workflow_categories: undefined,
-      creator: undefined,
-      created_by_username: creator?.username ?? null,
+      created_by_username: wf.created_by ? (creatorNameMap.get(wf.created_by) ?? null) : null,
       permissions: permMap.get(wf.id) ?? [],
     };
   });

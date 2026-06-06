@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
       source: "admin_table",
     });
     return NextResponse.json(
-      { ok: true },
+      { ok: true, source: "admin_table" },
       { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
     );
   }
@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
         username: matchedUser.username ?? matchedUser.phone,
       });
       return NextResponse.json(
-        { ok: true, mustChangePassword: false },
+        { ok: true, mustChangePassword: false, source: "custom_admin" },
         { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
       );
     }
@@ -166,7 +166,7 @@ export async function POST(req: NextRequest) {
   });
 
   return NextResponse.json(
-    { ok: true, mustChangePassword },
+    { ok: true, mustChangePassword, source: "user_admin" },
     { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } }
   );
 }

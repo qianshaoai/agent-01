@@ -53,7 +53,10 @@ export default function AdminLoginPage() {
         setMustChange(true);
         return;
       }
-      router.push("/admin/dashboard");
+      // 6.4up 验收修复 · custom admin 的权限通道不含控制台（dashboard 4 个接口走
+      //   builtin-only requireAdmin → 401 → 旧 dashboard 崩页）。改落地到它真正能进的
+      //   工作流管理；无 workflow 权限时该页 + admin-layout 会显示"尚未配置后台权限"兜底。
+      router.push(data.source === "custom_admin" ? "/admin/workflows" : "/admin/dashboard");
       router.refresh();
     } catch {
       setError("网络错误，请重试");

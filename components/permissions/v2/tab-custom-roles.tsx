@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { Plus, Users, Pencil, Trash2, X, Search } from "lucide-react";
+import { RESOURCE_LABEL } from "./permission-matrix";
 
 type RoleRow = {
   id: string;
@@ -341,7 +342,12 @@ function RoleEditModal({
 
         {Object.entries(grouped).map(([resource, keys]) => (
           <div key={resource} className="border border-gray-200 rounded-[10px] p-3">
-            <p className="text-[13px] font-semibold text-gray-700 mb-2 capitalize">{resource}</p>
+            <p className="text-[13px] font-semibold text-gray-700 mb-2">
+              {RESOURCE_LABEL[resource] ?? resource}
+              <code className="ml-2 text-[11px] text-gray-400 font-mono font-normal">
+                {resource}
+              </code>
+            </p>
             <div className="space-y-2">
               {(["read", "create", "update"] as const).map((action) => {
                 const rowKeys = keys.filter((k) => k.action === action);
