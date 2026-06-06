@@ -8,6 +8,7 @@ import {
   AdminRole,
 } from "@/lib/auth";
 import { checkLoginRate, recordLoginFail, clearLoginFail } from "@/lib/rate-limit";
+import { hasAnyCustomRole } from "@/lib/permission-actor";
 
 // 5.28up · 用户端「管理后台」一键入口 · 颁 admin cookie
 //
@@ -71,6 +72,35 @@ export async function POST() {
   // ③ role 检查
   const role = dbUser.role as string;
   if (!["super_admin", "system_admin", "org_admin"].includes(role)) {
+    // 6.4up · custom admin 入口：role='user' 但持有 custom role → 签 custom access cookie
+    // 与 admin/login 第 2 路径同口径；不挂 firstLogin 闸门（用户层登录态已 active）。
+    if (await hasAnyCustomRole(dbUser.id)) {
+      // R2 Fix 4 · 所属组织 enabled / 未过期 校验（与 builtin elevate 同口径）
+      if (dbUser.tenant_code && dbUser.tenant_code !== "PERSONAL") {
+        const { data: tenant } = await db
+          .from("tenants")
+          .select("enabled, expires_at")
+          .eq("code", dbUser.tenant_code)
+          .single();
+        if (!tenant || !tenant.enabled) {
+          return apiError("所属组织已被禁用，无法进入后台", "FORBIDDEN");
+        }
+        if (tenant.expires_at && new Date(tenant.expires_at) < new Date()) {
+          return apiError("所属组织已过期，无法进入后台", "FORBIDDEN");
+        }
+      }
+      clearLoginFail(rateKey);
+      const token = await signToken({
+        type: "admin",
+        source: "custom_admin",
+        userId: dbUser.id,
+        username: dbUser.username ?? dbUser.phone,
+      });
+      return NextResponse.json(
+        { ok: true },
+        { headers: { "Set-Cookie": buildAdminSetCookieHeader(token) } },
+      );
+    }
     // 不计入限流——这是"前端按钮不该出现"的兜底，不算恶意尝试
     return apiError("该账号无后台访问权限", "FORBIDDEN");
   }
@@ -112,6 +142,7 @@ export async function POST() {
     username: dbUser.username ?? dbUser.phone,
     role: role as AdminRole,
     tenantCode: role === "org_admin" ? dbUser.tenant_code : null,
+    source: "user_admin",
   });
 
   return NextResponse.json(

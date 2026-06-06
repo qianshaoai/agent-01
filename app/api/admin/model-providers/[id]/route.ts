@@ -12,6 +12,9 @@ import {
   validateTenantCode,
   scanReferences,
 } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-5 · provider enforce（resourceKind=model_provider；env "model_provider" 启用；空时 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 // 5.14up PR-A · 模型供应商详情 / 更新 / 删除
 // 5.30up · A 半 RBAC 改造（R2 通过）：
@@ -88,6 +91,15 @@ export async function GET(
     return apiError("供应商不存在", "NOT_FOUND");
   }
 
+  // Phase D D-5 · v2 第二闸 read（env-gated；复用已 load 的 row）
+  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "model_provider", "read", {
+      row: { id, tenant_code: (data as ProviderRow).tenant_code },
+    });
+    if (err) return err;
+  }
+
   return NextResponse.json(sanitize(data as ProviderRow));
 }
 
@@ -121,6 +133,13 @@ export async function PATCH(
   // 可见但不可写（org_admin 看公共但写不了）→ 403
   if (!canWriteRow(admin, existingRow)) {
     return apiError("无权编辑该供应商", "FORBIDDEN");
+  }
+
+  // Phase D D-5 · v2 第二闸 update（env-gated；复用已 load 的 existingRow）
+  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "model_provider", "update", { row: existingRow });
+    if (err) return err;
   }
 
   // 5.30up · 先 sanitizeUpdatePatch 净化（org_admin 的 tenant_code 字段被剥离）
@@ -287,6 +306,13 @@ export async function DELETE(
   if (!canReadRow(admin, existingRow)) return apiError("供应商不存在", "NOT_FOUND");
   if (!canWriteRow(admin, existingRow)) {
     return apiError("无权删除该供应商", "FORBIDDEN");
+  }
+
+  // Phase D D-5 · v2 第二闸 delete（env-gated；复用已 load 的 existingRow）
+  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "model_provider", "delete", { row: existingRow });
+    if (err) return err;
   }
 
   // 5.30up · 引用阻断：现用 R2 §4 共用 scanReferences helper（同口径覆盖 agents + drafts）

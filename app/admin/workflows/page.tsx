@@ -134,28 +134,60 @@ export default function WorkflowsAdminPage() {
   const { toast } = useToast();
   // 5.7up · 当前管理员角色，决定 org_admin 是否隐藏 visible_to 选择器
   // 5.9up · 同时拉 tenantCode，用于过滤 dept/team picker、写 scope=org 的 permission
+  // 6.4up · 额外拉 source / permissions，处理 custom admin 路径
   const [adminRole, setAdminRole] = useState<"super_admin" | "system_admin" | "org_admin" | null>(null);
   const [adminTenantCode, setAdminTenantCode] = useState<string | null>(null);
+  const [accessSource, setAccessSource] = useState<"admin_table" | "user_admin" | "custom_admin" | null>(null);
+  const [customPermissions, setCustomPermissions] = useState<Set<string>>(new Set());
   useEffect(() => {
     fetch("/api/admin/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d?.role) setAdminRole(d.role);
-        if (d?.tenantCode) setAdminTenantCode(d.tenantCode);
+        if (!d) return;
+        setAccessSource(d.source ?? null);
+        if (d.role) setAdminRole(d.role);
+        if (d.tenantCode) setAdminTenantCode(d.tenantCode);
+        if (Array.isArray(d.permissions)) setCustomPermissions(new Set(d.permissions));
       })
       .catch(() => {});
   }, []);
   const isOrgAdmin = adminRole === "org_admin";
+  // 6.4up · 是否 custom admin（决定大量 UI 分支：复制/删除/启停隐藏；
+  //   modal 内 enabled / visible_to / permissions 禁用；create 按钮按权限显示）
+  //   注：分类管理 Tab 已于 6.5up 整体迁至 /admin/tags，本页不再有该 Tab
+  const isCustomAdmin = accessSource === "custom_admin";
+  const hasAnyCustomUpdate =
+    customPermissions.has("workflow.update.team") ||
+    customPermissions.has("workflow.update.dept") ||
+    customPermissions.has("workflow.update.org") ||
+    customPermissions.has("workflow.update.all");
+  const hasAnyCustomCreate =
+    customPermissions.has("workflow.create.team") ||
+    customPermissions.has("workflow.create.dept") ||
+    customPermissions.has("workflow.create.org") ||
+    customPermissions.has("workflow.create.all");
+  // R2 收口 · 衍生的 UI 能力（独立 helper 防散落）
+  const canCreateWf = isCustomAdmin ? hasAnyCustomCreate : !!adminRole;
+  const canCopyWf = !isCustomAdmin; // v1 不开放给 custom admin
+  const canDeleteWf = !isCustomAdmin; // v1 不开放
+  const canToggleWfEnabled = !isCustomAdmin; // v1 不开放
 
   // 5.11up · 上下级权限工具：super=3 / system=2 / org=1，actor >= creator 才能动
   const ROLE_LEVEL_MAP: Record<string, number> = { super_admin: 3, system_admin: 2, org_admin: 1 };
   const ROLE_LABEL_MAP: Record<string, string> = { super_admin: "超级管理员", system_admin: "系统管理员", org_admin: "组织管理员" };
   function canTouchWf(wf: Workflow): boolean {
+    // 6.4up · custom admin：持有任一 workflow.update.* 即放行编辑（具体 scope 校验由后端做）
+    if (isCustomAdmin) return hasAnyCustomUpdate;
     if (!adminRole) return false;
     const creatorRole = wf.created_by_role ?? "system_admin"; // 兜底
     return (ROLE_LEVEL_MAP[adminRole] ?? 0) >= (ROLE_LEVEL_MAP[creatorRole] ?? 0);
   }
   function noTouchReason(wf: Workflow): string {
+    if (isCustomAdmin) {
+      return hasAnyCustomUpdate
+        ? "该工作流超出你的可改范围"
+        : "你的角色未授予 workflow 编辑权限";
+    }
     const creatorRole = wf.created_by_role ?? "system_admin";
     const label = ROLE_LABEL_MAP[creatorRole] ?? creatorRole;
     return `该工作流由${label}创建，无权修改`;
@@ -395,15 +427,21 @@ export default function WorkflowsAdminPage() {
       const permissions = wfForm.visibleTo === "custom"
         ? wfForm.permIds.map((scopeId) => ({ scope_type: wfForm.permScope, scope_id: scopeId }))
         : [];
-      const body = {
+      // 6.4up · custom admin PATCH 不能带 enabled / visibleTo / permissions（后端会 403）；
+      //   POST 时 enabled / visibleTo / permissions 都由后端按 actor scope 兜底
+      const body: Record<string, unknown> = {
         name: wfForm.name,
         description: wfForm.description,
         category: wfForm.category,
-        enabled: wfForm.enabled,
-        visibleTo: wfForm.visibleTo,
+        // enabled / visibleTo / permissions 仅 builtin 走下方 if(!isCustomAdmin) 追加（custom admin 带则后端 403）
+        // sortOrder 不发：R1.8 起全局排序由「分层级配置」管理（本页无排序输入）
         categoryIds: wfForm.categoryIds,
-        permissions,
       };
+      if (!isCustomAdmin) {
+        body.enabled = wfForm.enabled;
+        body.visibleTo = wfForm.visibleTo;
+        body.permissions = permissions;
+      }
       // PATCH 天然幂等；POST 创建带 Idempotency-Key
       const res = editingWf
         ? await fetch(`/api/admin/workflows/${editingWf.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
@@ -416,10 +454,12 @@ export default function WorkflowsAdminPage() {
 
   // 6.5up · 失败不再假成功 —— 把 res.ok 检查 + toast 错误统一加进所有 mutating fetch
   async function toggleWfEnabled(wf: Workflow) {
+    // R2 收口 · 检查 res.ok，失败时不要无脑刷新 + 不要静默
     const res = await fetch(`/api/admin/workflows/${wf.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !wf.enabled }) });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      toast(d.error ?? "切换启用状态失败，请重试");
+      toast(d?.error ?? "切换状态失败", "error");
+      return;
     }
     load();
   }
@@ -427,13 +467,14 @@ export default function WorkflowsAdminPage() {
   function duplicateWf(wf: Workflow) {
     showConfirm(`确认复制工作流「${wf.name}」？将连同所有步骤一起复制。`, async () => {
       await duplicateWfGuard.submit(async (idempotencyKey) => {
+        // R2 收口 · 检查 res.ok，否则 builtin-only duplicate 对 custom admin 返回 401 时仍 toast "已复制" 误导用户
         const res = await fetch(`/api/admin/workflows/${wf.id}/duplicate`, {
           method: "POST",
           headers: { "Idempotency-Key": idempotencyKey },
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          toast(d.error ?? "复制工作流失败，请重试");
+          toast(d?.error ?? "复制失败", "error");
           return;
         }
         load(); toast("工作流已复制");
@@ -446,7 +487,7 @@ export default function WorkflowsAdminPage() {
       const res = await fetch(`/api/admin/workflows/${wf.id}`, { method: "DELETE" });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        toast(d.error ?? "删除工作流失败，请重试");
+        toast(d?.error ?? "删除失败", "error");
         return;
       }
       load(); toast("工作流已删除");
@@ -521,7 +562,9 @@ export default function WorkflowsAdminPage() {
     if (!stepForm.title.trim()) { setStepError("请填写步骤标题"); return; }
     if (!showStepModal) return;
     await saveStepGuard.submit(async (idempotencyKey) => {
-      const body = { stepOrder: stepForm.stepOrder, title: stepForm.title, description: stepForm.description, execType: stepForm.execType, agentId: stepForm.execType === "agent" ? (stepForm.agentId || null) : null, buttonText: stepForm.buttonText, enabled: stepForm.enabled };
+      // 6.4up · custom admin PATCH 不能带 enabled（后端禁止启停步骤），POST 时 enabled 默认 true 即可
+      const body: Record<string, unknown> = { stepOrder: stepForm.stepOrder, title: stepForm.title, description: stepForm.description, execType: stepForm.execType, agentId: stepForm.execType === "agent" ? (stepForm.agentId || null) : null, buttonText: stepForm.buttonText };
+      if (!isCustomAdmin) body.enabled = stepForm.enabled;
       // PATCH 天然幂等；POST 创建带 Idempotency-Key
       const res = showStepModal.step
         ? await fetch(`/api/admin/workflow-steps/${showStepModal.step.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
@@ -543,10 +586,11 @@ export default function WorkflowsAdminPage() {
   function deleteStep(step: WorkflowStep) {
     showConfirm(`确认删除步骤「${step.title}」？`, async () => {
       const wf = workflows.find(w => w.workflow_steps?.some(s => s.id === step.id));
+      // R2 收口 · 检查 res.ok（custom admin 对 step DELETE 是 fail-closed）
       const res = await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "DELETE" });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        toast(d.error ?? "删除步骤失败，请重试");
+        toast(d?.error ?? "删除步骤失败", "error");
         return;
       }
       await load();
@@ -557,10 +601,12 @@ export default function WorkflowsAdminPage() {
   }
 
   async function toggleStepEnabled(step: WorkflowStep) {
+    // R2 收口 · 检查 res.ok（custom admin 对 step enabled 是 fail-closed）
     const res = await fetch(`/api/admin/workflow-steps/${step.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !step.enabled }) });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      toast(d.error ?? "切换步骤启用状态失败，请重试");
+      toast(d?.error ?? "切换步骤状态失败", "error");
+      return;
     }
     load();
   }
@@ -782,7 +828,10 @@ export default function WorkflowsAdminPage() {
                   <Layers size={16} /> 工作流配置
                 </Button>
               )}
-              <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>
+              {/* 6.4up · custom admin 仅在持 create 权限时显示「新增工作流」（分类管理 Tab 已于 6.5up 迁至 /admin/tags） */}
+              {canCreateWf && (
+                <Button onClick={openAddWf} className="gap-2"><Plus size={16} /> 新增工作流</Button>
+              )}
             </>
           }
         />
@@ -924,17 +973,23 @@ export default function WorkflowsAdminPage() {
                     <div className="flex items-center gap-1 shrink-0">
                       <span className="text-xs text-gray-400 mr-2">{steps.length} 个步骤</span>
                       {/* 5.11up · 决策 5=A：无权时按钮置灰 + tooltip 说明原因，不直接隐藏 */}
+                      {/* 6.4up · custom admin 直接隐藏 启停 / 复制 / 删除 三类按钮（v1 不开放） */}
                       {(() => {
                         const ok = canTouchWf(wf);
                         const reason = ok ? "" : noTouchReason(wf);
                         return <>
-                          <button onClick={() => ok && toggleWfEnabled(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={ok ? (wf.enabled ? "停用" : "启用") : reason}>
-                            {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                          </button>
-                          {/* 复制按钮：所有人都能复制（决策 2=A，副本归当前 admin） */}
-                          <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流" aria-label="复制工作流"><Copy size={14} /></button>
+                          {canToggleWfEnabled && (
+                            <button onClick={() => ok && toggleWfEnabled(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={ok ? (wf.enabled ? "停用" : "启用") : reason}>
+                              {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                            </button>
+                          )}
+                          {canCopyWf && (
+                            <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流" aria-label="复制工作流"><Copy size={14} /></button>
+                          )}
                           <button onClick={() => ok && openEditWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={ok ? "编辑" : reason} aria-label="编辑"><Edit2 size={14} /></button>
-                          <button onClick={() => ok && deleteWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-500"}`} title={ok ? "删除" : reason} aria-label="删除"><Trash2 size={14} /></button>
+                          {canDeleteWf && (
+                            <button onClick={() => ok && deleteWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-500"}`} title={ok ? "删除" : reason} aria-label="删除"><Trash2 size={14} /></button>
+                          )}
                         </>;
                       })()}
                     </div>
@@ -1062,6 +1117,8 @@ export default function WorkflowsAdminPage() {
                           highlightedStepAgentId={highlightedStepAgentId}
                           agentsCapped={agentsCapped}
                           agentsTotalCount={agentsTotalCount}
+                          canEditSteps={canTouchWf(wf)}
+                          isCustomAdmin={isCustomAdmin}
                         />
                       ) : (
                       <>
@@ -1153,11 +1210,16 @@ export default function WorkflowsAdminPage() {
                                     {/* 5.16up R5 · 上 / 下移：拖拽的窄屏 / 无障碍 fallback */}
                                     <button onClick={() => okStep && moveStep(step, "up")} disabled={!okStep || moving !== null || idx === 0} className={`p-1 rounded-[6px] transition-colors ${(!okStep || idx === 0) ? "text-gray-200 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "上移" : reasonStep} aria-label="上移"><ArrowUp size={12} /></button>
                                     <button onClick={() => okStep && moveStep(step, "down")} disabled={!okStep || moving !== null || idx === steps.length - 1} className={`p-1 rounded-[6px] transition-colors ${(!okStep || idx === steps.length - 1) ? "text-gray-200 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "下移" : reasonStep} aria-label="下移"><ArrowDown size={12} /></button>
-                                    <button onClick={() => okStep && toggleStepEnabled(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors text-xs ${!okStep ? "text-gray-300 cursor-not-allowed" : step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={okStep ? (step.enabled ? "停用" : "启用") : reasonStep}>
-                                      {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                                    </button>
+                                    {/* 6.4up · custom admin 隐藏步骤启停 / 删除 */}
+                                    {!isCustomAdmin && (
+                                      <button onClick={() => okStep && toggleStepEnabled(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors text-xs ${!okStep ? "text-gray-300 cursor-not-allowed" : step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={okStep ? (step.enabled ? "停用" : "启用") : reasonStep}>
+                                        {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                                      </button>
+                                    )}
                                     <button onClick={() => okStep && openEditStep(wf.id, step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "编辑步骤" : reasonStep}><Edit2 size={12} /></button>
-                                    <button onClick={() => okStep && deleteStep(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-400"}`} title={okStep ? "删除步骤" : reasonStep}><Trash2 size={12} /></button>
+                                    {!isCustomAdmin && (
+                                      <button onClick={() => okStep && deleteStep(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-400"}`} title={okStep ? "删除步骤" : reasonStep}><Trash2 size={12} /></button>
+                                    )}
                                   </>;
                                 })()}
                               </div>
@@ -1239,7 +1301,8 @@ export default function WorkflowsAdminPage() {
                 )}
               </div>
               {/* R1.8 · 删除"排序"输入框 —— 全局排序由「分层级配置」管理；新建自动接末尾；DB 字段保留作为兜底键 */}
-              <div className="flex flex-col gap-1.5">
+              {/* 6.4up · custom admin 不显示「可见权限」区块：可见范围由后端按 actor scope 自动决定，前端没有调整入口 */}
+              {!isCustomAdmin && <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-gray-700">可见权限</label>
                 {/* 5.9up · org_admin 限定本组织范围三档可选 */}
                 <select
@@ -1463,11 +1526,12 @@ export default function WorkflowsAdminPage() {
                     <p className="text-xs text-gray-400">已选 {wfForm.permIds.length} 个小组</p>
                   </div>
                 )}
-              </div>
-              <label className="flex items-center gap-2 cursor-pointer">
+              </div>}
+              {/* 6.4up · custom admin 隐藏 enabled 复选框（后端禁止改 enabled） */}
+              {!isCustomAdmin && <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" className="accent-[#002FA7] w-4 h-4" checked={wfForm.enabled} onChange={(e) => setWfForm({ ...wfForm, enabled: e.target.checked })} />
                 <span className="text-sm text-gray-700">启用</span>
-              </label>
+              </label>}
               {wfError && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{wfError}</div>}
             </div>
             <div className="flex justify-end gap-2 mt-6">
@@ -1550,10 +1614,11 @@ export default function WorkflowsAdminPage() {
                   <Input label="按钮文案" placeholder="如 进入智能体、打开工具" value={stepForm.buttonText} onChange={(e) => setStepForm({ ...stepForm, buttonText: e.target.value })} />
                 </>
               )}
-              <label className="flex items-center gap-2 cursor-pointer">
+              {/* 6.4up · custom admin 隐藏 step enabled 复选框（后端禁止启停步骤） */}
+              {!isCustomAdmin && <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" className="accent-[#002FA7] w-4 h-4" checked={stepForm.enabled} onChange={(e) => setStepForm({ ...stepForm, enabled: e.target.checked })} />
                 <span className="text-sm text-gray-700">启用此步骤</span>
-              </label>
+              </label>}
               {stepError && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{stepError}</div>}
             </div>
             <div className="flex justify-end gap-2 mt-6">
@@ -1625,8 +1690,14 @@ function WorkflowFlowView(props: {
   // 6.5up R1 · picker 接口 capped/totalCount 透传给节点内 AgentBindPopover
   agentsCapped: boolean;
   agentsTotalCount: number;
+  // 6.4up R2.2 · 与列表视图同口径：custom admin 隐藏启停 / 删除；无 update 权时所有"改"按钮置灰 / 隐藏
+  //   canEditSteps：包含 builtin canTouchWf 与 custom hasAnyCustomUpdate 两个语义（外层已合并）
+  //   isCustomAdmin：仅用于决定"启停 / 删除"两类按钮是否完全隐藏（v1 不开放给 custom admin）
+  canEditSteps: boolean;
+  isCustomAdmin: boolean;
 }) {
-  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId, agentsCapped, agentsTotalCount } = props;
+  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId, agentsCapped, agentsTotalCount, canEditSteps, isCustomAdmin } = props;
+
   // 阶段二：当前激活绑定浮层的步骤 id（null = 关闭）。同一时间只允许一个浮层打开。
   const [bindingStepId, setBindingStepId] = useState<string | null>(null);
   // 4.29up：跳转到智能体管理（流程图节点里的"已绑定智能体"chip 可点击）
@@ -1636,12 +1707,15 @@ function WorkflowFlowView(props: {
     return (
       <div className="rounded-[12px] bg-gray-50/60 border border-dashed border-gray-200 px-4 py-8 text-center">
         <p className="text-sm text-gray-400 mb-3">暂无步骤</p>
-        <button
-          onClick={() => openAddStep(wfId, 0)}
-          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs text-[#002FA7] border border-[#002FA7]/30 rounded-[8px] hover:bg-[#002FA7]/5 transition-colors"
-        >
-          <Plus size={12} /> 添加第一个步骤
-        </button>
+        {/* R2.2 · 无 update 权时隐藏；列表视图同口径 */}
+        {canEditSteps && (
+          <button
+            onClick={() => openAddStep(wfId, 0)}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs text-[#002FA7] border border-[#002FA7]/30 rounded-[8px] hover:bg-[#002FA7]/5 transition-colors"
+          >
+            <Plus size={12} /> 添加第一个步骤
+          </button>
+        )}
       </div>
     );
   }
@@ -1664,8 +1738,10 @@ function WorkflowFlowView(props: {
     <div>
       <div className="overflow-x-auto -mx-1 px-1 pb-2">
         <div className="flex items-stretch gap-0 min-w-min">
-          {/* 第一个节点前的插入按钮 */}
-          <InsertSlot onClick={() => openInsertStep(wfId, 0)} disabled={moving !== null} />
+          {/* 第一个节点前的插入按钮 · R2.2 · 无 update 权时隐藏 */}
+          {canEditSteps && (
+            <InsertSlot onClick={() => openInsertStep(wfId, 0)} disabled={moving !== null} />
+          )}
 
           {steps.map((step, idx) => {
             const style = typeStyle[step.exec_type];
@@ -1779,13 +1855,13 @@ function WorkflowFlowView(props: {
                     )}
                   </div>
 
-                  {/* 操作区 */}
+                  {/* 操作区 · R2.2 · 与列表视图同口径 */}
                   <div className="flex items-center justify-end gap-1 px-2 py-1.5 border-t border-gray-100">
                     {/* 阶段三：上移 / 下移按钮（操作期间所有相邻按钮禁用，避免快速连点导致顺序错乱） */}
                     {/* loading 显示在被点击的方向按钮上：避免下移时上移按钮转圈的反直觉 */}
                     <button
                       onClick={() => moveStep(step, "up")}
-                      disabled={idx === 0 || moving !== null}
+                      disabled={!canEditSteps || idx === 0 || moving !== null}
                       className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
                       title="上移"
                       aria-label="上移"
@@ -1794,48 +1870,54 @@ function WorkflowFlowView(props: {
                     </button>
                     <button
                       onClick={() => moveStep(step, "down")}
-                      disabled={idx === steps.length - 1 || moving !== null}
+                      disabled={!canEditSteps || idx === steps.length - 1 || moving !== null}
                       className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
                       title="下移"
                       aria-label="下移"
                     >
                       {moving?.stepId === step.id && moving.direction === "down" ? <Loader2 size={12} className="animate-spin" /> : <ArrowDown size={12} />}
                     </button>
-                    <button
-                      onClick={() => toggleStepEnabled(step)}
-                      disabled={moving !== null}
-                      className={`p-1 rounded-[6px] transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}
-                      title={step.enabled ? "停用" : "启用"}
-                      aria-label={step.enabled ? "停用" : "启用"}
-                    >
-                      {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                    </button>
+                    {/* R2.2 · custom admin 隐藏启停按钮（v1 不开放） */}
+                    {!isCustomAdmin && (
+                      <button
+                        onClick={() => toggleStepEnabled(step)}
+                        disabled={!canEditSteps || moving !== null}
+                        className={`p-1 rounded-[6px] transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed ${step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`}
+                        title={step.enabled ? "停用" : "启用"}
+                        aria-label={step.enabled ? "停用" : "启用"}
+                      >
+                        {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                      </button>
+                    )}
                     <button
                       onClick={() => openEditStep(wfId, step)}
-                      disabled={moving !== null}
+                      disabled={!canEditSteps || moving !== null}
                       className="p-1 rounded-[6px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
                       title="编辑"
                       aria-label="编辑"
                     >
                       <Edit2 size={12} />
                     </button>
-                    <button
-                      onClick={() => deleteStep(step)}
-                      disabled={moving !== null}
-                      className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
-                      title="删除"
-                      aria-label="删除"
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                    {/* R2.2 · custom admin 隐藏删除按钮（v1 不开放） */}
+                    {!isCustomAdmin && (
+                      <button
+                        onClick={() => deleteStep(step)}
+                        disabled={!canEditSteps || moving !== null}
+                        className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
+                        title="删除"
+                        aria-label="删除"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                {/* 节点之间的连接线 + 插入按钮 */}
+                {/* 节点之间的连接线 + 插入按钮 · R2.2 · 无 update 权时禁用插入 */}
                 <ConnectorWithInsert
                   dimmed={!step.enabled || (idx + 1 < steps.length && !steps[idx + 1].enabled)}
                   onInsert={() => openInsertStep(wfId, idx + 1)}
-                  disabled={moving !== null}
+                  disabled={!canEditSteps || moving !== null}
                 />
               </div>
             );
@@ -1843,13 +1925,16 @@ function WorkflowFlowView(props: {
         </div>
       </div>
 
-      <button
-        onClick={() => openAddStep(wfId, steps.length)}
-        disabled={moving !== null}
-        className="mt-3 w-full py-2 border border-dashed border-gray-200 rounded-[10px] text-sm text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors flex items-center justify-center gap-1 disabled:opacity-30 disabled:hover:text-gray-400 disabled:hover:border-gray-200 disabled:cursor-not-allowed"
-      >
-        <Plus size={14} /> 添加步骤
-      </button>
+      {/* R2.2 · 底部"添加步骤"：无 update 权时隐藏（含 custom admin 没 update 的情况） */}
+      {canEditSteps && (
+        <button
+          onClick={() => openAddStep(wfId, steps.length)}
+          disabled={moving !== null}
+          className="mt-3 w-full py-2 border border-dashed border-gray-200 rounded-[10px] text-sm text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40 transition-colors flex items-center justify-center gap-1 disabled:opacity-30 disabled:hover:text-gray-400 disabled:hover:border-gray-200 disabled:cursor-not-allowed"
+        >
+          <Plus size={14} /> 添加步骤
+        </button>
+      )}
     </div>
   );
 }

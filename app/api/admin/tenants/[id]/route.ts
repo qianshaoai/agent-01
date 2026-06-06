@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase D · D-4 · tenant enforce（env "tenant" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 export async function PATCH(
   req: NextRequest,
@@ -16,6 +19,14 @@ export async function PATCH(
   }
 
   const { id } = await params;
+
+  // Phase D D-4 · v2 第二闸（env-gated；tenant.update.all）
+  if (isResourceEnforced("tenant") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "tenant", "update", { id });
+    if (err) return err;
+  }
+
   const body = await req.json();
   const updates: Record<string, unknown> = {};
 
@@ -65,6 +76,13 @@ export async function DELETE(
   }
 
   const { id } = await params;
+
+  // Phase D D-4 · v2 第二闸（env-gated；tenant.delete.all）
+  if (isResourceEnforced("tenant") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "tenant", "delete", { id });
+    if (err) return err;
+  }
 
   // 查出组织码
   const { data: tenant } = await db.from("tenants").select("code, name").eq("id", id).single();

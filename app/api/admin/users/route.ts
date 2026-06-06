@@ -1,14 +1,30 @@
-import { dbError } from "@/lib/api-error";
+import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { PAGINATION } from "@/lib/config";
+// 6.4up v2 Phase D · D-1 · user enforce（env "user" 启用时生效；空时完全 no-op）
+import { isResourceEnforced } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase D D-1 · list 走 env-gated hasPermission 粗粒度 check（HC2，无 row 不走 facade）；
+  // 旧 org_admin tenant_code filter 继续叠加（下方），v2 仅多一道粗闸。
+  if (isResourceEnforced("user") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "user.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "user.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   const { searchParams } = req.nextUrl;
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1"));

@@ -1,12 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
+import { apiError } from "@/lib/api-error";
+// 6.4up v2 Phase C HC1 · analytics 复用 audit.read.* key（D1）
+// 必须 env-gated：生产 env 空时 no-op；否则破坏"行为零变化"承诺
+import { isResourceEnforced } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase C HC1 · env-gated v2 check（analytics 不在 13 adapter 中；不走 facade，直接 hasPermission）
+  if (isResourceEnforced("analytics") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    // D1 复用 audit.read.*；任一 scope 通过即放行
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "audit.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "audit.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   const { searchParams } = req.nextUrl;
   const tenantFilter = searchParams.get("tenantCode") ?? "";

@@ -22,12 +22,20 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // 6.4up 验收修复 · 任一接口非 2xx（custom admin 命中 requireAdmin 的 401、
+    //   或接口抖动 5xx）都返回 null，不把错误体 {error} 当数据塞进 state。
+    //   旧实现 .then(r => r.json()) 会让 data = {error}（truthy），
+    //   下游 data?.tenantUsage.length 因可选链不生效而抛 undefined.length 崩页。
+    const getJson = (url: string) =>
+      fetch(url)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
     Promise.all([
-      fetch("/api/admin/analytics").then((r) => r.json()),
-      fetch("/api/admin/agents").then((r) => r.json()).then(d => d.data ?? d),
-      fetch("/api/admin/notices").then((r) => r.json()).then(d => d.data ?? d),
+      getJson("/api/admin/analytics"),
+      getJson("/api/admin/agents").then((d) => d?.data ?? d),
+      getJson("/api/admin/notices").then((d) => d?.data ?? d),
       // 5.9up · 拉用户总数（pageSize=1 就够，只要 pagination.total）
-      fetch("/api/admin/users?pageSize=1").then((r) => r.json()),
+      getJson("/api/admin/users?pageSize=1"),
     ]).then(([analytics, agents, notices, users]) => {
       setData(analytics);
       setAgentCount(Array.isArray(agents) ? agents.length : 0);
@@ -103,11 +111,11 @@ export default function DashboardPage() {
             <div className="space-y-3">
               {[...Array(3)].map((_, i) => <div key={i} className="h-10 bg-gray-50 rounded-[10px] animate-pulse" />)}
             </div>
-          ) : data?.tenantUsage.length === 0 ? (
+          ) : !data?.tenantUsage?.length ? (
             <p className="text-sm text-gray-400 text-center py-8">暂无组织数据</p>
           ) : (
             <div className="space-y-4">
-              {data?.tenantUsage.map((t) => {
+              {data?.tenantUsage?.map((t) => {
                 const pct = Math.round((t.used / t.quota) * 100);
                 return (
                   <div key={t.code} className="flex items-center gap-4">

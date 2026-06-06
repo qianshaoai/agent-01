@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase D · D-1 · user enforce（env "user" 启用时生效；空时完全 no-op）
+import { isResourceEnforced } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +23,14 @@ export async function POST(req: NextRequest) {
   // org_admin 没有跨组织调动权限（与单人 set-tenant 保持一致）
   if (admin.role === "org_admin") {
     return apiError("无权批量修改用户所属组织", "FORBIDDEN");
+  }
+
+  // Phase D D-1 · v2 第二闸（env-gated）：批量跨组织调动是高权操作，要求 user.tenant.transfer.all
+  if (isResourceEnforced("user") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    if (!(await hasPermission(actor, "user.tenant.transfer.all"))) {
+      return apiError("权限不足", "FORBIDDEN");
+    }
   }
 
   const body = await req.json().catch(() => ({}));

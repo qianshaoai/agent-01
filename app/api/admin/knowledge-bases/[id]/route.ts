@@ -11,6 +11,9 @@ import {
   validateTenantCode,
   scanReferences,
 } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用；空时 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库详情 / 更新 / 删除
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -46,6 +49,15 @@ export async function GET(
   // 5.30up · 404 屏蔽：不存在 / 不在可见范围 → 一视同仁返 404（防 id 探测枚举别 org 资源）
   if (!kb) return apiError("知识库不存在", "NOT_FOUND");
   if (!canReadRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
+
+  // Phase D D-5 · v2 第二闸 read（env-gated；复用已 load 的 kb row）
+  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "knowledge_base", "read", {
+      row: { id, tenant_code: (kb as { tenant_code: string | null }).tenant_code },
+    });
+    if (err) return err;
+  }
 
   const { data: documents, error: docErr } = await db
     .from("kb_documents")
@@ -124,6 +136,13 @@ export async function PATCH(
   if (!canWriteRow(admin, existing)) {
     // org_admin 试图改别 org / 平台公共 → 404 屏蔽
     return apiError("知识库不存在", "NOT_FOUND");
+  }
+
+  // Phase D D-5 · v2 第二闸 update（env-gated；复用已 load 的 existing row）
+  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "knowledge_base", "update", { row: existing });
+    if (err) return err;
   }
 
   // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 表存在
@@ -253,6 +272,13 @@ export async function DELETE(
   }
   if (!existing) return apiError("知识库不存在", "NOT_FOUND");
   if (!canWriteRow(admin, existing)) return apiError("知识库不存在", "NOT_FOUND");
+
+  // Phase D D-5 · v2 第二闸 delete（env-gated；复用已 load 的 existing row）
+  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "knowledge_base", "delete", { row: existing });
+    if (err) return err;
+  }
 
   // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 表存在
   if (admin.role === "org_admin" && admin.tenantCode) {

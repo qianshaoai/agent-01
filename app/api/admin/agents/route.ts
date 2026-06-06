@@ -6,6 +6,10 @@ import { encrypt } from "@/lib/crypto";
 import { parseBody } from "@/lib/validate";
 import { z } from "zod";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase D · D-2 · agent enforce（env "agent" 启用时生效；空时完全 no-op）
+// 注：POST 创建按决策 D9=b 维持 legacy role-only（org_admin 硬拒），不接 v2。
+import { isResourceEnforced } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 const createAgentSchema = z.object({
   agentCode: z.string().min(1, "请填写智能体编号"),
@@ -26,6 +30,18 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase D D-2 · list 走 env-gated hasPermission 粗粒度 check（HC2，无 row 不走 facade）
+  if (isResourceEnforced("agent") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "agent.read.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(actor, "agent.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   const { page, pageSize, start } = parsePagination(req, 50);
   const [agentsRes, rpRes, acRes, catRes] = await Promise.all([

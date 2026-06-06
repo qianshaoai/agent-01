@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
+// 6.4up v2 Phase D · D-4 · team enforce（env "team" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 // 5.7up · 工具：org_admin 只能操作自己组织的小组
 async function ensureOrgScope(
@@ -29,6 +32,13 @@ export async function PATCH(
   const guard = await ensureOrgScope(admin, id);
   if (guard) return guard;
 
+  // Phase D D-4 · v2 第二闸（env-gated；team.update）
+  if (isResourceEnforced("team") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "team", "update", { id });
+    if (err) return err;
+  }
+
   const { name, sortOrder } = await req.json();
   const updates: Record<string, unknown> = {};
   if (name !== undefined) updates.name = name.trim();
@@ -53,6 +63,13 @@ export async function DELETE(
   const { id } = await params;
   const guard = await ensureOrgScope(admin, id);
   if (guard) return guard;
+
+  // Phase D D-4 · v2 第二闸（env-gated；team.delete）
+  if (isResourceEnforced("team") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "team", "delete", { id });
+    if (err) return err;
+  }
 
   const { count } = await db.from("users").select("id", { count: "exact", head: true }).eq("team_id", id);
   if (count && count > 0) {

@@ -5,6 +5,8 @@ import {
   verifyToken,
   validateUserTokenFreshness,
   validateAdminTokenFreshness,
+  validateCustomAdminTokenFreshness,
+  isCustomAdminPayload,
   COOKIE_NAME,
 } from "@/lib/auth";
 
@@ -57,7 +59,19 @@ export async function middleware(req: NextRequest) {
     if (!payload || payload.type !== "admin") {
       return NextResponse.redirect(new URL("/admin", req.url));
     }
-    // 5.6up · 强制重登检查
+    // 6.4up · custom admin 也在此通道（同一 cookie），但走自己的 freshness + 无 firstLogin 概念
+    if (isCustomAdminPayload(payload)) {
+      const fresh = await validateCustomAdminTokenFreshness(payload);
+      if (!fresh) {
+        const res = NextResponse.redirect(new URL("/admin", req.url));
+        res.cookies.set(ADMIN_COOKIE_NAME, "", { path: "/", maxAge: 0 });
+        return res;
+      }
+      // custom admin 没有 firstLogin（不存在 admins 表 first_login 字段语义）
+      // 页面层 admin-layout 会按 permission 把 nav 全部隐藏；无菜单时显示兜底页
+      return NextResponse.next();
+    }
+    // builtin admin · 5.6up · 强制重登检查
     const fresh = await validateAdminTokenFreshness(payload);
     if (!fresh) {
       const res = NextResponse.redirect(new URL("/admin", req.url));

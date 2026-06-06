@@ -6,6 +6,9 @@ import { decrypt } from "@/lib/crypto";
 import { streamChat, ChatMessage } from "@/lib/adapters";
 import { writeAuditLog } from "@/lib/audit";
 import { canReadRow, canWriteRow, requireWriteAccess } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-5 · provider test enforce（resourceKind=model_provider；env "model_provider"；空时 no-op）
+import { isResourceEnforced } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 // 5.14up PR-A · 模型供应商连通性测试
 // 权限：
@@ -79,6 +82,18 @@ export async function POST(
   if (!canReadRow(admin, provider)) return apiError("供应商不存在", "NOT_FOUND");
   if (!canWriteRow(admin, provider)) {
     return apiError("无权测试该供应商（仅可测自己组织的）", "FORBIDDEN");
+  }
+
+  // Phase D D-5 · v2 第二闸 test（env-gated；按 actor 自身 test 能力 OR .all/.org；canWriteRow 已限 org_admin own）
+  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okAll = await hasPermission(actor, "provider.test.all");
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "provider.test.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    if (!okAll && !okOrg) return apiError("权限不足", "FORBIDDEN");
   }
 
   if (!provider.enabled) return apiError("供应商已禁用，无法测试", "VALIDATION_ERROR");

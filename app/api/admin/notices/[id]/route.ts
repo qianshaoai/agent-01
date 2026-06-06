@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
+// 6.4up v2 Phase C · enforce 叠加
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
 
 export async function PATCH(
   req: NextRequest,
@@ -13,11 +16,27 @@ export async function PATCH(
 
   const { id } = await params;
 
-  // org_admin 权限校验：只能操作自己组织的公告
+  // 先 load row（v2 + 旧逻辑都要用）
+  const { data: noticeRow } = await db
+    .from("notices")
+    .select("tenant_code")
+    .eq("id", id)
+    .maybeSingle();
+  if (!noticeRow) return apiError("公告不存在", "NOT_FOUND");
+
+  // Phase C · v2 第二闸 update（env-gated；fail-closed）
+  if (isResourceEnforced("notice")) {
+    const actor = await buildPermissionActor(admin);
+    const accessErr = await requireAccess(actor, "notice", "update", {
+      row: { id, tenant_code: (noticeRow as { tenant_code: string | null }).tenant_code },
+    });
+    if (accessErr) return accessErr;
+  }
+
+  // 旧 org_admin 权限校验：只能操作自己组织的公告（保留作为 fail-fast）
   if (admin.role === "org_admin") {
-    const { data: notice } = await db.from("notices").select("tenant_code").eq("id", id).single();
-    if (!notice) return apiError("公告不存在", "NOT_FOUND");
-    if (!notice.tenant_code || notice.tenant_code !== admin.tenantCode) {
+    const tc = (noticeRow as { tenant_code: string | null }).tenant_code;
+    if (!tc || tc !== admin.tenantCode) {
       return apiError("无权修改该公告", "FORBIDDEN");
     }
   }
@@ -58,16 +77,31 @@ export async function DELETE(
 
   const { id } = await params;
 
-  // org_admin 权限校验：只能删除自己组织的公告
+  // 先 load row
+  const { data: noticeRow } = await db
+    .from("notices")
+    .select("tenant_code, content")
+    .eq("id", id)
+    .maybeSingle();
+  if (!noticeRow) return apiError("公告不存在", "NOT_FOUND");
+
+  // Phase C · v2 第二闸 delete（env-gated；fail-closed）
+  if (isResourceEnforced("notice")) {
+    const actor = await buildPermissionActor(admin);
+    const accessErr = await requireAccess(actor, "notice", "delete", {
+      row: { id, tenant_code: (noticeRow as { tenant_code: string | null }).tenant_code },
+    });
+    if (accessErr) return accessErr;
+  }
+
+  // 旧 org_admin 权限校验：只能删除自己组织的公告
   if (admin.role === "org_admin") {
-    const { data: notice } = await db.from("notices").select("tenant_code").eq("id", id).single();
-    if (!notice) return apiError("公告不存在", "NOT_FOUND");
-    if (!notice.tenant_code || notice.tenant_code !== admin.tenantCode) {
+    const tc = (noticeRow as { tenant_code: string | null }).tenant_code;
+    if (!tc || tc !== admin.tenantCode) {
       return apiError("无权删除该公告", "FORBIDDEN");
     }
   }
 
-  const { data: noticeRow } = await db.from("notices").select("content").eq("id", id).maybeSingle();
   // 5.11up · 删除前缓存 tenant 归属
   const resourceTenantCode = await resolveResourceTenantCode("notice", id);
   await db.from("notices").delete().eq("id", id);
@@ -75,7 +109,7 @@ export async function DELETE(
     adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
     resourceTenantCode,
     action: "delete", resourceType: "notice", resourceId: id,
-    resourceName: (noticeRow?.content as string | undefined)?.slice(0, 50),
+    resourceName: ((noticeRow as { content: string | null }).content)?.slice(0, 50),
   });
   return NextResponse.json({ ok: true });
 }

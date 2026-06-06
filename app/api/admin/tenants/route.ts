@@ -3,10 +3,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase D · D-4 · tenant enforce（env "tenant" 启用时生效；空时完全 no-op）
+//   tenant 只有 .all key（平台级）；org_admin 无 tenant key、保持现有"只看本组织"行为，不套 v2 read。
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof Response) return admin;
+
+  // Phase D D-4 · 仅对 system_admin 等非 super 非 org 用 tenant.read.all 粗闸；org_admin 走下方旧逻辑
+  if (isResourceEnforced("tenant") && admin.role !== "super_admin" && admin.role !== "org_admin") {
+    const actor = await buildPermissionActor(admin);
+    if (!(await hasPermission(actor, "tenant.read.all"))) {
+      return apiError("权限不足", "FORBIDDEN");
+    }
+  }
 
   const { page, pageSize, start } = parsePagination(req, 100);
   let query = db
@@ -31,6 +43,13 @@ export async function POST(req: NextRequest) {
   // 5.7up · org_admin 不可创建组织
   if (admin.role === "org_admin") {
     return apiError("无权创建组织", "FORBIDDEN");
+  }
+
+  // Phase D D-4 · v2 第二闸 create（env-gated；tenant.create.all）
+  if (isResourceEnforced("tenant") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const err = await requireAccess(actor, "tenant", "create");
+    if (err) return err;
   }
 
   const { code, name, quota, expiresAt } = await req.json();

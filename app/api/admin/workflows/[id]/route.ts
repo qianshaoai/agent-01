@@ -1,9 +1,20 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdmin, getAdminAccessPayload } from "@/lib/session";
+import { isCustomAdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
 import { canActOnRole, noWritePermissionMessage, type AdminRole } from "@/lib/admin-permissions";
+import {
+  buildPermissionActor,
+  hasPermission,
+  PermissionActor,
+  ResourceScope,
+} from "@/lib/permission-actor";
+import { PermissionKey } from "@/lib/permission-keys";
+// 6.4up v2 Phase D · D-3 · workflow builtin 路径 enforce（env "workflow" 启用时生效；空时 no-op）
+//   custom_admin 分支完全不走 requireAccess（R0.1 F3 双通道隔离）。
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 
 export const dynamic = "force-dynamic";
 
@@ -90,14 +101,114 @@ async function ensureOrgAdminCanTouch(
   return null;
 }
 
+// 6.4up · 取目标 workflow 的全部 scope（resource_permissions 行），custom admin update 校验用
+async function getWorkflowScopes(workflowId: string): Promise<ResourceScope[]> {
+  const { data } = await db
+    .from("resource_permissions")
+    .select("scope_type, scope_id")
+    .eq("resource_type", "workflow")
+    .eq("resource_id", workflowId);
+  type Row = { scope_type: string; scope_id: string | null };
+  return (data ?? []).map((r) => ({
+    scope_type: (r as Row).scope_type as ResourceScope["scope_type"],
+    scope_id: (r as Row).scope_id,
+  }));
+}
+
+/** custom admin 持有的最高级 update key */
+function pickUpdateKey(actor: PermissionActor): PermissionKey | null {
+  const order: PermissionKey[] = [
+    "workflow.update.all",
+    "workflow.update.org",
+    "workflow.update.dept",
+    "workflow.update.team",
+  ];
+  for (const k of order) if (actor.permissions.has(k)) return k;
+  return null;
+}
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-
+  // 6.4up · 双通道认证
+  const access = await getAdminAccessPayload();
+  if (!access) return apiError("未登录或权限已变更", "UNAUTHORIZED");
+  if (!isCustomAdminPayload(access) && access.firstLogin === true) {
+    return apiError("首次登录需先修改初始密码", "FORBIDDEN");
+  }
   const { id } = await params;
+
+  // ── 6.4up · custom admin PATCH ──
+  if (isCustomAdminPayload(access)) {
+    const actor = await buildPermissionActor(access);
+    const updateKey = pickUpdateKey(actor);
+    if (!updateKey) return apiError("无修改工作流权限", "FORBIDDEN");
+
+    const { data: wfRow } = await db
+      .from("workflows")
+      .select("id, name")
+      .eq("id", id)
+      .maybeSingle();
+    if (!wfRow) return apiError("工作流不存在", "NOT_FOUND");
+
+    const targetScopes = await getWorkflowScopes(id);
+    if (targetScopes.length === 0) {
+      // 没有任何 scope 行 → 无法判定归属，custom admin 拒绝（方案 R1.2 P0-5：禁止用 visible_to 字面值兜底）
+      return apiError("工作流无 scope 归属，custom admin 无法修改", "FORBIDDEN");
+    }
+    const allowed = await hasPermission(actor, updateKey, targetScopes);
+    if (!allowed) return apiError("目标工作流超出权限范围", "FORBIDDEN");
+
+    const body = await req.json();
+    // R1.2 · 验收 15：禁止改 enabled；同时禁止改 visible_to / permissions（避免越权扩散可见性）
+    if (body.enabled !== undefined) {
+      return apiError("custom 角色不能启停工作流", "FORBIDDEN");
+    }
+    if (body.visibleTo !== undefined || body.permissions !== undefined) {
+      return apiError("custom 角色不能调整可见范围", "FORBIDDEN");
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (body.name !== undefined) updates.name = body.name;
+    if (body.description !== undefined) updates.description = body.description;
+    if (body.category !== undefined) updates.category = body.category;
+    if (body.sortOrder !== undefined) updates.sort_order = body.sortOrder;
+
+    if (Object.keys(updates).length > 0) {
+      const { error } = await db.from("workflows").update(updates).eq("id", id);
+      if (error) return dbError(error);
+    }
+    // 分类关联
+    if (Array.isArray(body.categoryIds)) {
+      await db.from("workflow_categories").delete().eq("workflow_id", id);
+      if (body.categoryIds.length > 0) {
+        await db.from("workflow_categories").insert(
+          body.categoryIds.map((cid: string) => ({ workflow_id: id, category_id: cid }))
+        );
+      }
+    }
+
+    await writeAuditLog({
+      adminId: actor.actorId,
+      adminUsername: actor.username,
+      adminRole: "custom_admin",
+      adminTenantCode: actor.tenantCode ?? null,
+      action: "update",
+      resourceType: "workflow",
+      resourceId: id,
+      resourceName: (wfRow as { name: string }).name,
+      detail: {
+        permission_key: updateKey,
+        scopes: targetScopes,
+        updates,
+      },
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  // ── builtin admin PATCH（保留旧逻辑） ──
+  const admin = access;
   // 5.11up · 先做上下级权限校验
   const hierarchyGuard = await ensureAdminHierarchyAllows(admin, id);
   if (hierarchyGuard) return hierarchyGuard;
@@ -105,6 +216,21 @@ export async function PATCH(
   if (guard) return guard;
 
   const body = await req.json();
+
+  // Phase D D-3 · v2 第二闸（builtin 路径；env-gated）。custom 分支已在上方独立返回，不受影响。
+  //   ensureAdminHierarchyAllows(canActOnRole) + ensureOrgAdminCanTouch 保留在前（结构性优先）。
+  if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    if (body.enabled !== undefined) {
+      const e = await requireAccess(actor, "workflow", "enable", { id });
+      if (e) return e;
+    }
+    if (Object.keys(body).some((k) => k !== "enabled")) {
+      const e = await requireAccess(actor, "workflow", "update", { id });
+      if (e) return e;
+    }
+  }
+
   const updates: Record<string, unknown> = {};
 
   if (body.name !== undefined) updates.name = body.name;
@@ -204,6 +330,13 @@ export async function DELETE(
   if (hierarchyGuard) return hierarchyGuard;
   const guard = await ensureOrgAdminCanTouch(admin, id);
   if (guard) return guard;
+
+  // Phase D D-3 · v2 第二闸（builtin；env-gated）
+  if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const e = await requireAccess(actor, "workflow", "delete", { id });
+    if (e) return e;
+  }
 
   // 5.11up · DELETE 前先 snapshot 资源归属，避免删完后反查为 null 导致 org_admin 看不到这条审计
   const resourceTenantCode = await resolveResourceTenantCode("workflow", id);

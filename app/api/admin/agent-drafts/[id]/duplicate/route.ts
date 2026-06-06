@@ -4,6 +4,9 @@ import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { canReadRow } from "@/lib/scoped-access";
+// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
+import { isResourceEnforced } from "@/lib/access-facade";
+import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 
 // 5.14up PR-B · 复制草稿
 // 复制所有字段，但：
@@ -74,6 +77,20 @@ export async function POST(
         return apiError("无权复制该草稿", "FORBIDDEN");
       }
     }
+  }
+
+  // Phase D D-2 · v2 第二闸 duplicate（env-gated）：按 actor 自身 duplicate 能力判（OR .all/.org），
+  //   不按 source scope —— source 可能是 super/system 的平台模板（all scope），用 source scope 会误拒
+  //   org_admin 复制模板（5.30up R4 放权）。上方 source 创建者角色检查仍限制可复制的源。
+  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
+    const actor = await buildPermissionActor(admin);
+    const okAll = await hasPermission(actor, "agent_draft.duplicate.all");
+    const okOrg = actor.tenantCode
+      ? await hasPermission(actor, "agent_draft.duplicate.org", [
+          { scope_type: "org", scope_id: actor.tenantCode },
+        ])
+      : false;
+    if (!okAll && !okOrg) return apiError("权限不足", "FORBIDDEN");
   }
 
   const source = src as DraftRow;

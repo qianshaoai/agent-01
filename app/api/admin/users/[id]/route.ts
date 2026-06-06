@@ -5,6 +5,20 @@ import { canAssignRole, canManageTarget } from "@/lib/auth";
 import { requireAdmin } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+// 6.4up v2 Phase D · D-1 · user enforce（env "user" 启用时生效；空时完全 no-op）
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { buildPermissionActor } from "@/lib/permission-actor";
+
+// body.action → v2 sub-action key 中段映射（R0.1 §6；D10=a：set-dept 统一收 department.assign）
+const USER_SUBACTION: Record<string, string> = {
+  "set-status": "enable",
+  "set-role": "role.update",
+  "set-tenant": "tenant.transfer",
+  "set-dept": "department.assign",
+  "reset-password": "password.reset",
+  "soft-delete": "delete",
+  delete: "delete",
+};
 
 export async function PATCH(
   req: NextRequest,
@@ -39,13 +53,32 @@ export async function PATCH(
     }
   }
 
+  // Phase D D-1 · v2 第二闸（env-gated）：旧 canManageTarget/canAssignRole/org_admin tenant 闸保留在前，
+  //   按 body.action 映射 sub-action key 叠一道 requireAccess（任一不过即 403；R0.1 §6）。
+  if (isResourceEnforced("user") && admin.role !== "super_admin") {
+    const sub = USER_SUBACTION[body.action];
+    if (sub) {
+      const actor = await buildPermissionActor(admin);
+      const err = await requireAccess(actor, "user", sub, {
+        row: { id: target.id, tenant_code: target.tenant_code },
+      });
+      if (err) return err;
+    }
+  }
+
   // ── 修改账号状态 ────────────────────────────────────────
   if (body.action === "set-status") {
     const { status } = body;
     if (!["active", "disabled"].includes(status)) {
       return apiError("状态值无效", "VALIDATION_ERROR");
     }
-    const { error } = await db.from("users").update({ status }).eq("id", id);
+    // 6.4up R2 Fix 2 · disabled 时同步写 force_relogin_at = NOW()
+    //   让 validateUserTokenFreshness / validateCustomAdminTokenFreshness 立即把
+    //   已签发的 user / custom admin cookie 判失效，防"禁用后旧 cookie 继续访问"。
+    //   重新 enable 不清 force_relogin_at（用户主动重登即可拿新 cookie）。
+    const updates: Record<string, unknown> = { status };
+    if (status === "disabled") updates.force_relogin_at = new Date().toISOString();
+    const { error } = await db.from("users").update(updates).eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({
       adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
@@ -82,13 +115,35 @@ export async function PATCH(
     if (!canAssignRole(admin.role, role, admin.adminId === id)) {
       return apiError("无权将用户设置为该角色（不能高于或等于自己）", "FORBIDDEN");
     }
-    const { error } = await db.from("users").update({ role }).eq("id", id);
-    if (error) return dbError(error);
+
+    // 6.4up v2 Phase A R1 · role 从 'user' 变为 builtin admin 时强依赖 RPC：
+    //   一次事务完成 UPDATE users.role + DELETE user_custom_roles + INSERT audit_logs
+    //   防止双通道权限叠加（方案 §1.3 双通道隔离硬规则）
+    //
+    // R1 移除 42883 fallback：v52 RPC 必跑（MIGRATIONS.md 已标 🔑），缺失视为部署事故，
+    // 直接返 dbError（500/400）让人看见；旧 fallback 会留 user_custom_roles 不清 +
+    // 审计写 clearedCustomRoles:true 撒谎，比硬失败更糟。
+    const isPromotingToBuiltinAdmin =
+      target.role === "user" &&
+      ["super_admin", "system_admin", "org_admin"].includes(role);
+
+    if (isPromotingToBuiltinAdmin) {
+      const { error: rpcErr } = await db.rpc("change_user_role_clear_custom", {
+        p_user_id: id,
+        p_new_role: role,
+        p_actor_id: admin.adminId,
+      });
+      if (rpcErr) return dbError(rpcErr);
+    } else {
+      const { error } = await db.from("users").update({ role }).eq("id", id);
+      if (error) return dbError(error);
+    }
+
     await writeAuditLog({
       adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
       action: "update", resourceType: "user", resourceId: id,
       resourceName: (target.nickname || target.phone) ?? undefined,
-      detail: { action: "set-role", newRole: role, oldRole: target.role },
+      detail: { action: "set-role", newRole: role, oldRole: target.role, clearedCustomRoles: isPromotingToBuiltinAdmin },
     });
     return NextResponse.json({ ok: true });
   }
@@ -179,11 +234,13 @@ export async function PATCH(
   //   nickname 改写为"已删除用户"避免后台继续暴露原账号信息。
   if (body.action === "soft-delete" || body.action === "delete") {
     const displayName = (target.nickname || target.phone) ?? undefined;
+    // 6.4up R2 Fix 2 · 软删除同步写 force_relogin_at = NOW()（同 disabled 路径）
     const { error } = await db.from("users").update({
       status: "deleted",
       username: `deleted_${id}`,
       phone: `del_${id}`,
       nickname: "已删除用户",
+      force_relogin_at: new Date().toISOString(),
     }).eq("id", id);
     if (error) return dbError(error);
     await writeAuditLog({

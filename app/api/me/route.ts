@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveUser } from "@/lib/session";
 import { db } from "@/lib/db";
+import { hasAnyCustomRole } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -29,10 +30,14 @@ export async function GET() {
   //   普通员工 role='user' → isAdmin=false → 前端不渲染该按钮
   // 这里只看 users.role；不查 admins 表 —— admins 表是系统内置账号（默认 admin），
   //   前台只能手机号登录、不会出现在用户态
-  const isAdmin =
+  //
+  // 6.4up · 扩展：role='user' 但持有至少一个启用中的 custom role → 也渲染该按钮
+  //   按钮跳转 → elevate-to-admin → 自动签 custom access cookie（不进 builtin 通道）
+  const builtinAdmin =
     user.role === "super_admin" ||
     user.role === "system_admin" ||
     user.role === "org_admin";
+  const isAdmin = builtinAdmin || (await hasAnyCustomRole(user.userId));
 
   return NextResponse.json({
     userId: user.userId,
