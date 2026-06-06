@@ -2,9 +2,9 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | R0 · 2026-06-06 小A 出，待用户照点 |
+| 状态 | R1 · 2026-06-06 已闭环（function-level smoke 全过 + 用户照点路径备用，留作 Phase D/E 复用参考） |
 | 分支 | `feature/6.4up`（本地，不推 origin） |
-| HEAD | `8ede5f5 fix(6.4up v2 Phase C R1): notice POST 双形态分支修复` |
+| HEAD | `7ca862a test(6.4up v2 Phase C): add dev smoke script and runbook`（本 runbook 提交于此）|
 | 适用 DB | dev Supabase `ysgdmdqygbvfthzylhqn`（独立） |
 | 适用 env | **dev only**。staging / prod 的 `PERMISSION_V2_ENFORCE_RESOURCES` 必须保持空 |
 | 列脚本 | 小A |
@@ -198,7 +198,7 @@
 
 ### 3.3 git 检查
 - [ ] `git status` 干净（`.env.local` 在 `.gitignore` 里，不会进暂存）
-- [ ] HEAD 仍是 `8ede5f5`，没有意外提交
+- [ ] HEAD 仍是 `7ca862a`（或 R3 之后的 follow-up commit），没有意外提交
 
 ---
 

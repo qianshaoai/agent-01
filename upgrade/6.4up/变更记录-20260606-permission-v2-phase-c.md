@@ -514,7 +514,7 @@ const ok = finalTenantCode === null
 | 项 | 结果 |
 |---|---|
 | `npm run ci:typecheck` | ✅ 0 errors |
-| `npm run ci:lint` | ✅ 0 errors（新增 24 个 warning 全在 `scripts/phase-c-smoke.ts` 的三元式 dev tooling，不阻塞 build） |
+| `npm run ci:lint` | ✅ 0 errors，**1 warning**（仅历史 `agents/[id]/page.tsx:778` hooks deps；R3 收口前 smoke 脚本曾新增 24 个三元式 warning，已在 commit `7ca862a` 全转 if/else 清零）|
 | `npm run ci:build` | ✅ Compiled successfully · 56/56 pages |
 | `npm run seed:check` | ✅ 0 diff vs v52 |
 
