@@ -1,13 +1,13 @@
 // 6.4up v2 Phase D · D-0 · agent_draft（搭建器草稿）resource access adapter
 //
-// agent_drafts 表无 tenant_code，有 created_by。归属 = 创建者 users.tenant_code（R0.1 §5.3）。
+// agent_drafts 表无 tenant_code，有 created_by。归属 = 创建者 admins/users.tenant_code（R0.1 §5.3）。
 // Phase A stub 套 generic（select id, tenant_code）在 enforce 下会因列不存在 → 404；本次重写为
-// created_by → users.tenant_code 反查。AGENT_DRAFT keys 只有 .org/.all。
-// 性能：每次多查一次 users（主键索引 maybeSingle）；本期不加 cache（YAGNI，量级可接受）。
+// created_by → admins/users.tenant_code 反查。AGENT_DRAFT keys 只有 .org/.all。
+// 性能：每次多查一次 creator（主键索引 maybeSingle）；本期不加 cache（YAGNI，量级可接受）。
 import type { ResourceAccessAdapter } from "@/lib/access-facade-types";
 import { registerAccessAdapter } from "@/lib/access-registry";
 import { ResourceScope } from "@/lib/permission-actor";
-import { db } from "@/lib/db";
+import { resolveAgentDraftOwnerScopesById } from "@/lib/admin-scope-resolvers";
 import { scopesFromTenantCode } from "./_scope-utils";
 import { checkAnyScopedPermission } from "./_generic";
 
@@ -22,22 +22,9 @@ export const agentDraftAccessAdapter: ResourceAccessAdapter<AgentDraftRow> = {
   listFilter: () => null,
 
   async loadDetail(id) {
-    const { data: draft } = await db
-      .from("agent_drafts")
-      .select("id, created_by")
-      .eq("id", id)
-      .maybeSingle();
-    if (!draft) return null;
-    let tenantCode: string | null = null;
-    if (draft.created_by) {
-      const { data: creator } = await db
-        .from("users")
-        .select("tenant_code")
-        .eq("id", draft.created_by)
-        .maybeSingle();
-      tenantCode = (creator?.tenant_code as string | null) ?? null;
-    }
-    return { id, scopes: scopesFromTenantCode(tenantCode) };
+    const scopes = await resolveAgentDraftOwnerScopesById(id);
+    if (!scopes) return null;
+    return { id, scopes };
   },
 
   async checkRead(actor, row) {

@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Hammer, Plus, Copy, Trash2, Edit, Loader2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
+import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
 
 // 5.14up PR-B · 智能体搭建器 · 草稿列表
 // 权限：super_admin + system_admin
@@ -39,8 +40,26 @@ export default function AgentBuilderListPage() {
   // 5.27up Fix · 防重复提交：A useRef 同步锁 + B 客户端幂等键，详见 lib/hooks/use-submit-guard.ts
   const createGuard = useSubmitGuard();
   const duplicateGuard = useSubmitGuard();
+  const adminPerms = useAdminPermissions();
+  const canReadDrafts = adminPerms.canAction("agent_draft", "read");
+  const canUpdateDraft = adminPerms.canAction("agent_draft", "update");
+  const canDeleteDraft = adminPerms.canAction("agent_draft", "delete");
+  const canCreateDraft =
+    canReadDrafts &&
+    canUpdateDraft &&
+    adminPerms.canAction("agent_draft", "create");
+  const canDuplicateDraft =
+    canReadDrafts &&
+    canUpdateDraft &&
+    adminPerms.canAction("agent_draft", "duplicate");
 
   const loadList = useCallback(async () => {
+    if (!adminPerms.loaded) return;
+    if (!canReadDrafts) {
+      setList([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     // 重试 3 次：Supabase 在国内代理下间歇 ECONNRESET，单次失败概率高
     // 三次都失败才弹 toast 报错，避免每次刷新都误报"获取列表失败"
@@ -60,11 +79,15 @@ export default function AgentBuilderListPage() {
     }
     toast(lastErr instanceof Error ? lastErr.message : "加载失败", "error");
     setLoading(false);
-  }, [toast]);
+  }, [adminPerms.loaded, canReadDrafts, toast]);
 
   useEffect(() => { loadList(); }, [loadList]);
 
   async function create() {
+    if (!canCreateDraft) {
+      toast("权限不足", "error");
+      return;
+    }
     await createGuard.submit(async (idempotencyKey) => {
       try {
         const res = await fetch("/api/admin/agent-drafts", {
@@ -82,6 +105,10 @@ export default function AgentBuilderListPage() {
   }
 
   async function duplicate(d: Draft) {
+    if (!canDuplicateDraft) {
+      toast("权限不足", "error");
+      return;
+    }
     await duplicateGuard.submit(async (idempotencyKey) => {
       try {
         const res = await fetch(`/api/admin/agent-drafts/${d.id}/duplicate`, {
@@ -99,6 +126,10 @@ export default function AgentBuilderListPage() {
   }
 
   async function remove(d: Draft) {
+    if (!canDeleteDraft) {
+      toast("权限不足", "error");
+      return;
+    }
     const isPublished = d.status === "published";
     const msg = isPublished
       ? `这个草稿已发布为正式智能体，删除会归档草稿（保留发布关系）。确认？`
@@ -124,19 +155,27 @@ export default function AgentBuilderListPage() {
           icon={<Hammer size={20} />}
           title="智能体搭建"
           actions={
-            <Button onClick={create} loading={createGuard.loading} className="flex items-center gap-1.5">
-              <Plus size={16} /> 新建智能体
-            </Button>
+            canCreateDraft ? (
+              <Button onClick={create} loading={createGuard.loading} className="flex items-center gap-1.5">
+                <Plus size={16} /> 新建智能体
+              </Button>
+            ) : null
           }
         />
 
-        {loading ? (
+        {!adminPerms.loaded || loading ? (
           <div className="flex items-center justify-center py-20 text-gray-400">
             <Loader2 className="animate-spin mr-2" size={20} /> 加载中…
           </div>
+        ) : !canReadDrafts ? (
+          <div className="card p-12 text-center text-gray-400">
+            无权访问智能体搭建
+          </div>
         ) : list.length === 0 ? (
           <div className="card p-12 text-center text-gray-400">
-            还没有任何智能体，点右上角「新建智能体」开始搭建第一个智能体
+            {canCreateDraft
+              ? "还没有任何智能体，点右上角「新建智能体」开始搭建第一个智能体"
+              : "暂无可查看的智能体草稿"}
           </div>
         ) : (
           <div className="card overflow-hidden">
@@ -165,12 +204,18 @@ export default function AgentBuilderListPage() {
                   return (
                     <tr key={d.id}>
                       <td className="px-4 py-3">
-                        <Link
-                          href={`/admin/agent-builder/${d.id}`}
-                          className="font-medium text-gray-900 hover:text-[#002FA7]"
-                        >
-                          {d.name || "未命名智能体"}
-                        </Link>
+                        {canUpdateDraft ? (
+                          <Link
+                            href={`/admin/agent-builder/${d.id}`}
+                            className="font-medium text-gray-900 hover:text-[#002FA7]"
+                          >
+                            {d.name || "未命名智能体"}
+                          </Link>
+                        ) : (
+                          <span className="font-medium text-gray-900">
+                            {d.name || "未命名智能体"}
+                          </span>
+                        )}
                         {d.description && (
                           <div className="text-xs text-gray-400 truncate mt-0.5" title={d.description}>{d.description}</div>
                         )}
@@ -185,26 +230,36 @@ export default function AgentBuilderListPage() {
                         {new Date(d.updated_at).toLocaleString("zh-CN", { hour12: false })}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <Link
-                            href={`/admin/agent-builder/${d.id}`}
-                            className="text-xs text-[#002FA7] hover:underline inline-flex items-center gap-1"
-                          >
-                            <Edit size={12} /> 编辑
-                          </Link>
-                          <button
-                            onClick={() => duplicate(d)}
-                            className="text-xs text-gray-600 hover:text-[#002FA7] inline-flex items-center gap-1"
-                          >
-                            <Copy size={12} /> 复制
-                          </button>
-                          <button
-                            onClick={() => remove(d)}
-                            className="text-xs text-gray-500 hover:text-red-600 inline-flex items-center gap-1"
-                          >
-                            <Trash2 size={12} /> 删除
-                          </button>
-                        </div>
+                        {!canUpdateDraft && !canDuplicateDraft && !canDeleteDraft ? (
+                          <span className="text-xs text-gray-300">仅可查看</span>
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            {canUpdateDraft && (
+                              <Link
+                                href={`/admin/agent-builder/${d.id}`}
+                                className="text-xs text-[#002FA7] hover:underline inline-flex items-center gap-1"
+                              >
+                                <Edit size={12} /> 编辑
+                              </Link>
+                            )}
+                            {canDuplicateDraft && (
+                              <button
+                                onClick={() => duplicate(d)}
+                                className="text-xs text-gray-600 hover:text-[#002FA7] inline-flex items-center gap-1"
+                              >
+                                <Copy size={12} /> 复制
+                              </button>
+                            )}
+                            {canDeleteDraft && (
+                              <button
+                                onClick={() => remove(d)}
+                                className="text-xs text-gray-500 hover:text-red-600 inline-flex items-center gap-1"
+                              >
+                                <Trash2 size={12} /> 删除
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );

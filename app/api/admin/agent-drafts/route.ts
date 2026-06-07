@@ -1,10 +1,12 @@
 import { apiError } from "@/lib/api-error";
-import { requireAccess } from "@/lib/access-facade";
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import type { AdminPayload } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
 import { db } from "@/lib/db";
 import { requireAdminActor, type AdminActorContext } from "@/lib/session";
 import { canReadRow } from "@/lib/scoped-access";
+import { hasPermission, type ResourceScope } from "@/lib/permission-actor";
+import type { PermissionKey } from "@/lib/permission-keys";
 import { NextRequest, NextResponse } from "next/server";
 
 type DraftRow = {
@@ -38,6 +40,30 @@ async function canReadTenantOwned(
     return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
   }
   return canReadRow(ctx.access as AdminPayload, row);
+}
+
+function ownDraftScopes(ctx: AdminActorContext): ResourceScope[] {
+  return ctx.actor.tenantCode
+    ? [{ scope_type: "org", scope_id: ctx.actor.tenantCode }]
+    : [{ scope_type: "all", scope_id: null }];
+}
+
+async function canUseCreatedDraft(
+  ctx: AdminActorContext,
+  action: "read" | "update",
+): Promise<boolean> {
+  if (ctx.role === "super_admin") return true;
+  if (!ctx.isCustomAdmin && !isResourceEnforced("agent_draft")) return true;
+
+  const allKey = `agent_draft.${action}.all` as PermissionKey;
+  if (await hasPermission(ctx.actor, allKey)) return true;
+  if (!ctx.actor.tenantCode) return false;
+
+  return hasPermission(
+    ctx.actor,
+    `agent_draft.${action}.org` as PermissionKey,
+    ownDraftScopes(ctx),
+  );
 }
 
 export async function GET() {
@@ -79,6 +105,12 @@ export async function POST(req: NextRequest) {
   if (ctx.role !== "super_admin") {
     const err = await requireAccess(ctx.actor, "agent_draft", "create");
     if (err) return err;
+    if (
+      !(await canUseCreatedDraft(ctx, "read")) ||
+      !(await canUseCreatedDraft(ctx, "update"))
+    ) {
+      return apiError("权限不足：缺少草稿读取或编辑权限，无法新建可用草稿", "FORBIDDEN");
+    }
   }
 
   const body = await req.json().catch(() => ({}));

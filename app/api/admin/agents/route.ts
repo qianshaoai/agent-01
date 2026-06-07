@@ -9,6 +9,7 @@ import { writeAuditLog } from "@/lib/audit";
 import { requireAccess } from "@/lib/access-facade";
 import { mapResourcePermissionRowsToScopes } from "@/lib/adapters/access/_scope-utils";
 import { actorHierarchyRole } from "@/lib/creator-hierarchy";
+import { resolveAgentDraftOwnerScopesMap } from "@/lib/admin-scope-resolvers";
 
 const createAgentSchema = z.object({
   agentCode: z.string().min(1, "请填写智能体编号"),
@@ -48,11 +49,21 @@ export async function GET(req: NextRequest) {
     arr.push({ scope_type: rp.scope_type, scope_id: rp.scope_id });
     permMap.set(rp.resource_id, arr);
   }
+  const fallbackDraftScopeMap = await resolveAgentDraftOwnerScopesMap(
+    agents
+      .filter((agent) => (permMap.get(agent.id) ?? []).length === 0)
+      .map((agent) => agent.published_from_draft_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
 
   if (ctx.role !== "super_admin") {
     const visible = [];
     for (const agent of agents) {
-      const scopes = mapResourcePermissionRowsToScopes(permMap.get(agent.id) ?? []);
+      const rawPerms = permMap.get(agent.id) ?? [];
+      let scopes = mapResourcePermissionRowsToScopes(rawPerms);
+      if (rawPerms.length === 0 && agent.published_from_draft_id) {
+        scopes = fallbackDraftScopeMap.get(agent.published_from_draft_id) ?? scopes;
+      }
       const err = await requireAccess(ctx.actor, "agent", "read", {
         row: { id: agent.id, scopes },
       });

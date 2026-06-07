@@ -5,8 +5,9 @@ import type { AdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { canReadRow } from "@/lib/scoped-access";
-import { requireAccess } from "@/lib/access-facade";
-import { hasPermission } from "@/lib/permission-actor";
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { hasPermission, type ResourceScope } from "@/lib/permission-actor";
+import type { PermissionKey } from "@/lib/permission-keys";
 
 // 5.14up PR-B · 复制草稿
 // 复制所有字段，但：
@@ -48,6 +49,34 @@ async function canReadTenantOwned(
     return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
   }
   return canReadRow(ctx.access as AdminPayload, row);
+}
+
+function shouldEnforceDraftPermissions(ctx: AdminActorContext): boolean {
+  return ctx.isCustomAdmin || isResourceEnforced("agent_draft");
+}
+
+function ownDraftScopes(ctx: AdminActorContext): ResourceScope[] {
+  return ctx.actor.tenantCode
+    ? [{ scope_type: "org", scope_id: ctx.actor.tenantCode }]
+    : [{ scope_type: "all", scope_id: null }];
+}
+
+async function hasOwnDraftAction(
+  ctx: AdminActorContext,
+  action: "read" | "update" | "duplicate",
+): Promise<boolean> {
+  if (ctx.role === "super_admin") return true;
+  if (!shouldEnforceDraftPermissions(ctx)) return true;
+
+  const allKey = `agent_draft.${action}.all` as PermissionKey;
+  if (await hasPermission(ctx.actor, allKey)) return true;
+  if (!ctx.actor.tenantCode) return false;
+
+  return hasPermission(
+    ctx.actor,
+    `agent_draft.${action}.org` as PermissionKey,
+    ownDraftScopes(ctx),
+  );
 }
 
 export async function POST(
@@ -98,14 +127,16 @@ export async function POST(
   // Phase D D-2 · v2 第二闸 duplicate（env-gated）：按 actor 自身 duplicate 能力判（OR .all/.org），
   //   不按 source scope —— source 可能是 super/system 的平台模板（all scope），用 source scope 会误拒
   //   org_admin 复制模板（5.30up R4 放权）。上方 source 创建者角色检查仍限制可复制的源。
+  if (ctx.role !== "super_admin" && !(await hasOwnDraftAction(ctx, "duplicate"))) {
+    return apiError("权限不足", "FORBIDDEN");
+  }
   if (ctx.role !== "super_admin") {
-    const okAll = await hasPermission(ctx.actor, "agent_draft.duplicate.all");
-    const okOrg = ctx.actor.tenantCode
-      ? await hasPermission(ctx.actor, "agent_draft.duplicate.org", [
-          { scope_type: "org", scope_id: ctx.actor.tenantCode },
-        ])
-      : false;
-    if (!okAll && !okOrg) return apiError("权限不足", "FORBIDDEN");
+    if (
+      !(await hasOwnDraftAction(ctx, "read")) ||
+      !(await hasOwnDraftAction(ctx, "update"))
+    ) {
+      return apiError("权限不足：缺少草稿读取或编辑权限，无法复制为可用草稿", "FORBIDDEN");
+    }
   }
 
   const source = src as DraftRow;

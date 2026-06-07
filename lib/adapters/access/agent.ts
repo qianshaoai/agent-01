@@ -11,6 +11,7 @@ import type { ResourceAccessAdapter } from "@/lib/access-facade-types";
 import { registerAccessAdapter } from "@/lib/access-registry";
 import { ResourceScope } from "@/lib/permission-actor";
 import { db } from "@/lib/db";
+import { resolveAgentDraftOwnerScopesById } from "@/lib/admin-scope-resolvers";
 import { mapResourcePermissionRowsToScopes, RawScopeRow } from "./_scope-utils";
 import { checkAnyScopedPermission } from "./_generic";
 
@@ -25,14 +26,25 @@ export const agentAccessAdapter: ResourceAccessAdapter<AgentRow> = {
   listFilter: () => null,
 
   async loadDetail(id) {
-    const { data: a } = await db.from("agents").select("id").eq("id", id).maybeSingle();
+    const { data: a } = await db
+      .from("agents")
+      .select("id, published_from_draft_id")
+      .eq("id", id)
+      .maybeSingle();
     if (!a) return null;
     const { data: rows } = await db
       .from("resource_permissions")
       .select("scope_type, scope_id")
       .eq("resource_type", "agent")
       .eq("resource_id", id);
-    return { id, scopes: mapResourcePermissionRowsToScopes((rows ?? []) as RawScopeRow[]) };
+    const rawRows = (rows ?? []) as RawScopeRow[];
+    let scopes = mapResourcePermissionRowsToScopes(rawRows);
+    if (rawRows.length === 0 && a.published_from_draft_id) {
+      scopes =
+        (await resolveAgentDraftOwnerScopesById(a.published_from_draft_id)) ??
+        scopes;
+    }
+    return { id, scopes };
   },
 
   async checkRead(actor, row) {
