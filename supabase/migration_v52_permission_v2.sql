@@ -10,8 +10,8 @@
 --   - v52 加 builtin admin v2 通道两张表 + seed + 一个 RPC
 --
 -- 行为切换：
---   v52 表跑完后行为不变；代码侧由 PERMISSION_V2_ENFORCE_RESOURCES env CSV 控制
---   哪些 resource 走 v2 enforce；空 = 等价 6.4up 行为；回滚 = 清空 CSV
+--   6.6up 起代码侧默认 PERMISSION_V2_ENFORCE_RESOURCES=all，全资源走 v2 enforce
+--   紧急回滚显式设为 none；CSV 仍可用于灰度指定资源
 --
 -- 回滚：DROP TABLE builtin_role_permissions, admin_permission_overrides;
 --      DROP FUNCTION change_user_role_clear_custom; v50/v51 不动。
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS admin_permission_overrides (
 CREATE INDEX IF NOT EXISTS idx_apo_admin ON admin_permission_overrides(admin_source, admin_id);
 
 -- ────────────────────────────────────────────────────────────────
--- 2. seed · system_admin 默认包（109 keys）
+-- 2. seed · system_admin 默认包（117 keys）
 --    来源：upgrade/6.4up/矩阵-资源权限现状-20260605.md `proposed_role_seed` 列
 --    口径：与现状代码完全等价；零默默放权
 -- ────────────────────────────────────────────────────────────────
@@ -166,13 +166,22 @@ INSERT INTO builtin_role_permissions (role, permission_key) VALUES
   ('system_admin', 'team.update.all'),
   ('system_admin', 'team.delete.org'),
   ('system_admin', 'team.delete.all'),
+  -- user_group（8 keys）
+  ('system_admin', 'user_group.read.org'),
+  ('system_admin', 'user_group.read.all'),
+  ('system_admin', 'user_group.create.org'),
+  ('system_admin', 'user_group.create.all'),
+  ('system_admin', 'user_group.update.org'),
+  ('system_admin', 'user_group.update.all'),
+  ('system_admin', 'user_group.delete.org'),
+  ('system_admin', 'user_group.delete.all'),
   -- audit（2 keys）
   ('system_admin', 'audit.read.org'),
   ('system_admin', 'audit.read.all')
 ON CONFLICT (role, permission_key) DO NOTHING;
 
 -- ────────────────────────────────────────────────────────────────
--- 3. seed · org_admin 默认包（64 keys）
+-- 3. seed · org_admin 默认包（68 keys）
 -- ────────────────────────────────────────────────────────────────
 
 INSERT INTO builtin_role_permissions (role, permission_key) VALUES
@@ -250,6 +259,11 @@ INSERT INTO builtin_role_permissions (role, permission_key) VALUES
   ('org_admin', 'team.create.org'),
   ('org_admin', 'team.update.org'),
   ('org_admin', 'team.delete.org'),
+  -- user_group（4 keys，仅 org）
+  ('org_admin', 'user_group.read.org'),
+  ('org_admin', 'user_group.create.org'),
+  ('org_admin', 'user_group.update.org'),
+  ('org_admin', 'user_group.delete.org'),
   -- audit（1 key）
   ('org_admin', 'audit.read.org')
 ON CONFLICT (role, permission_key) DO NOTHING;

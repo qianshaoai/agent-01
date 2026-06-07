@@ -306,7 +306,7 @@ function ConfirmModal(props: {
               此次改动将<b>立刻影响 {affectedCount} 名</b>「{ROLE_LABEL[role]}」管理员的可用能力。
             </p>
             <p className="text-[11px] text-amber-700 mt-1">
-              （仅 enforce 启用时生效；当前 PERMISSION_V2_ENFORCE_RESOURCES 留空 → 行为零变化，仅写入数据库）
+              （6.6up 默认全资源 enforce；紧急回滚请将 PERMISSION_V2_ENFORCE_RESOURCES 设为 none）
             </p>
           </div>
 

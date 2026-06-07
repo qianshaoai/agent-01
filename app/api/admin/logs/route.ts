@@ -1,14 +1,25 @@
-import { dbError } from "@/lib/api-error";
+import { apiError, dbError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { PAGINATION } from "@/lib/config";
+import { hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+
+  if (ctx.role !== "super_admin") {
+    const okOrg = ctx.tenantCode
+      ? await hasPermission(ctx.actor, "audit.read.org", [
+          { scope_type: "org", scope_id: ctx.tenantCode },
+        ])
+      : false;
+    const okAll = await hasPermission(ctx.actor, "audit.read.all");
+    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
 
   const { searchParams } = req.nextUrl;
   const search = searchParams.get("search") ?? "";
@@ -22,10 +33,10 @@ export async function GET(req: NextRequest) {
     .select("*", { count: "exact" })
     .order("created_at", { ascending: false });
 
-  // 组织管理员只能看自己组织的日志
-  if (admin.role === "org_admin") {
-    if (!admin.tenantCode) return NextResponse.json({ data: [], pagination: { page, pageSize, total: 0 } });
-    query = query.eq("tenant_code", admin.tenantCode);
+  // 非 all 权限只能看自己组织的日志
+  if (ctx.role !== "super_admin" && !(await hasPermission(ctx.actor, "audit.read.all"))) {
+    if (!ctx.tenantCode) return NextResponse.json({ data: [], pagination: { page, pageSize, total: 0 } });
+    query = query.eq("tenant_code", ctx.tenantCode);
   } else if (tenantCode) {
     query = query.eq("tenant_code", tenantCode);
   }

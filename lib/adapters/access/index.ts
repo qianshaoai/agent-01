@@ -5,9 +5,9 @@
  * 已注册到 access-facade 的 REGISTRY。建议 instrumentation 在 lib/access-facade 的
  * consumer 路由首次 import 时 transitively 加载本 index。
  *
- * 13 个 resource：
+ * 14 个 resource：
  *   workflow / agent / agent_draft / kb / model_provider / notice
- *   user / tenant / category / dept / team / audit / setting
+ *   user / tenant / category / dept / team / user_group / audit / setting
  */
 
 import "./workflow";
@@ -21,6 +21,7 @@ import "./tenant";
 import "./category";
 import "./dept";
 import "./team";
+import "./user-group";
 import "./audit";
 import "./setting";
 

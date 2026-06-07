@@ -1,6 +1,7 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor, type AdminActorContext } from "@/lib/session";
+import type { AdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { streamChat, ChatMessage } from "@/lib/adapters";
@@ -9,9 +10,7 @@ import { retrieveKbChunks } from "@/lib/kb/retrieve";
 import { buildKbStrictAnswerPrompt, buildKbUnavailablePrompt } from "@/lib/kb/prompt";
 import { isMetaOrChitchatMessage } from "@/lib/kb/intent";
 import { canReadRow } from "@/lib/scoped-access";
-// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
-import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor } from "@/lib/permission-actor";
+import { requireAccess } from "@/lib/access-facade";
 
 // 5.14up PR-C · 草稿测试聊天（SSE 流式，不入 messages 表，不扣额度）
 // 权限：super_admin + system_admin 可（system_admin 看不到 key 明文，调用通过后端代理）
@@ -44,6 +43,19 @@ type ProviderRow = {
   tenant_code: string | null;
 };
 
+type TenantOwnedRow = { id: string; tenant_code: string | null };
+
+async function canReadTenantOwned(
+  ctx: AdminActorContext,
+  resourceKind: "model_provider" | "knowledge_base",
+  row: TenantOwnedRow,
+) {
+  if (ctx.isCustomAdmin) {
+    return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
+  }
+  return canReadRow(ctx.access as AdminPayload, row);
+}
+
 function maskError(msg: string): string {
   return msg
     .replace(/Bearer\s+[A-Za-z0-9_\-+/=.]+/gi, "Bearer ***")
@@ -56,8 +68,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
@@ -79,15 +91,16 @@ export async function POST(
   const draft = draftRow as DraftRow | null;
   if (!draft) return apiError("草稿不存在", "NOT_FOUND");
   // 5.19up · org_admin 只能测试自己创建的草稿
-  if (admin.role === "org_admin"
-      && (draftRow as { created_by?: string }).created_by !== admin.adminId) {
+  if (
+    ctx.role === "org_admin" &&
+    !ctx.actor.v2Loaded &&
+    (draftRow as { created_by?: string }).created_by !== ctx.adminId
+  ) {
     return apiError("无权测试该草稿", "FORBIDDEN");
   }
 
-  // Phase D D-2 · v2 第二闸 test（env-gated）
-  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const err = await requireAccess(actor, "agent_draft", "test", { id });
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "agent_draft", "test", { id });
     if (err) return err;
   }
 
@@ -110,7 +123,7 @@ export async function POST(
   const provider = providerRow as ProviderRow | null;
   if (!provider) return apiError("绑定的模型供应商已删除", "VALIDATION_ERROR");
   // 5.30up · R1 §2 · provider 不可见 → 403 硬阻断（无 provider 无法对话）
-  if (!canReadRow(admin, provider)) {
+  if (!(await canReadTenantOwned(ctx, "model_provider", provider))) {
     return apiError("无权使用该模型供应商（请重新选择）", "FORBIDDEN");
   }
   if (!provider.enabled) return apiError("绑定的模型供应商已禁用", "VALIDATION_ERROR");
@@ -163,12 +176,15 @@ export async function POST(
         .select("id, tenant_code")
         .in("id", rawKbIds);
       const rows = (kbRows ?? []) as { id: string; tenant_code: string | null }[];
-      const visibleSet = new Set(rows.filter((r) => canReadRow(admin, r)).map((r) => r.id));
+      const visibleSet = new Set<string>();
+      for (const row of rows) {
+        if (await canReadTenantOwned(ctx, "knowledge_base", row)) visibleSet.add(row.id);
+      }
       kbIds = rawKbIds.filter((kid) => visibleSet.has(kid));
       if (kbIds.length < rawKbIds.length) {
         console.info(
           `[draft test-chat] KB 过滤：${rawKbIds.length} 个引用中 ${kbIds.length} 个可见，` +
-          `${rawKbIds.length - kbIds.length} 个不可见已剥离（admin=${admin.adminId}, draft=${draft.id}）`,
+          `${rawKbIds.length - kbIds.length} 个不可见已剥离（admin=${ctx.adminId}, draft=${draft.id}）`,
         );
       }
     }
@@ -250,10 +266,10 @@ export async function POST(
 
         // 写审计（不入 messages 表）—— 在流结束后异步写，不阻塞响应
         writeAuditLog({
-          adminId: admin.adminId,
-          adminUsername: admin.username,
-          adminRole: admin.role,
-          adminTenantCode: admin.tenantCode ?? null,
+          adminId: ctx.adminId,
+          adminUsername: ctx.username,
+          adminRole: ctx.role,
+          adminTenantCode: ctx.tenantCode ?? null,
           action: "test",
           resourceType: "agent_draft",
           resourceId: draft.id,

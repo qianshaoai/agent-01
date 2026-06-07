@@ -1,9 +1,10 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
+import type { AdminPayload } from "@/lib/auth";
 import {
   canReadRow,
   canWriteRow,
@@ -14,7 +15,6 @@ import {
 } from "@/lib/scoped-access";
 // 6.4up v2 Phase D · D-5 · provider enforce（resourceKind=model_provider；env "model_provider" 启用；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor } from "@/lib/permission-actor";
 
 // 5.14up PR-A · 模型供应商详情 / 更新 / 删除
 // 5.30up · A 半 RBAC 改造（R2 通过）：
@@ -69,8 +69,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
   // 5.30up · 全 admin 角色可访问；按 canReadRow 判归属
 
   const { id } = await params;
@@ -87,13 +88,17 @@ export async function GET(
   if (!data) return apiError("供应商不存在", "NOT_FOUND");
 
   // 5.30up · 不可见 → 404 屏蔽（不返 403，防 id 探测枚举别 org 资源）
-  if (!canReadRow(admin, data as ProviderRow)) {
+  if (ctx.isCustomAdmin) {
+    const err = await requireAccess(actor, "model_provider", "read", {
+      row: { id, tenant_code: (data as ProviderRow).tenant_code },
+    });
+    if (err) return err;
+  } else if (!canReadRow(ctx.access as AdminPayload, data as ProviderRow)) {
     return apiError("供应商不存在", "NOT_FOUND");
   }
 
   // Phase D D-5 · v2 第二闸 read（env-gated；复用已 load 的 row）
-  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if (isResourceEnforced("model_provider") && !ctx.isCustomAdmin && ctx.role !== "super_admin") {
     const err = await requireAccess(actor, "model_provider", "read", {
       row: { id, tenant_code: (data as ProviderRow).tenant_code },
     });
@@ -107,11 +112,14 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
   // 5.30up · R2 §1 双闸：写白名单 super + org_admin（**排 system_admin**）
-  const gate = requireWriteAccess(admin, ["super_admin", "org_admin"]);
-  if (gate) return gate;
+  if (!ctx.isCustomAdmin) {
+    const gate = requireWriteAccess(ctx.access as AdminPayload, ["super_admin", "org_admin"]);
+    if (gate) return gate;
+  }
 
   const { id } = await params;
   const body = await req.json();
@@ -129,15 +137,16 @@ export async function PATCH(
   if (!existing) return apiError("供应商不存在", "NOT_FOUND");
   const existingRow = existing as ProviderRow;
   // 不可见 → 404 屏蔽（不返 403，防 id 探测）
-  if (!canReadRow(admin, existingRow)) return apiError("供应商不存在", "NOT_FOUND");
+  if (!ctx.isCustomAdmin && !canReadRow(ctx.access as AdminPayload, existingRow)) {
+    return apiError("供应商不存在", "NOT_FOUND");
+  }
   // 可见但不可写（org_admin 看公共但写不了）→ 403
-  if (!canWriteRow(admin, existingRow)) {
+  if (!ctx.isCustomAdmin && !canWriteRow(ctx.access as AdminPayload, existingRow)) {
     return apiError("无权编辑该供应商", "FORBIDDEN");
   }
 
   // Phase D D-5 · v2 第二闸 update（env-gated；复用已 load 的 existingRow）
-  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if ((ctx.isCustomAdmin || isResourceEnforced("model_provider")) && ctx.role !== "super_admin") {
     const err = await requireAccess(actor, "model_provider", "update", { row: existingRow });
     if (err) return err;
   }
@@ -194,7 +203,13 @@ export async function PATCH(
     }
   }
 
-  const patch = sanitizeUpdatePatch(admin, rawPatch);
+  const patch = ctx.isCustomAdmin
+    ? (() => {
+        const { tenant_code: _stripped, ...rest } = rawPatch;
+        void _stripped;
+        return rest;
+      })()
+    : sanitizeUpdatePatch(ctx.access as AdminPayload, rawPatch);
 
   if (Object.keys(patch).length === 0) {
     return apiError("没有可更新的字段", "VALIDATION_ERROR");
@@ -260,10 +275,10 @@ export async function PATCH(
   }
 
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode,
     action: "update",
     resourceType: "model_provider",
     resourceId: id,
@@ -283,11 +298,14 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
   // 5.30up · R2 §1 双闸：写白名单 super + org_admin
-  const gate = requireWriteAccess(admin, ["super_admin", "org_admin"]);
-  if (gate) return gate;
+  if (!ctx.isCustomAdmin) {
+    const gate = requireWriteAccess(ctx.access as AdminPayload, ["super_admin", "org_admin"]);
+    if (gate) return gate;
+  }
 
   const { id } = await params;
 
@@ -303,14 +321,15 @@ export async function DELETE(
   }
   if (!existing) return apiError("供应商不存在", "NOT_FOUND");
   const existingRow = existing as ProviderRow;
-  if (!canReadRow(admin, existingRow)) return apiError("供应商不存在", "NOT_FOUND");
-  if (!canWriteRow(admin, existingRow)) {
+  if (!ctx.isCustomAdmin && !canReadRow(ctx.access as AdminPayload, existingRow)) {
+    return apiError("供应商不存在", "NOT_FOUND");
+  }
+  if (!ctx.isCustomAdmin && !canWriteRow(ctx.access as AdminPayload, existingRow)) {
     return apiError("无权删除该供应商", "FORBIDDEN");
   }
 
   // Phase D D-5 · v2 第二闸 delete（env-gated；复用已 load 的 existingRow）
-  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if ((ctx.isCustomAdmin || isResourceEnforced("model_provider")) && ctx.role !== "super_admin") {
     const err = await requireAccess(actor, "model_provider", "delete", { row: existingRow });
     if (err) return err;
   }
@@ -336,10 +355,10 @@ export async function DELETE(
   }
 
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode,
     resourceTenantCode: cachedTenantCode,
     action: "delete",
     resourceType: "model_provider",

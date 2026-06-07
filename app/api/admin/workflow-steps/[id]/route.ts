@@ -1,6 +1,6 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin, getAdminAccessPayload } from "@/lib/session";
+import { requireAdminActor, getAdminAccessPayload } from "@/lib/session";
 import { isCustomAdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
@@ -153,29 +153,28 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
-  const guard = await ensureCanTouchStep(admin, id);
-  if (guard) return guard;
-  // Phase D D-3 · v2 第二闸（builtin；step 删视为 workflow update）
-  if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
-    const { data: st } = await db.from("workflow_steps").select("workflow_id").eq("id", id).maybeSingle();
-    if (!st) return apiError("步骤不存在", "NOT_FOUND");
-    const actorV2 = await buildPermissionActor(admin);
-    const e = await requireAccess(actorV2, "workflow", "update", {
-      id: (st as { workflow_id: string }).workflow_id,
-    });
-    if (e) return e;
+  const { data: st } = await db.from("workflow_steps").select("workflow_id").eq("id", id).maybeSingle();
+  if (!st) return apiError("步骤不存在", "NOT_FOUND");
+  if (!ctx.isCustomAdmin) {
+    const guard = await ensureCanTouchStep({ role: ctx.role }, id);
+    if (guard) return guard;
   }
+  // Phase D D-3 · v2 第二闸（builtin；step 删视为 workflow update）
+  const e = await requireAccess(ctx.actor, "workflow", "update", {
+    id: (st as { workflow_id: string }).workflow_id,
+  });
+  if (e) return e;
   const { data: step } = await db.from("workflow_steps").select("title").eq("id", id).maybeSingle();
   // 5.11up · 删除前缓存 tenant 归属，避免删完反查为 null
   const resourceTenantCode = await resolveResourceTenantCode("workflow_step", id);
   const { error } = await db.from("workflow_steps").delete().eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode ?? null,
     resourceTenantCode,
     action: "delete", resourceType: "workflow_step", resourceId: id, resourceName: step?.title,
   });

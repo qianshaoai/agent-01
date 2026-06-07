@@ -1,29 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { apiError } from "@/lib/api-error";
-// 6.4up v2 Phase C HC1 · analytics 复用 audit.read.* key（D1）
-// 必须 env-gated：生产 env 空时 no-op；否则破坏"行为零变化"承诺
-import { isResourceEnforced } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
-  // Phase C HC1 · env-gated v2 check（analytics 不在 13 adapter 中；不走 facade，直接 hasPermission）
-  if (isResourceEnforced("analytics") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    // D1 复用 audit.read.*；任一 scope 通过即放行
-    const okOrg = actor.tenantCode
-      ? await hasPermission(actor, "audit.read.org", [
-          { scope_type: "org", scope_id: actor.tenantCode },
+  const okAllAudit = await hasPermission(ctx.actor, "audit.read.all");
+  if (ctx.role !== "super_admin") {
+    const okOrg = ctx.tenantCode
+      ? await hasPermission(ctx.actor, "audit.read.org", [
+          { scope_type: "org", scope_id: ctx.tenantCode },
         ])
       : false;
-    const okAll = await hasPermission(actor, "audit.read.all");
-    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+    if (!okOrg && !okAllAudit) return apiError("权限不足", "FORBIDDEN");
   }
 
   const { searchParams } = req.nextUrl;
@@ -33,8 +27,9 @@ export async function GET(req: NextRequest) {
   const userSearch = searchParams.get("userSearch") ?? "";
   const days = parseInt(searchParams.get("days") ?? "30");
 
-  // 组织管理员强制只能看自己组织
-  const scopedTenant = admin.role === "org_admin" ? admin.tenantCode ?? "" : tenantFilter;
+  // 非 all 权限强制只能看自己组织
+  const tenantScoped = ctx.role !== "super_admin" && !okAllAudit;
+  const scopedTenant = tenantScoped ? ctx.tenantCode ?? "" : tenantFilter;
 
   const sinceIso = days > 0 ? new Date(Date.now() - days * 86400000).toISOString() : null;
 
@@ -58,11 +53,11 @@ export async function GET(req: NextRequest) {
   ] = await Promise.all([
     baseLogs("*", { count: "exact", head: true }),
     baseLogs("*", { count: "exact", head: true }).eq("status", "success"),
-    admin.role === "org_admin"
+    tenantScoped
       ? Promise.resolve({ count: 1 })
       : db.from("tenants").select("*", { count: "exact", head: true }),
     baseLogs("agent_code, agent_name").eq("status", "success"),
-    admin.role === "org_admin"
+    tenantScoped
       ? db.from("tenants").select("code, name, quota, quota_used").eq("code", scopedTenant)
       : db.from("tenants").select("code, name, quota, quota_used"),
     baseLogs("user_phone, tenant_code, agent_code, agent_name, created_at"),

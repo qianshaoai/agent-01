@@ -1,11 +1,9 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
-// 6.4up v2 Phase D · D-2 · agent enforce（env "agent" 启用时生效；空时完全 no-op）
-import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor } from "@/lib/permission-actor";
+import { requireAccess } from "@/lib/access-facade";
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +11,10 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
   // 5.7up · org_admin 只读，禁止修改智能体（含禁用/启用）
-  if (admin.role === "org_admin") {
+  if (ctx.role === "org_admin" && !ctx.actor.v2Loaded) {
     return apiError("无权修改智能体", "FORBIDDEN");
   }
 
@@ -25,14 +23,13 @@ export async function PATCH(
 
   // Phase D D-2 · v2 第二闸（env-gated；org_admin 已在上方硬拒，到此仅 system_admin）：
   //   改 enabled → agent.enable；改其它字段 → agent.basic.update（两者可同时触发）。
-  if (isResourceEnforced("agent") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if (ctx.role !== "super_admin") {
     if (body.enabled !== undefined) {
-      const err = await requireAccess(actor, "agent", "enable", { id });
+      const err = await requireAccess(ctx.actor, "agent", "enable", { id });
       if (err) return err;
     }
     if (Object.keys(body).some((k) => k !== "enabled")) {
-      const err = await requireAccess(actor, "agent", "basic.update", { id });
+      const err = await requireAccess(ctx.actor, "agent", "basic.update", { id });
       if (err) return err;
     }
   }
@@ -141,10 +138,10 @@ export async function PATCH(
     }
     const action = updates.enabled === true ? "enable" : updates.enabled === false ? "disable" : "update";
     await writeAuditLog({
-      adminId: admin.adminId,
-      adminUsername: admin.username,
-      adminRole: admin.role ?? "super_admin",
-      adminTenantCode: admin.tenantCode ?? null,
+      adminId: ctx.adminId,
+      adminUsername: ctx.username,
+      adminRole: ctx.role,
+      adminTenantCode: ctx.tenantCode ?? null,
       action,
       resourceType: "agent",
       resourceId: id,
@@ -164,10 +161,10 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
   // 5.7up · org_admin 只读，禁止删除智能体
-  if (admin.role === "org_admin") {
+  if (ctx.role === "org_admin" && !ctx.actor.v2Loaded) {
     return apiError("无权删除智能体", "FORBIDDEN");
   }
 
@@ -175,9 +172,8 @@ export async function DELETE(
   if (!id) return apiError("id 必填", "VALIDATION_ERROR");
 
   // Phase D D-2 · v2 第二闸（env-gated；org_admin 已在上方硬拒）
-  if (isResourceEnforced("agent") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const err = await requireAccess(actor, "agent", "delete", { id });
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "agent", "delete", { id });
     if (err) return err;
   }
 
@@ -228,10 +224,10 @@ export async function DELETE(
   }
 
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role ?? "super_admin",
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
     resourceTenantCode,
     action: "delete",
     resourceType: "agent",

@@ -1,12 +1,11 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 // 6.4up v2 Phase D · D-3 · duplicate 原本零结构闸（R0.1 F8/§7 越权点）→ 补 hierarchy + org scope + v2 duplicate 闸
 import { canActOnRole, noWritePermissionMessage, type AdminRole } from "@/lib/admin-permissions";
-import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor } from "@/lib/permission-actor";
+import { requireAccess } from "@/lib/access-facade";
 // 6.4up v2 Phase D · D-3 Fix · 副本同步克隆 resource_permissions（纯函数挑行）
 import { selectDuplicatePermRows, type RawScopeRow } from "@/lib/adapters/access/_scope-utils";
 
@@ -14,8 +13,8 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
 
@@ -31,11 +30,11 @@ export async function POST(
   // org_admin 的本组织 dept/team 归属集：duplicate 守卫与下方副本权限行复制共用，只查一次。
   let orgDeptIds = new Set<string>();
   let orgTeamIds = new Set<string>();
-  if (admin.role === "org_admin") {
-    if (!admin.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
+  if (ctx.role === "org_admin") {
+    if (!ctx.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
     const [{ data: depts }, { data: teams }] = await Promise.all([
-      db.from("departments").select("id").eq("tenant_code", admin.tenantCode),
-      db.from("teams").select("id").eq("tenant_code", admin.tenantCode),
+      db.from("departments").select("id").eq("tenant_code", ctx.tenantCode),
+      db.from("teams").select("id").eq("tenant_code", ctx.tenantCode),
     ]);
     orgDeptIds = new Set((depts ?? []).map((d: { id: string }) => d.id));
     orgTeamIds = new Set((teams ?? []).map((t: { id: string }) => t.id));
@@ -45,15 +44,17 @@ export async function POST(
   //   org_admin 可复制任意 workflow，含 super 建的，是潜在越权）。此处补齐：
   {
     // 1) 上下级：不能复制比自己等级高的角色建的 workflow（与 PATCH/DELETE 同口径）
-    const actorRoleGuard = (admin.role ?? "super_admin") as AdminRole;
-    const creatorRole = (src.created_by_role ?? null) as AdminRole | null;
-    if (!canActOnRole(actorRoleGuard, creatorRole)) {
-      return apiError(noWritePermissionMessage(creatorRole), "FORBIDDEN");
+    if (!ctx.isCustomAdmin) {
+      const actorRoleGuard = (ctx.role ?? "super_admin") as AdminRole;
+      const creatorRole = (src.created_by_role ?? null) as AdminRole | null;
+      if (!canActOnRole(actorRoleGuard, creatorRole)) {
+        return apiError(noWritePermissionMessage(creatorRole), "FORBIDDEN");
+      }
     }
     // 2) org_admin：source 必须归属本组织（resource_permissions 命中本组织/部门/小组）
-    if (admin.role === "org_admin") {
-      if (!admin.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
-      const tc = admin.tenantCode;
+    if (ctx.role === "org_admin") {
+      if (!ctx.tenantCode) return apiError("组织管理员未绑定组织", "FORBIDDEN");
+      const tc = ctx.tenantCode;
       const deptIds = [...orgDeptIds];
       const teamIds = [...orgTeamIds];
       const orFilters: string[] = [`and(scope_type.eq.org,scope_id.eq.${tc})`];
@@ -68,18 +69,30 @@ export async function POST(
         .limit(1);
       if (!hits || hits.length === 0) return apiError("无权复制该工作流", "FORBIDDEN");
     }
-    // 3) v2 duplicate 闸（env-gated）
-    if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
-      const actor = await buildPermissionActor(admin);
-      const err = await requireAccess(actor, "workflow", "duplicate", { id });
-      if (err) return err;
-    }
+    // 3) v2 duplicate 闸
+    const err = await requireAccess(ctx.actor, "workflow", "duplicate", { id });
+    if (err) return err;
+  }
+
+  let customSourcePermRows: RawScopeRow[] | null = null;
+  if (ctx.isCustomAdmin) {
+    const { data: rows } = await db
+      .from("resource_permissions")
+      .select("scope_type, scope_id")
+      .eq("resource_type", "workflow")
+      .eq("resource_id", id);
+    customSourcePermRows = (rows ?? []) as RawScopeRow[];
+    const hasSupportedScope = customSourcePermRows.some(
+      (p) => p.scope_type === "all" || p.scope_type === "org" || p.scope_type === "dept" || p.scope_type === "team",
+    );
+    if (!hasSupportedScope) return apiError("源工作流无可校验 scope，custom 角色不能复制", "FORBIDDEN");
   }
 
   // 创建副本工作流
   // 5.11up · 决策 2=A：副本的创建者是当前管理员（不是源工作流的创建者），
   // 当前管理员可以对自己的副本进行任意操作
-  const adminRole = (admin.role ?? "super_admin") as "super_admin" | "system_admin" | "org_admin";
+  const builtinAdminRole = (ctx.role ?? "super_admin") as "super_admin" | "system_admin" | "org_admin";
+  const roleCodeSnapshot = ctx.actor.customRoleCodes[0] ?? null;
   const { data: newWf, error: wfErr } = await db
     .from("workflows")
     .insert({
@@ -89,8 +102,10 @@ export async function POST(
       sort_order: src.sort_order,
       enabled: false,
       visible_to: src.visible_to,
-      created_by: admin.adminId,
-      created_by_role: adminRole,
+      created_by: ctx.adminId,
+      ...(ctx.isCustomAdmin
+        ? { created_by_kind: "custom_admin", created_by_role_code: roleCodeSnapshot }
+        : { created_by_role: builtinAdminRole }),
     })
     .select()
     .single();
@@ -125,12 +140,20 @@ export async function POST(
     .select("scope_type, scope_id")
     .eq("resource_type", "workflow")
     .eq("resource_id", id);
-  const permRowsToCopy = selectDuplicatePermRows((srcPerms ?? []) as RawScopeRow[], {
-    role: adminRole,
-    tenantCode: admin.tenantCode ?? null,
-    orgDeptIds,
-    orgTeamIds,
-  });
+  const rawPermRows = customSourcePermRows ?? ((srcPerms ?? []) as RawScopeRow[]);
+  const permRowsToCopy = ctx.isCustomAdmin
+    ? rawPermRows
+        .filter((p) => p.scope_type === "all" || p.scope_type === "org" || p.scope_type === "dept" || p.scope_type === "team")
+        .map((p) => ({ scope_type: p.scope_type, scope_id: p.scope_id }))
+    : selectDuplicatePermRows(rawPermRows, {
+        role: builtinAdminRole,
+        tenantCode: ctx.tenantCode ?? null,
+        orgDeptIds,
+        orgTeamIds,
+      });
+  if (ctx.isCustomAdmin && permRowsToCopy.length === 0) {
+    return apiError("源工作流无可校验 scope，custom 角色不能复制", "FORBIDDEN");
+  }
   if (permRowsToCopy.length > 0) {
     await db.from("resource_permissions").insert(
       permRowsToCopy.map((p) => ({
@@ -143,9 +166,9 @@ export async function POST(
   }
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode ?? null,
     action: "create", resourceType: "workflow", resourceId: newWf.id, resourceName: newWf.name,
-    detail: { duplicated_from: id },
+    detail: { duplicated_from: id, created_by_kind: ctx.isCustomAdmin ? "custom_admin" : "builtin_admin" },
   });
   return NextResponse.json(newWf, { status: 201 });
 }

@@ -1,27 +1,19 @@
 import { dbError, apiError } from "@/lib/api-error";
-import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
-import { db } from "@/lib/db";
+import { requireAccess } from "@/lib/access-facade";
 import { writeAuditLog } from "@/lib/audit";
-import { isTagAdmin } from "@/lib/admin-permissions";
-// 6.4up v2 Phase C · enforce 叠加（icon POST/DELETE 在 v2 体系下都映射到 category.update.all）
-import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor } from "@/lib/permission-actor";
+import { db } from "@/lib/db";
+import { requireAdminActor } from "@/lib/session";
+import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-// 上传/替换智能体分类图标
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
-
-  // Phase C · v2 第二闸（icon 上传 = category.update.all）
-  if (isResourceEnforced("category")) {
-    const actor = await buildPermissionActor(admin);
-    const accessErr = await requireAccess(actor, "category", "update", { row: { id } });
+  if (ctx.role !== "super_admin") {
+    const accessErr = await requireAccess(ctx.actor, "category", "update", { row: { id } });
     if (accessErr) return accessErr;
   }
 
@@ -49,32 +41,39 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { error } = await db.from("categories").update({ icon_url: publicUrl }).eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
-    action: "update", resourceType: "category", resourceId: id, resourceName: "图标",
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
+    action: "update",
+    resourceType: "category",
+    resourceId: id,
+    resourceName: "图标",
   });
   return NextResponse.json({ url: publicUrl });
 }
 
-// 删除分类图标（v2 中等价 category.update.all：仅清空 icon_url 字段；不是 category.delete）
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
-
-  // Phase C · v2 第二闸（icon 清空 = category.update.all，非 delete）
-  if (isResourceEnforced("category")) {
-    const actor = await buildPermissionActor(admin);
-    const accessErr = await requireAccess(actor, "category", "update", { row: { id } });
+  if (ctx.role !== "super_admin") {
+    const accessErr = await requireAccess(ctx.actor, "category", "update", { row: { id } });
     if (accessErr) return accessErr;
   }
 
   const { error } = await db.from("categories").update({ icon_url: null }).eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
-    action: "delete", resourceType: "category", resourceId: id, resourceName: "图标",
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
+    action: "delete",
+    resourceType: "category",
+    resourceId: id,
+    resourceName: "图标",
   });
   return NextResponse.json({ ok: true });
 }

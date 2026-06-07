@@ -1,9 +1,10 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { writeAuditLog } from "@/lib/audit";
+import type { AdminPayload } from "@/lib/auth";
 import {
   listScopeFilter,
   resolveCreateOwnership,
@@ -14,7 +15,7 @@ import {
 // 6.4up v2 Phase D · D-5 · provider enforce（resourceKind=model_provider；env "model_provider" 启用；空时 no-op）
 //   注：system_admin 现状被 requireWriteAccess 排除，seed 也无 provider 写 key，行为一致。
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { hasPermission } from "@/lib/permission-actor";
 
 // 5.14up PR-A · 模型供应商列表 + 新增
 // 5.30up · A 半 RBAC 改造（R2 通过）：
@@ -66,12 +67,12 @@ function sanitize(row: ProviderRow) {
 }
 
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
 
   // Phase D D-5 · list 走 env-gated hasPermission 粗粒度 check（HC2）；listScopeFilter ownership 下方保留
-  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if ((ctx.isCustomAdmin || isResourceEnforced("model_provider")) && ctx.role !== "super_admin") {
     const okOrg = actor.tenantCode
       ? await hasPermission(actor, "provider.read.org", [
           { scope_type: "org", scope_id: actor.tenantCode },
@@ -93,8 +94,16 @@ export async function GET(req: NextRequest) {
     query = query.eq("category", category);
   }
   // 5.30up · 接 listScopeFilter：org_admin 自动加 tenant_code 过滤；super/system null 不动
-  const scope = listScopeFilter(admin);
-  if (scope) query = query.or(scope);
+  if (ctx.isCustomAdmin) {
+    const okAll = await hasPermission(actor, "provider.read.all");
+    if (!okAll) {
+      if (!actor.tenantCode) return apiError("权限不足", "FORBIDDEN");
+      query = query.eq("tenant_code", actor.tenantCode);
+    }
+  } else {
+    const scope = listScopeFilter(ctx.access as AdminPayload);
+    if (scope) query = query.or(scope);
+  }
 
   const { data, error } = await query;
 
@@ -109,15 +118,17 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
   // 5.30up · R2 §1 双闸：写白名单 super + org_admin（**不放 system_admin**）+ tenantCode 兜底
-  const gate = requireWriteAccess(admin, ["super_admin", "org_admin"]);
-  if (gate) return gate;
+  if (!ctx.isCustomAdmin) {
+    const gate = requireWriteAccess(ctx.access as AdminPayload, ["super_admin", "org_admin"]);
+    if (gate) return gate;
+  }
 
   // Phase D D-5 · v2 第二闸 create（env-gated；system_admin 已被上方白名单排除）
-  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if ((ctx.isCustomAdmin || isResourceEnforced("model_provider")) && ctx.role !== "super_admin") {
     const err = await requireAccess(actor, "model_provider", "create");
     if (err) return err;
   }
@@ -161,7 +172,7 @@ export async function POST(req: NextRequest) {
   //   - org_admin 创建 embedding → 422
   //   - super/system 显式带 tenant_code 创建 embedding → 422（不能赋给某 org）
   if (category === "embedding") {
-    if (admin.role === "org_admin") {
+    if (ctx.role === "org_admin" || ctx.isCustomAdmin) {
       return apiError(
         "Embedding 配置为平台基础设施，组织管理员无法创建",
         "FORBIDDEN",
@@ -176,7 +187,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 5.30up · R2 §6 · super/system 显式传 tenant_code 时先校验存在性，防孤儿资源
-  if ((admin.role === "super_admin" || admin.role === "system_admin") && rawTenantCode !== null) {
+  if ((ctx.role === "super_admin" || ctx.role === "system_admin") && rawTenantCode !== null) {
     const ok = await validateTenantCode(rawTenantCode);
     if (!ok) {
       return apiError(
@@ -189,7 +200,9 @@ export async function POST(req: NextRequest) {
   // 5.30up · 计算 ownership：org_admin 强制本组织；super/system 沿用 payload
   let ownership: { tenant_code: string | null };
   try {
-    ownership = resolveCreateOwnership(admin, { tenant_code: rawTenantCode });
+    ownership = ctx.isCustomAdmin
+      ? { tenant_code: actor.tenantCode }
+      : resolveCreateOwnership(ctx.access as AdminPayload, { tenant_code: rawTenantCode });
   } catch (e) {
     if (e instanceof ScopeAdminNoTenantError) {
       return apiError("组织管理员未绑定组织，无法创建供应商", "FORBIDDEN");
@@ -199,7 +212,7 @@ export async function POST(req: NextRequest) {
 
   // 5.30up · R2 §6 · org_admin 路径再校验 admin.tenantCode 在 tenants 表里
   //   防 admin 绑定的 org 已被删除却仍能创建归属此 org 的资源
-  if (admin.role === "org_admin" && ownership.tenant_code) {
+  if ((ctx.role === "org_admin" || ctx.isCustomAdmin) && ownership.tenant_code) {
     const ok = await validateTenantCode(ownership.tenant_code);
     if (!ok) {
       return apiError(
@@ -233,7 +246,7 @@ export async function POST(req: NextRequest) {
       default_params,
       enabled,
       tenant_code: ownership.tenant_code,
-      created_by: admin.adminId,
+      created_by: ctx.adminId,
     })
     .select("*")
     .single();
@@ -244,10 +257,10 @@ export async function POST(req: NextRequest) {
   }
 
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode,
     action: "create",
     resourceType: "model_provider",
     resourceId: data.id,

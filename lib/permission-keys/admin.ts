@@ -5,7 +5,7 @@
  *   1. workflow 12 keys（与 WORKFLOW_PERMISSION_KEYS 重叠）
  *   2. workflow.enable/duplicate/delete.{team,dept,org,all}（v2 新增，仅 ADMIN 通道独占）
  *   3. agent_draft 系列（与 AGENT_DRAFT_PERMISSION_KEYS 重叠）
- *   4. agent / kb / provider / notice / user / tenant / category / dept / team / audit 系列
+ *   4. agent / kb / provider / notice / user / tenant / category / dept / team / user_group / audit 系列
  *
  * scope 分级：见矩阵-资源权限现状-20260605.md
  * setting / permission 不入此表 —— super_admin 硬全权由公式第 1 行覆盖（方案 §3.2 / 验收 #7）
@@ -153,6 +153,19 @@ const TEAM_KEYS = [
   "team.delete.all",
 ] as const;
 
+// ─── user_group ────────────────────────────────────────────────
+
+const USER_GROUP_KEYS = [
+  "user_group.read.org",
+  "user_group.read.all",
+  "user_group.create.org",
+  "user_group.create.all",
+  "user_group.update.org",
+  "user_group.update.all",
+  "user_group.delete.org",
+  "user_group.delete.all",
+] as const;
+
 // ─── audit ──────────────────────────────────────────────────────
 
 const AUDIT_KEYS = [
@@ -175,6 +188,7 @@ export const ADMIN_PERMISSION_KEYS = [
   ...CATEGORY_KEYS,            // 4
   ...DEPT_KEYS,                // 8
   ...TEAM_KEYS,                // 8
+  ...USER_GROUP_KEYS,          // 8
   ...AUDIT_KEYS,               // 2
 ] as const;
 
@@ -194,5 +208,13 @@ export const KEYS_BY_RESOURCE: Record<string, readonly string[]> = {
   category: [...CATEGORY_KEYS],
   dept: [...DEPT_KEYS],
   team: [...TEAM_KEYS],
+  user_group: [...USER_GROUP_KEYS],
   audit: [...AUDIT_KEYS],
 };
+
+/**
+ * 6.6up · 自定义角色从 workflow-only 升级为后台全资源权限。
+ * custom_roles 仍写 custom_role_permissions 表，合法 key 集改为 ADMIN_PERMISSION_KEYS。
+ */
+export const CUSTOM_ROLE_PERMISSION_KEYS = ADMIN_PERMISSION_KEYS;
+export type CustomRolePermissionKey = (typeof CUSTOM_ROLE_PERMISSION_KEYS)[number];

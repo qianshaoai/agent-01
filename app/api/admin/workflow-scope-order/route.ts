@@ -18,10 +18,11 @@
 
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
-import { isWorkflowConfigAdmin } from "@/lib/admin-permissions";
+import { requireAccess } from "@/lib/access-facade";
+import { requireWorkflowScopeAccess } from "@/lib/workflow-admin-access";
 
 type ScopeType = "org" | "dept" | "team";
 
@@ -49,9 +50,8 @@ async function validateScopeId(scopeType: ScopeType, scopeId: string): Promise<{
 
 // ── GET ?scope_type=X&scope_id=Y → 该 scope 已配置的工作流（含 sort_order）─────
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isWorkflowConfigAdmin(admin.role)) return apiError("无权访问工作流配置", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const sp = req.nextUrl.searchParams;
   const scopeType = sp.get("scope_type");
@@ -59,6 +59,8 @@ export async function GET(req: NextRequest) {
   if (!isValidScopeType(scopeType) || !scopeId) {
     return apiError("scope_type / scope_id 必填", "VALIDATION_ERROR");
   }
+  const accessErr = await requireWorkflowScopeAccess(ctx, "read", scopeType, scopeId);
+  if (accessErr) return accessErr;
 
   const { data: orderRows, error } = await db
     .from("workflow_scope_order")
@@ -98,9 +100,8 @@ export async function GET(req: NextRequest) {
 
 // ── POST {scope_type, scope_id, workflowIds[]} → 批量"拉取"（同步写两张表）──
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isWorkflowConfigAdmin(admin.role)) return apiError("无权访问工作流配置", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const body = await req.json().catch(() => ({}));
   const scopeType = body.scope_type as string | undefined;
@@ -121,6 +122,8 @@ export async function POST(req: NextRequest) {
 
   const scopeCheck = await validateScopeId(st, scopeId);
   if (!scopeCheck.ok) return apiError(scopeCheck.msg, "VALIDATION_ERROR");
+  const accessErr = await requireWorkflowScopeAccess(ctx, "update", st, scopeId);
+  if (accessErr) return accessErr;
 
   // 校验所有 workflowIds 都存在 + 不是 personal_only
   // R1.2 Finding 3 修复：personal_only 工作流被 helper 在 visible_to 短路时直接拒，
@@ -143,6 +146,10 @@ export async function POST(req: NextRequest) {
       "VALIDATION_ERROR"
     );
   }
+  for (const workflowId of workflowIds) {
+    const readErr = await requireAccess(ctx.actor, "workflow", "read", { id: workflowId });
+    if (readErr) return readErr;
+  }
 
   // R1.2 Finding 4 修复：把"写 order + 写 permissions"封进 v47 RPC `add_workflow_scope_order`，
   //   PL/pgSQL 内 CTE 单事务、幂等跳过已存在；避免 route 层分两步写产生"半成功"竞态。
@@ -156,7 +163,7 @@ export async function POST(req: NextRequest) {
   const skipped = workflowIds.length - added;
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode ?? null,
     action: "create", resourceType: "workflow_scope_order",
     resourceName: `${st}/${scopeId}`,
     detail: { scope_type: st, scope_id: scopeId, workflow_ids: workflowIds, added, skipped },
@@ -167,9 +174,8 @@ export async function POST(req: NextRequest) {
 
 // ── PUT {scope_type, scope_id, orderedIds[]} → 批量重排（事务）──────────────
 export async function PUT(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isWorkflowConfigAdmin(admin.role)) return apiError("无权访问工作流配置", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const body = await req.json().catch(() => ({}));
   const scopeType = body.scope_type as string | undefined;
@@ -182,6 +188,8 @@ export async function PUT(req: NextRequest) {
 
   const scopeCheck = await validateScopeId(st, scopeId);
   if (!scopeCheck.ok) return apiError(scopeCheck.msg, "VALIDATION_ERROR");
+  const accessErr = await requireWorkflowScopeAccess(ctx, "update", st, scopeId);
+  if (accessErr) return accessErr;
 
   // R1.3 Finding 2 修复：校验 orderedIds 必须正好是该 scope 当前已配置的工作流集合（仅顺序不同）。
   // 旧版直接把 orderedIds 交给 batch_reorder_workflow_scope 重写 order，
@@ -224,7 +232,7 @@ export async function PUT(req: NextRequest) {
   if (error) return dbError(error);
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode ?? null,
     action: "update", resourceType: "workflow_scope_order",
     resourceName: `${st}/${scopeId}`,
     detail: { scope_type: st, scope_id: scopeId, ordered_ids: orderedIds, count: orderedIds.length },
@@ -235,9 +243,8 @@ export async function PUT(req: NextRequest) {
 
 // ── DELETE {scope_type, scope_id, workflowId} → 同步删 order + permissions ──
 export async function DELETE(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isWorkflowConfigAdmin(admin.role)) return apiError("无权访问工作流配置", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const body = await req.json().catch(() => ({}));
   const scopeType = body.scope_type as string | undefined;
@@ -247,6 +254,8 @@ export async function DELETE(req: NextRequest) {
     return apiError("scope_type / scope_id / workflowId 必填", "VALIDATION_ERROR");
   }
   const st = scopeType as ScopeType;
+  const accessErr = await requireWorkflowScopeAccess(ctx, "update", st, scopeId);
+  if (accessErr) return accessErr;
 
   // R1.2 Finding 4 修复：DELETE 也封进 v47 RPC `remove_workflow_scope_order`，
   //   PL/pgSQL 内单事务同步删 order + permissions，幂等。
@@ -258,7 +267,7 @@ export async function DELETE(req: NextRequest) {
   if (rpcErr) return dbError(rpcErr);
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode ?? null,
     action: "delete", resourceType: "workflow_scope_order",
     resourceName: `${st}/${scopeId}`,
     detail: { scope_type: st, scope_id: scopeId, workflow_id: workflowId },

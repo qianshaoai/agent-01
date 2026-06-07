@@ -1,28 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 // 6.4up v2 Phase C · audit 走 env-gated hasPermission（不走 facade，列表无 row）
-import { isResourceEnforced } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
   // 5.11up · 所有管理员（含 org_admin）可访问审计记录入口
   // org_admin 看到的内容按本组织过滤（见下方 OR 条件）
 
-  // Phase C · env-gated v2 check（list-level，HC2：不走 requireAccess）
-  if (isResourceEnforced("audit") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const okOrg = actor.tenantCode
-      ? await hasPermission(actor, "audit.read.org", [
-          { scope_type: "org", scope_id: actor.tenantCode },
+  if (ctx.role !== "super_admin") {
+    const okOrg = ctx.tenantCode
+      ? await hasPermission(ctx.actor, "audit.read.org", [
+          { scope_type: "org", scope_id: ctx.tenantCode },
         ])
       : false;
-    const okAll = await hasPermission(actor, "audit.read.all");
+    const okAll = await hasPermission(ctx.actor, "audit.read.all");
     if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
   }
 
@@ -41,9 +38,9 @@ export async function GET(req: NextRequest) {
 
   // 5.11up · org_admin 只看本组织相关：admin_tenant_code = 本组织（自己发起的） OR
   // resource_tenant_code = 本组织（任何管理员动了本组织资源）
-  if (admin.role === "org_admin" && admin.tenantCode) {
-    const tc = admin.tenantCode;
-    query = query.or(`admin_tenant_code.eq.${tc},resource_tenant_code.eq.${tc}`);
+  if (ctx.role !== "super_admin" && !(await hasPermission(ctx.actor, "audit.read.all"))) {
+    if (!ctx.tenantCode) return paginatedResponse([], 0, page, pageSize);
+    query = query.or(`admin_tenant_code.eq.${ctx.tenantCode},resource_tenant_code.eq.${ctx.tenantCode}`);
   }
 
   if (resourceType) query = query.eq("resource_type", resourceType);

@@ -1,8 +1,9 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
+import type { AdminPayload } from "@/lib/auth";
 import {
   canReadRow,
   canWriteRow,
@@ -13,7 +14,6 @@ import {
 } from "@/lib/scoped-access";
 // 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor } from "@/lib/permission-actor";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库详情 / 更新 / 删除
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -33,8 +33,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
 
   const { id } = await params;
   const { data: kb, error } = await db
@@ -48,11 +49,17 @@ export async function GET(
   }
   // 5.30up · 404 屏蔽：不存在 / 不在可见范围 → 一视同仁返 404（防 id 探测枚举别 org 资源）
   if (!kb) return apiError("知识库不存在", "NOT_FOUND");
-  if (!canReadRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
+  if (ctx.isCustomAdmin) {
+    const err = await requireAccess(actor, "knowledge_base", "read", {
+      row: { id, tenant_code: (kb as { tenant_code: string | null }).tenant_code },
+    });
+    if (err) return err;
+  } else if (!canReadRow(ctx.access as AdminPayload, kb)) {
+    return apiError("知识库不存在", "NOT_FOUND");
+  }
 
   // Phase D D-5 · v2 第二闸 read（env-gated；复用已 load 的 kb row）
-  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if (isResourceEnforced("knowledge_base") && !ctx.isCustomAdmin && ctx.role !== "super_admin") {
     const err = await requireAccess(actor, "knowledge_base", "read", {
       row: { id, tenant_code: (kb as { tenant_code: string | null }).tenant_code },
     });
@@ -82,7 +89,7 @@ export async function GET(
   }
   const agentIds = (links ?? []).map((l: { agent_id: string }) => l.agent_id);
 
-  if (admin.role === "org_admin") {
+  if (ctx.role === "org_admin" || ctx.isCustomAdmin) {
     // 仅返计数（含本组织外）
     return NextResponse.json({
       knowledgeBase: kb,
@@ -113,12 +120,15 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
 
   // 5.30up · R2 §1 双闸门：角色白名单 + org_admin tenantCode 非空兜底
-  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
-  if (gate) return gate;
+  if (!ctx.isCustomAdmin) {
+    const gate = requireWriteAccess(ctx.access as AdminPayload, [...KB_WRITE_ROLES]);
+    if (gate) return gate;
+  }
 
   const { id } = await params;
 
@@ -133,21 +143,20 @@ export async function PATCH(
     return apiError("加载知识库失败", "INTERNAL_ERROR");
   }
   if (!existing) return apiError("知识库不存在", "NOT_FOUND");
-  if (!canWriteRow(admin, existing)) {
+  if (!ctx.isCustomAdmin && !canWriteRow(ctx.access as AdminPayload, existing)) {
     // org_admin 试图改别 org / 平台公共 → 404 屏蔽
     return apiError("知识库不存在", "NOT_FOUND");
   }
 
   // Phase D D-5 · v2 第二闸 update（env-gated；复用已 load 的 existing row）
-  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if ((ctx.isCustomAdmin || isResourceEnforced("knowledge_base")) && ctx.role !== "super_admin") {
     const err = await requireAccess(actor, "knowledge_base", "update", { row: existing });
     if (err) return err;
   }
 
   // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 表存在
-  if (admin.role === "org_admin" && admin.tenantCode) {
-    const ok = await validateTenantCode(admin.tenantCode);
+  if ((ctx.role === "org_admin" || ctx.isCustomAdmin) && ctx.tenantCode) {
+    const ok = await validateTenantCode(ctx.tenantCode);
     if (!ok) return apiError("您所属的组织不存在或已失效，请联系平台管理员", "FORBIDDEN");
   }
 
@@ -183,7 +192,13 @@ export async function PATCH(
   }
 
   // 5.30up · 剥离 org_admin 的 tenant_code（防越权转让）
-  const patch = sanitizeUpdatePatch(admin, rawPatch);
+  const patch = ctx.isCustomAdmin
+    ? (() => {
+        const { tenant_code: _stripped, ...rest } = rawPatch;
+        void _stripped;
+        return rest;
+      })()
+    : sanitizeUpdatePatch(ctx.access as AdminPayload, rawPatch);
 
   if (Object.keys(patch).length === 0) {
     return apiError("没有可更新的字段", "VALIDATION_ERROR");
@@ -191,7 +206,7 @@ export async function PATCH(
 
   // 5.30up · R2 §6：super/system 转让到某 org → 先校验 tenants.code 存在性
   if (
-    (admin.role === "super_admin" || admin.role === "system_admin") &&
+    (ctx.role === "super_admin" || ctx.role === "system_admin") &&
     "tenant_code" in patch &&
     typeof patch.tenant_code === "string" &&
     patch.tenant_code !== existing.tenant_code
@@ -231,10 +246,10 @@ export async function PATCH(
 
   // 5.30up · R2 §5 · 补审计（原 KB PATCH 路由无审计）
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode,
     resourceTenantCode: (data as { tenant_code: string | null }).tenant_code,
     action: "update",
     resourceType: "knowledge_base",
@@ -251,12 +266,15 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
 
   // 5.30up · R2 §1 双闸门
-  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
-  if (gate) return gate;
+  if (!ctx.isCustomAdmin) {
+    const gate = requireWriteAccess(ctx.access as AdminPayload, [...KB_WRITE_ROLES]);
+    if (gate) return gate;
+  }
 
   const { id } = await params;
 
@@ -271,18 +289,19 @@ export async function DELETE(
     return apiError("加载知识库失败", "INTERNAL_ERROR");
   }
   if (!existing) return apiError("知识库不存在", "NOT_FOUND");
-  if (!canWriteRow(admin, existing)) return apiError("知识库不存在", "NOT_FOUND");
+  if (!ctx.isCustomAdmin && !canWriteRow(ctx.access as AdminPayload, existing)) {
+    return apiError("知识库不存在", "NOT_FOUND");
+  }
 
   // Phase D D-5 · v2 第二闸 delete（env-gated；复用已 load 的 existing row）
-  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if ((ctx.isCustomAdmin || isResourceEnforced("knowledge_base")) && ctx.role !== "super_admin") {
     const err = await requireAccess(actor, "knowledge_base", "delete", { row: existing });
     if (err) return err;
   }
 
   // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 表存在
-  if (admin.role === "org_admin" && admin.tenantCode) {
-    const ok = await validateTenantCode(admin.tenantCode);
+  if ((ctx.role === "org_admin" || ctx.isCustomAdmin) && ctx.tenantCode) {
+    const ok = await validateTenantCode(ctx.tenantCode);
     if (!ok) return apiError("您所属的组织不存在或已失效，请联系平台管理员", "FORBIDDEN");
   }
 
@@ -320,10 +339,10 @@ export async function DELETE(
 
   // 5.30up · R2 §5 · 补审计
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode,
     resourceTenantCode: cachedTenantCode,
     action: "delete",
     resourceType: "knowledge_base",

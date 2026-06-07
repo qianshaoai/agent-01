@@ -1,13 +1,11 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { canAssignRole, canManageTarget } from "@/lib/auth";
-import { requireAdmin } from "@/lib/session";
+import { canAssignRole, canManageTarget, type AdminRole } from "@/lib/auth";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
-// 6.4up v2 Phase D · D-1 · user enforce（env "user" 启用时生效；空时完全 no-op）
-import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor } from "@/lib/permission-actor";
+import { requireAccess } from "@/lib/access-facade";
 
 // body.action → v2 sub-action key 中段映射（R0.1 §6；D10=a：set-dept 统一收 department.assign）
 const USER_SUBACTION: Record<string, string> = {
@@ -24,8 +22,10 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const admin = ctx;
+  const builtinRole = admin.role as AdminRole;
 
   const { id } = await params;
   const body = await req.json();
@@ -39,7 +39,7 @@ export async function PATCH(
   if (!target) return apiError("用户不存在", "NOT_FOUND");
 
   // 组织管理员只能管理自己组织内的用户
-  if (admin.role === "org_admin") {
+  if (!ctx.isCustomAdmin && admin.role === "org_admin") {
     if (!admin.tenantCode || target.tenant_code !== admin.tenantCode) {
       return apiError("无权操作该用户（不在你的组织内）", "FORBIDDEN");
     }
@@ -48,18 +48,20 @@ export async function PATCH(
   // 对"管理"类动作：需要 actor 层级高于 target 当前角色
   const MANAGE_ACTIONS = ["set-status", "set-dept", "set-tenant", "reset-password", "soft-delete", "delete"];
   if (MANAGE_ACTIONS.includes(body.action)) {
-    if (!canManageTarget(admin.role, target.role)) {
+    if (ctx.isCustomAdmin && target.role !== "user") {
+      return apiError("custom 角色不能管理内置管理员账号", "FORBIDDEN");
+    }
+    if (!ctx.isCustomAdmin && !canManageTarget(builtinRole, target.role)) {
       return apiError("无权管理该用户（对方等级不低于你）", "FORBIDDEN");
     }
   }
 
   // Phase D D-1 · v2 第二闸（env-gated）：旧 canManageTarget/canAssignRole/org_admin tenant 闸保留在前，
   //   按 body.action 映射 sub-action key 叠一道 requireAccess（任一不过即 403；R0.1 §6）。
-  if (isResourceEnforced("user") && admin.role !== "super_admin") {
+  if (admin.role !== "super_admin") {
     const sub = USER_SUBACTION[body.action];
     if (sub) {
-      const actor = await buildPermissionActor(admin);
-      const err = await requireAccess(actor, "user", sub, {
+      const err = await requireAccess(ctx.actor, "user", sub, {
         row: { id: target.id, tenant_code: target.tenant_code },
       });
       if (err) return err;
@@ -109,10 +111,13 @@ export async function PATCH(
     // 越权校验：
     //   1) 不能修改跟自己同级或更高级别的人
     //   2) 不能把别人改成 >= 自己的角色
-    if (!canManageTarget(admin.role, target.role)) {
+    if (ctx.isCustomAdmin && role !== "user") {
+      return apiError("custom 角色不能把用户提升为内置管理员", "FORBIDDEN");
+    }
+    if (!ctx.isCustomAdmin && !canManageTarget(builtinRole, target.role)) {
       return apiError("无权修改该用户的角色（对方等级不低于你）", "FORBIDDEN");
     }
-    if (!canAssignRole(admin.role, role, admin.adminId === id)) {
+    if (!ctx.isCustomAdmin && !canAssignRole(builtinRole, role, admin.adminId === id)) {
       return apiError("无权将用户设置为该角色（不能高于或等于自己）", "FORBIDDEN");
     }
 
@@ -156,7 +161,7 @@ export async function PATCH(
     }
     // 权限层级：org_admin / user 不允许此操作；
     // system_admin 不能操作 super_admin / system_admin（canManageTarget 已覆盖）
-    if (admin.role === "org_admin") {
+    if (ctx.isCustomAdmin || admin.role === "org_admin") {
       return apiError("权限不足，无法修改用户所属组织", "FORBIDDEN");
     }
     if (target.status === "deleted") {

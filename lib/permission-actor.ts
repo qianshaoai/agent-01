@@ -42,12 +42,13 @@ import {
 // 6.4up v2 Phase A · 是否进入 v2 effective set 合成路径
 //   - 任一 resource 在 PERMISSION_V2_ENFORCE_RESOURCES CSV 出现 → builtin admin actor 构建时
 //     额外查 builtin_role_permissions + admin_permission_overrides 合成 effective set
-//   - 空 / 未设 → 跳过查询，effectivePermissions 留空集（hasPermission builtin 路径走旧 role-based fallback）
-//   这是方案 §3.4 「flag 不含该 resource → no-op」的对应实现：actor 层也按 flag 决定是否查 v2 两表，
+//   - 6.6up：空 / 未设 / all → 默认全资源 enforce，加载 effective set
+//   - none → 跳过查询，effectivePermissions 留空集（hasPermission builtin 路径走旧 role-based fallback）
+//   这是 6.6up 「none 回滚，其余默认生效」的对应实现：actor 层也按 flag 决定是否查 v2 两表，
 //   避免空 flag 时无意义的 DB 往返
 function isPermissionV2Enabled(): boolean {
-  const csv = process.env.PERMISSION_V2_ENFORCE_RESOURCES ?? "";
-  return csv.trim().length > 0;
+  const flag = (process.env.PERMISSION_V2_ENFORCE_RESOURCES ?? "all").trim().toLowerCase();
+  return flag !== "none";
 }
 
 // ─── 类型 ────────────────────────────────────────────────────

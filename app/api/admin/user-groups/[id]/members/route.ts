@@ -1,13 +1,19 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { requireAccess } from "@/lib/access-facade";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "user_group", "read", { id });
+    if (err) return err;
+  }
 
   const { data, error } = await db
     .from("user_group_members")
@@ -19,10 +25,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "user_group", "update", { id });
+    if (err) return err;
+  }
   const { userIds } = await req.json();
 
   if (!Array.isArray(userIds) || userIds.length === 0) {
@@ -33,7 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { error } = await db.from("user_group_members").upsert(rows, { onConflict: "group_id,user_id" });
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode,
     action: "update", resourceType: "user_group", resourceId: id,
     detail: { action: "add-members", userIds },
   });
@@ -41,10 +51,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "user_group", "update", { id });
+    if (err) return err;
+  }
   const { userId } = await req.json();
 
   const { error } = await db
@@ -55,7 +69,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode,
     action: "update", resourceType: "user_group", resourceId: id,
     detail: { action: "remove-member", userId },
   });

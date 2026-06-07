@@ -1,12 +1,12 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor, type AdminActorContext } from "@/lib/session";
+import type { AdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { canReadRow } from "@/lib/scoped-access";
-// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
-import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor } from "@/lib/permission-actor";
+import { requireAccess } from "@/lib/access-facade";
+import { hasPermission } from "@/lib/permission-actor";
 
 // 5.14up PR-C · 把草稿发布到正式 agents 表
 //
@@ -45,6 +45,19 @@ type ProviderRow = {
   tenant_code: string | null;
 };
 
+type TenantOwnedRow = { id: string; tenant_code: string | null };
+
+async function canReadTenantOwned(
+  ctx: AdminActorContext,
+  resourceKind: "model_provider" | "knowledge_base",
+  row: TenantOwnedRow,
+) {
+  if (ctx.isCustomAdmin) {
+    return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
+  }
+  return canReadRow(ctx.access as AdminPayload, row);
+}
+
 function isZhipuFlashModel(model: unknown): boolean {
   return typeof model === "string" && /^glm-4-flash\b/i.test(model.trim());
 }
@@ -53,8 +66,8 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
   // 5.19up · org_admin 可发布，但后端强制最大可见范围为本组织（见下方可见范围校验）
 
   const { id } = await params;
@@ -72,14 +85,13 @@ export async function POST(
   const draft = draftRow as DraftRow | null;
   if (!draft) return apiError("草稿不存在", "NOT_FOUND");
   // 5.19up · org_admin 只能发布自己创建的草稿
-  if (admin.role === "org_admin" && draft.created_by !== admin.adminId) {
+  if (ctx.role === "org_admin" && !ctx.actor.v2Loaded && draft.created_by !== ctx.adminId) {
     return apiError("无权发布该草稿", "FORBIDDEN");
   }
 
   // Phase D D-2 · v2 第二闸 publish（env-gated；保留下方资源可见性 + 范围校验）
-  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const err = await requireAccess(actor, "agent_draft", "publish", { id });
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "agent_draft", "publish", { id });
     if (err) return err;
   }
 
@@ -115,22 +127,26 @@ export async function POST(
     : [];
   let orgScope: string[] = [];
 
-  if (admin.role === "org_admin") {
+  const publishAll = ctx.role === "super_admin"
+    ? true
+    : await hasPermission(ctx.actor, "agent_draft.publish.all");
+
+  if (ctx.role === "org_admin" || (ctx.isCustomAdmin && !publishAll)) {
     // org_admin：后端强制最大可见范围 = 本组织
-    if (!admin.tenantCode) {
+    if (!ctx.tenantCode) {
       return apiError("组织管理员未绑定组织，无法发布", "FORBIDDEN");
     }
     if (visibleTo === "all") {
-      return apiError("组织管理员不能发布「全平台可见」", "FORBIDDEN");
+      return apiError("无权发布「全平台可见」", "FORBIDDEN");
     }
     if (visibleTo === "org") {
       const uniq = [...new Set(rawScope)];
       if (uniq.length === 0) {
-        orgScope = [admin.tenantCode]; // 未传 scope → 兜底归一化为本组织
-      } else if (uniq.length === 1 && uniq[0] === admin.tenantCode) {
-        orgScope = [admin.tenantCode];
+        orgScope = [ctx.tenantCode]; // 未传 scope → 兜底归一化为本组织
+      } else if (uniq.length === 1 && uniq[0] === ctx.tenantCode) {
+        orgScope = [ctx.tenantCode];
       } else {
-        return apiError("组织管理员只能发布到本组织", "FORBIDDEN");
+        return apiError("只能发布到本组织", "FORBIDDEN");
       }
     }
     // visibleTo === "owner_only" → orgScope 留空，不写权限行
@@ -188,7 +204,10 @@ export async function POST(
       }[];
       // 5.30up · R1 §2 · publish 时 KB canReadRow 失败 → 403 硬阻断
       //   org_admin 不能发布引用别 org KB 的 agent；与 test-chat 的静默过滤不同
-      const invisible = rows.filter((r) => !canReadRow(admin, r));
+      const invisible = [];
+      for (const row of rows) {
+        if (!(await canReadTenantOwned(ctx, "knowledge_base", row))) invisible.push(row);
+      }
       if (invisible.length > 0) {
         const names = invisible.map((r) => `「${r.name}」`).join("、");
         return apiError(
@@ -226,7 +245,7 @@ export async function POST(
     provider = pRow as ProviderRow | null;
     if (!provider) return apiError("绑定的模型供应商已删除", "VALIDATION_ERROR");
     // 5.30up · R1 §2 · publish 时 provider canReadRow 失败 → 403（org_admin 不能发布引用别 org provider 的 agent）
-    if (!canReadRow(admin, provider)) {
+    if (!(await canReadTenantOwned(ctx, "model_provider", provider))) {
       return apiError("无权使用该模型供应商，请重新选择", "FORBIDDEN");
     }
     if (!provider.enabled) {
@@ -396,17 +415,17 @@ export async function POST(
     .update({
       status: "published",
       published_agent_id: agentId,
-      updated_by: admin.adminId,
+      updated_by: ctx.adminId,
       updated_at: new Date().toISOString(),
     })
     .eq("id", id);
 
   // 审计
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
     action: existingAgentId ? "update" : "create",
     resourceType: "agent",
     resourceId: agentId,

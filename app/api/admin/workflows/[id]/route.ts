@@ -1,7 +1,7 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin, getAdminAccessPayload } from "@/lib/session";
-import { isCustomAdminPayload } from "@/lib/auth";
+import { getAdminAccessPayload, requireAdminActor } from "@/lib/session";
+import { isCustomAdminPayload, type AdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
 import { canActOnRole, noWritePermissionMessage, type AdminRole } from "@/lib/admin-permissions";
@@ -321,10 +321,15 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
+  if (ctx.isCustomAdmin) {
+    const e = await requireAccess(ctx.actor, "workflow", "delete", { id });
+    if (e) return e;
+  } else {
+    const admin = ctx.access as AdminPayload;
   // 5.11up · 先做上下级权限校验
   const hierarchyGuard = await ensureAdminHierarchyAllows(admin, id);
   if (hierarchyGuard) return hierarchyGuard;
@@ -332,10 +337,11 @@ export async function DELETE(
   if (guard) return guard;
 
   // Phase D D-3 · v2 第二闸（builtin；env-gated）
-  if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const e = await requireAccess(actor, "workflow", "delete", { id });
-    if (e) return e;
+    if (isResourceEnforced("workflow") && admin.role !== "super_admin") {
+      const actor = await buildPermissionActor(admin);
+      const e = await requireAccess(actor, "workflow", "delete", { id });
+      if (e) return e;
+    }
   }
 
   // 5.11up · DELETE 前先 snapshot 资源归属，避免删完后反查为 null 导致 org_admin 看不到这条审计
@@ -352,10 +358,10 @@ export async function DELETE(
   if (error) return dbError(error);
 
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role ?? "super_admin",
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
     resourceTenantCode,
     action: "delete",
     resourceType: "workflow",

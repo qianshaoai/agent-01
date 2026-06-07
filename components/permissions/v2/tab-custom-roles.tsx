@@ -14,7 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { Plus, Users, Pencil, Trash2, X, Search } from "lucide-react";
-import { RESOURCE_LABEL } from "./permission-matrix";
+import { PermissionMatrix } from "./permission-matrix";
 
 type RoleRow = {
   id: string;
@@ -38,18 +38,6 @@ type TemplateMap = Record<
   string,
   { label: string; description: string; permissions: readonly string[] }
 >;
-
-const SCOPE_LABEL: Record<string, string> = {
-  team: "本小组",
-  dept: "本部门",
-  org: "本组织",
-  all: "全平台",
-};
-const ACTION_LABEL: Record<string, string> = {
-  read: "查看",
-  create: "新建",
-  update: "编辑",
-};
 
 export function PermissionsTabCustomRoles() {
   const router = useRouter();
@@ -83,7 +71,13 @@ export function PermissionsTabCustomRoles() {
     void loadRoles();
     fetch("/api/admin/permission-keys", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d && setMeta(d))
+      .then((d) => {
+        if (!d) return;
+        setMeta({
+          ...d,
+          keys: Array.isArray(d.custom) ? d.custom : d.keys,
+        });
+      })
       .catch(() => {});
   }, [loadRoles]);
 
@@ -232,25 +226,7 @@ function RoleEditModal({
   const [perms, setPerms] = useState<Set<string>>(new Set(initial.permissions));
   const [saving, setSaving] = useState(false);
 
-  // 6.4up 验收修复 · 自定义角色当前仅支持 workflow 权限（后端 custom-roles 校验只放过
-  //   WORKFLOW_PERMISSION_KEYS；agent/kb/provider 等走 admin-overrides 通道）。
-  //   旧实现把 permission-keys 全集都列出来可勾，勾了非 workflow 的保存即报
-  //   "权限项 X 不在 workflow 自定义角色合法清单中"。这里只渲染 workflow 资源块。
-  const grouped = meta.keys
-    .filter((k) => k.resource === "workflow")
-    .reduce<Record<string, PermissionKeyMeta[]>>((acc, k) => {
-      (acc[k.resource] ??= []).push(k);
-      return acc;
-    }, {});
-
-  function toggle(key: string) {
-    setPerms((s) => {
-      const next = new Set(s);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
+  const allCustomKeys = meta.keys.map((k) => k.key);
 
   function applyTemplate(tpl: { permissions: readonly string[] }) {
     setPerms(new Set(tpl.permissions));
@@ -349,51 +325,22 @@ function RoleEditModal({
         {/* 权限矩阵：固定高度滚动窗口，避免资源块过多把弹窗撑出视口 */}
         <div>
           <p className="text-[12px] text-gray-500 mb-1.5">
-            权限矩阵 · 自定义角色当前仅支持<span className="text-gray-700 font-medium">工作流</span>权限（在下面窗口内勾选）
+            权限矩阵 · 自定义角色可授予后台全资源权限（在下面窗口内勾选）
           </p>
           <div className="max-h-[40vh] overflow-y-auto rounded-[10px] border border-gray-200 bg-gray-50/40 p-2 space-y-2.5">
-        {Object.entries(grouped).map(([resource, keys]) => (
-          <div key={resource} className="border border-gray-200 rounded-[10px] p-3 bg-white">
-            <p className="text-[13px] font-semibold text-gray-700 mb-2">
-              {RESOURCE_LABEL[resource] ?? resource}
-              <code className="ml-2 text-[11px] text-gray-400 font-mono font-normal">
-                {resource}
-              </code>
-            </p>
-            <div className="space-y-2">
-              {(["read", "create", "update"] as const).map((action) => {
-                const rowKeys = keys.filter((k) => k.action === action);
-                if (rowKeys.length === 0) return null;
-                return (
-                  <div key={action} className="flex items-center gap-3 flex-wrap">
-                    <span className="text-[12px] text-gray-500 w-12 shrink-0">
-                      {ACTION_LABEL[action] ?? action}
-                    </span>
-                    {rowKeys.map((k) => (
-                      <button
-                        key={k.key}
-                        type="button"
-                        aria-pressed={perms.has(k.key)}
-                        onClick={() => toggle(k.key)}
-                        className={
-                          "text-[12px] px-3 py-1 rounded-full border cursor-pointer transition-colors " +
-                          (perms.has(k.key)
-                            ? "bg-[#002FA7] text-white border-[#002FA7]"
-                            : "bg-white text-gray-600 border-gray-200 hover:border-[#002FA7]/40")
-                        }
-                      >
-                        {SCOPE_LABEL[k.scope] ?? k.scope}
-                        {k.requiresSuperToGrant && (
-                          <span className="ml-1 text-[10px] opacity-70">（限超管）</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+            <PermissionMatrix
+              allKeys={allCustomKeys}
+              resolveCellState={(key) => (perms.has(key) ? "default" : "off")}
+              editable={true}
+              onToggle={(key, nextOn) => {
+                setPerms((s) => {
+                  const next = new Set(s);
+                  if (nextOn) next.add(key);
+                  else next.delete(key);
+                  return next;
+                });
+              }}
+            />
           </div>
         </div>
 

@@ -1,15 +1,13 @@
 import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import { parseBody } from "@/lib/validate";
 import { z } from "zod";
 import { writeAuditLog } from "@/lib/audit";
-// 6.4up v2 Phase D · D-2 · agent enforce（env "agent" 启用时生效；空时完全 no-op）
-// 注：POST 创建按决策 D9=b 维持 legacy role-only（org_admin 硬拒），不接 v2。
-import { isResourceEnforced } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { requireAccess } from "@/lib/access-facade";
+import { mapResourcePermissionRowsToScopes } from "@/lib/adapters/access/_scope-utils";
 
 const createAgentSchema = z.object({
   agentCode: z.string().min(1, "请填写智能体编号"),
@@ -28,20 +26,8 @@ const createAgentSchema = z.object({
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-
-  // Phase D D-2 · list 走 env-gated hasPermission 粗粒度 check（HC2，无 row 不走 facade）
-  if (isResourceEnforced("agent") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const okOrg = actor.tenantCode
-      ? await hasPermission(actor, "agent.read.org", [
-          { scope_type: "org", scope_id: actor.tenantCode },
-        ])
-      : false;
-    const okAll = await hasPermission(actor, "agent.read.all");
-    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
-  }
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { page, pageSize, start } = parsePagination(req, 50);
   const [agentsRes, rpRes, acRes, catRes] = await Promise.all([
@@ -54,12 +40,24 @@ export async function GET(req: NextRequest) {
     db.from("categories").select("id, name, icon_url"),
   ]);
 
-  const agents = agentsRes.data ?? [];
+  let agents = agentsRes.data ?? [];
   const permMap = new Map<string, { scope_type: string; scope_id: string | null }[]>();
   for (const rp of (rpRes.data ?? [])) {
     const arr = permMap.get(rp.resource_id) ?? [];
     arr.push({ scope_type: rp.scope_type, scope_id: rp.scope_id });
     permMap.set(rp.resource_id, arr);
+  }
+
+  if (ctx.role !== "super_admin") {
+    const visible = [];
+    for (const agent of agents) {
+      const scopes = mapResourcePermissionRowsToScopes(permMap.get(agent.id) ?? []);
+      const err = await requireAccess(ctx.actor, "agent", "read", {
+        row: { id: agent.id, scopes },
+      });
+      if (!err) visible.push(agent);
+    }
+    agents = visible;
   }
 
   const catMap = new Map<string, { id: string; name: string; icon_url: string | null }>();
@@ -135,14 +133,19 @@ export async function GET(req: NextRequest) {
     };
   });
 
-  return paginatedResponse(masked, agentsRes.count ?? 0, page, pageSize);
+  return paginatedResponse(
+    masked,
+    ctx.role === "super_admin" ? (agentsRes.count ?? 0) : masked.length,
+    page,
+    pageSize,
+  );
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
   // 5.7up · org_admin 只读，禁止创建智能体
-  if (admin.role === "org_admin") {
+  if (ctx.role === "org_admin" || ctx.isCustomAdmin) {
     return apiError("无权创建智能体", "FORBIDDEN");
   }
 
@@ -182,10 +185,10 @@ export async function POST(req: NextRequest) {
   }
 
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role ?? "super_admin",
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
     action: "create",
     resourceType: "agent",
     resourceId: data.id,

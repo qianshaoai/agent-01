@@ -31,12 +31,12 @@ type NavItem = {
   /** builtin admin 路径下的过滤：role 在此列表内才显示 */
   allowedRoles: AdminRole[];
   /**
-   * 6.4up · custom admin 路径下的显示规则
+   * 6.6up · custom admin 路径下的显示规则
    *   - undefined：custom admin 不可见（默认 fail-closed）
-   *   - 'workflow_any'：custom admin 持有任一 workflow.* permission 时可见
+   *   - requiredAnyPermissions：custom admin 持有任一列出权限时可见
    *   该字段不影响 builtin admin。
    */
-  customAccess?: "workflow_any";
+  requiredAnyPermissions?: string[];
 };
 type NavGroup = { label: string; items: NavItem[] };
 type AdminRole = "super_admin" | "system_admin" | "org_admin";
@@ -58,34 +58,33 @@ const navGroups: NavGroup[] = [
     label: "概览",
     items: [
       { href: "/admin/dashboard", label: "控制台",   icon: LayoutDashboard, allowedRoles: ALL_ROLES },
-      { href: "/admin/analytics", label: "用量看板", icon: BarChart3,       allowedRoles: ALL_ROLES },
+      { href: "/admin/analytics", label: "用量看板", icon: BarChart3,       allowedRoles: ALL_ROLES, requiredAnyPermissions: ["audit.read.org", "audit.read.all"] },
     ],
   },
   {
     label: "组织与用户",
     items: [
-      { href: "/admin/tenants", label: "组织管理", icon: Building2, allowedRoles: ALL_ROLES },
-      { href: "/admin/users",   label: "用户管理",   icon: Users,     allowedRoles: ALL_ROLES },
+      { href: "/admin/tenants", label: "组织管理", icon: Building2, allowedRoles: ALL_ROLES, requiredAnyPermissions: ["tenant.read.all"] },
+      { href: "/admin/users",   label: "用户管理",   icon: Users,     allowedRoles: ALL_ROLES, requiredAnyPermissions: ["user.read.org", "user.read.all"] },
     ],
   },
   {
     label: "内容",
     items: [
-      { href: "/admin/model-providers", label: "API 管理",   icon: Plug,      allowedRoles: RBAC_SCOPED_ROLES },
-      { href: "/admin/agent-builder",   label: "智能体搭建", icon: Hammer,    allowedRoles: ALL_ROLES },
-      { href: "/admin/knowledge-bases", label: "知识库管理", icon: BookOpen,  allowedRoles: RBAC_SCOPED_ROLES },
-      { href: "/admin/agents",          label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES },
-      // 6.4up · 工作流管理：custom admin 持任一 workflow.* permission 时可见
-      { href: "/admin/workflows",       label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES, customAccess: "workflow_any" },
-      { href: "/admin/tags",            label: "标签管理",   icon: Tag,       allowedRoles: TAG_ADMIN_ROLES },
-      { href: "/admin/notices",         label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES },
+      { href: "/admin/model-providers", label: "API 管理",   icon: Plug,      allowedRoles: RBAC_SCOPED_ROLES, requiredAnyPermissions: ["provider.read.org", "provider.read.all"] },
+      { href: "/admin/agent-builder",   label: "智能体搭建", icon: Hammer,    allowedRoles: ALL_ROLES, requiredAnyPermissions: ["agent_draft.read.org", "agent_draft.read.all", "agent_draft.create.org", "agent_draft.create.all"] },
+      { href: "/admin/knowledge-bases", label: "知识库管理", icon: BookOpen,  allowedRoles: RBAC_SCOPED_ROLES, requiredAnyPermissions: ["kb.read.org", "kb.read.all"] },
+      { href: "/admin/agents",          label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES, requiredAnyPermissions: ["agent.read.org", "agent.read.all"] },
+      { href: "/admin/workflows",       label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES, requiredAnyPermissions: ["workflow.read.team", "workflow.read.dept", "workflow.read.org", "workflow.read.all", "workflow.create.team", "workflow.create.dept", "workflow.create.org", "workflow.create.all", "workflow.update.team", "workflow.update.dept", "workflow.update.org", "workflow.update.all"] },
+      { href: "/admin/tags",            label: "标签管理",   icon: Tag,       allowedRoles: TAG_ADMIN_ROLES, requiredAnyPermissions: ["category.read.all"] },
+      { href: "/admin/notices",         label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES, requiredAnyPermissions: ["notice.read.org", "notice.read.all"] },
     ],
   },
   {
     label: "系统",
     items: [
-      { href: "/admin/logs",       label: "操作日志", icon: FileText,       allowedRoles: ALL_ROLES },
-      { href: "/admin/audit-logs", label: "审计记录", icon: ClipboardList,  allowedRoles: ALL_ROLES },
+      { href: "/admin/logs",       label: "操作日志", icon: FileText,       allowedRoles: ALL_ROLES, requiredAnyPermissions: ["audit.read.org", "audit.read.all"] },
+      { href: "/admin/audit-logs", label: "审计记录", icon: ClipboardList,  allowedRoles: ALL_ROLES, requiredAnyPermissions: ["audit.read.org", "audit.read.all"] },
       // 6.4up · 权限管理（仅超管，custom admin 不可见）
       { href: "/admin/permissions", label: "权限管理", icon: KeyRound,      allowedRoles: SUPER_ONLY },
       { href: "/admin/settings",   label: "品牌设置", icon: Settings,       allowedRoles: SUPER_ONLY },
@@ -155,13 +154,14 @@ export function AdminLayout({
           if (!me) return;
           setAccessSource((me.source as AccessSource | null) ?? null);
           if (me.source === "custom_admin") {
-            // custom admin：不设 adminRole（保持 null，按 customAccess 过滤）
+            // custom admin：不设 adminRole（保持 null，按 requiredAnyPermissions 过滤）
             setAdminRole(null);
             const perms: string[] = Array.isArray(me.permissions) ? me.permissions : [];
             setCustomPermissions(new Set(perms));
           } else if (me.role) {
             setAdminRole(me.role as AdminRole);
-            setCustomPermissions(new Set());
+            const perms: string[] = Array.isArray(me.permissions) ? me.permissions : [];
+            setCustomPermissions(new Set(perms));
           }
           if (me.username) setAdminUsername(me.username);
           setMeLoaded(true);
@@ -175,16 +175,11 @@ export function AdminLayout({
     return () => window.removeEventListener("focus", onFocus);
   }, [pathname]);
 
-  // 6.4up · 按当前 actor 过滤导航（builtin 按 allowedRoles；custom 按 customAccess）
+  // 6.6up · 按当前 actor 过滤导航（builtin 按 allowedRoles；custom 按 requiredAnyPermissions）
   //   builtin 分支等价 6.5up 旧逻辑（adminRole null → 全部不可见 → 由 skeleton 兜）
   function navItemVisible(it: NavItem): boolean {
     if (accessSource === "custom_admin") {
-      if (it.customAccess === "workflow_any") {
-        for (const p of customPermissions) {
-          if (p.startsWith("workflow.")) return true;
-        }
-        return false;
-      }
+      if (it.requiredAnyPermissions?.some((p) => customPermissions.has(p))) return true;
       return false; // 默认 fail-closed
     }
     // builtin admin

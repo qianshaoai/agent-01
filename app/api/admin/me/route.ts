@@ -53,6 +53,6 @@ export async function GET() {
     teamId: actor.teamId,
     userType: actor.userType,
     customRoleCodes: [],
-    permissions: [],
+    permissions: Array.from(actor.effectivePermissions),
   });
 }

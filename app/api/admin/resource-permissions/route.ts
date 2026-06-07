@@ -1,8 +1,17 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { requireAccess } from "@/lib/access-facade";
+
+function mapResourcePermissionTarget(
+  resourceType: string,
+): { kind: string; writeAction: string } | null {
+  if (resourceType === "agent") return { kind: "agent", writeAction: "basic.update" };
+  if (resourceType === "workflow") return { kind: "workflow", writeAction: "update" };
+  return null;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getScopeLabel(scopeType: string, scopeId: string | null, maps: any) {
@@ -19,13 +28,25 @@ function getScopeLabel(scopeType: string, scopeId: string | null, maps: any) {
 }
 
 export async function GET(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { searchParams } = req.nextUrl;
   const resourceType = searchParams.get("resource_type");
   const resourceId = searchParams.get("resource_id");
   const scopeType = searchParams.get("scope_type");
   const scopeId = searchParams.get("scope_id");
+
+  if (resourceType && resourceId) {
+    const target = mapResourcePermissionTarget(resourceType);
+    if (!target) return apiError("不支持的资源类型", "VALIDATION_ERROR");
+    if (ctx.role !== "super_admin") {
+      const err = await requireAccess(ctx.actor, target.kind, "read", { id: resourceId });
+      if (err) return err;
+    }
+  } else if (ctx.role !== "super_admin") {
+    return apiError("查询 resource_permissions 必须指定资源", "FORBIDDEN");
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let query = db.from("resource_permissions").select("*") as any;
@@ -71,12 +92,18 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { resourceType, resourceId, scopeType, scopeId } = await req.json();
   if (!resourceType || !resourceId || !scopeType) {
     return apiError("缺少必填字段", "VALIDATION_ERROR");
+  }
+  const target = mapResourcePermissionTarget(resourceType);
+  if (!target) return apiError("不支持的资源类型", "VALIDATION_ERROR");
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, target.kind, target.writeAction, { id: resourceId });
+    if (err) return err;
   }
 
   const { data, error } = await db
@@ -90,7 +117,7 @@ export async function POST(req: NextRequest) {
     return dbError(error);
   }
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode,
     action: "create", resourceType: "resource_permission", resourceId: data.id,
     resourceName: `${resourceType}/${resourceId}`,
     detail: { scopeType, scopeId: scopeId ?? null },
@@ -99,15 +126,22 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await req.json();
   const { data: perm } = await db.from("resource_permissions").select("resource_type, resource_id, scope_type, scope_id").eq("id", id).maybeSingle();
+  if (!perm) return apiError("权限配置不存在", "NOT_FOUND");
+  const target = mapResourcePermissionTarget(perm.resource_type);
+  if (!target) return apiError("不支持的资源类型", "VALIDATION_ERROR");
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, target.kind, target.writeAction, { id: perm.resource_id });
+    if (err) return err;
+  }
   const { error } = await db.from("resource_permissions").delete().eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode,
     action: "delete", resourceType: "resource_permission", resourceId: id,
     resourceName: perm ? `${perm.resource_type}/${perm.resource_id}` : undefined,
     detail: perm ? { scopeType: perm.scope_type, scopeId: perm.scope_id } : {},

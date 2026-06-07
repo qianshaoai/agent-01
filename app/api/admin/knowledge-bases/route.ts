@@ -1,8 +1,9 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import type { AdminPayload } from "@/lib/auth";
 import {
   listScopeFilter,
   resolveCreateOwnership,
@@ -12,7 +13,7 @@ import {
 } from "@/lib/scoped-access";
 // 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用时生效；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { hasPermission } from "@/lib/permission-actor";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库列表 + 新建
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -24,12 +25,12 @@ import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
 const KB_WRITE_ROLES = ["super_admin", "system_admin", "org_admin"] as const;
 
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
 
   // Phase D D-5 · list 走 env-gated hasPermission 粗粒度 check（HC2）；listScopeFilter ownership 下方保留
-  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if ((ctx.isCustomAdmin || isResourceEnforced("knowledge_base")) && ctx.role !== "super_admin") {
     const okOrg = actor.tenantCode
       ? await hasPermission(actor, "kb.read.org", [
           { scope_type: "org", scope_id: actor.tenantCode },
@@ -49,8 +50,16 @@ export async function GET(req: NextRequest) {
     query = query.eq("status", statusParam);
   }
   // 5.30up · 接 listScopeFilter：org_admin 自动加 ownership 过滤；super/system 不动
-  const scope = listScopeFilter(admin);
-  if (scope) query = query.or(scope);
+  if (ctx.isCustomAdmin) {
+    const okAll = await hasPermission(actor, "kb.read.all");
+    if (!okAll) {
+      if (!actor.tenantCode) return apiError("权限不足", "FORBIDDEN");
+      query = query.eq("tenant_code", actor.tenantCode);
+    }
+  } else {
+    const scope = listScopeFilter(ctx.access as AdminPayload);
+    if (scope) query = query.or(scope);
+  }
 
   const { data, error } = await query;
   if (error) {
@@ -82,16 +91,18 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
 
   // 5.30up · R2 §1 双闸门：角色白名单 + org_admin tenantCode 非空兜底
-  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
-  if (gate) return gate;
+  if (!ctx.isCustomAdmin) {
+    const gate = requireWriteAccess(ctx.access as AdminPayload, [...KB_WRITE_ROLES]);
+    if (gate) return gate;
+  }
 
   // Phase D D-5 · v2 第二闸 create（env-gated；generic checkCreate：.all 兜底 OR 自身 .org）
-  if (isResourceEnforced("knowledge_base") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
+  if ((ctx.isCustomAdmin || isResourceEnforced("knowledge_base")) && ctx.role !== "super_admin") {
     const err = await requireAccess(actor, "knowledge_base", "create");
     if (err) return err;
   }
@@ -116,9 +127,11 @@ export async function POST(req: NextRequest) {
   // 5.30up · 计算 ownership：org_admin 强制本组织；super/system 沿用 payload
   let ownership: { tenant_code: string | null };
   try {
-    ownership = resolveCreateOwnership(admin, {
-      tenant_code: typeof body.tenant_code === "string" ? body.tenant_code : null,
-    });
+    ownership = ctx.isCustomAdmin
+      ? { tenant_code: actor.tenantCode }
+      : resolveCreateOwnership(ctx.access as AdminPayload, {
+          tenant_code: typeof body.tenant_code === "string" ? body.tenant_code : null,
+        });
   } catch (e) {
     if (e instanceof ScopeAdminNoTenantError) {
       return apiError("组织管理员未绑定组织，无法创建知识库", "FORBIDDEN");
@@ -127,7 +140,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 5.30up · R2 §6 · org_admin 路径：admin.tenantCode 也校验存在性（防 admin 绑定的 org 已删）
-  if (admin.role === "org_admin" && ownership.tenant_code) {
+  if ((ctx.role === "org_admin" || ctx.isCustomAdmin) && ownership.tenant_code) {
     const ok = await validateTenantCode(ownership.tenant_code);
     if (!ok) {
       return apiError(
@@ -160,7 +173,7 @@ export async function POST(req: NextRequest) {
       name,
       description,
       embedding_model,
-      created_by: admin.adminId,
+      created_by: ctx.adminId,
       tenant_code: ownership.tenant_code, // 5.30up · 写入归属
     })
     .select("*")
@@ -172,10 +185,10 @@ export async function POST(req: NextRequest) {
 
   // 5.30up · R2 §5 · KB 写路径补审计（原 KB 路由根本没写）
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode,
     resourceTenantCode: ownership.tenant_code, // KB 已含 tenant_code，但显式传更稳
     action: "create",
     resourceType: "knowledge_base",

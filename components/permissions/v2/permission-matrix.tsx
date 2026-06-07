@@ -38,6 +38,7 @@ export const RESOURCE_LABEL: Record<string, string> = {
   category: "分类",
   dept: "部门",
   team: "小组",
+  user_group: "用户分组",
   audit: "审计",
 };
 
@@ -53,6 +54,7 @@ export const RESOURCE_ORDER = [
   "category",
   "dept",
   "team",
+  "user_group",
   "audit",
 ];
 

@@ -1,20 +1,17 @@
 import { apiError } from "@/lib/api-error";
-import { NextRequest, NextResponse, after } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAccess } from "@/lib/access-facade";
+import type { AdminPayload } from "@/lib/auth";
+import { writeAuditLog } from "@/lib/audit";
 import { db } from "@/lib/db";
 import { ingestDocument, KB_STORAGE_BUCKET, KB_STORAGE_PREFIX } from "@/lib/kb/ingest";
-import { writeAuditLog } from "@/lib/audit";
+import { requireAdminActor } from "@/lib/session";
 import {
   canReadRow,
   canWriteRow,
   requireWriteAccess,
   validateTenantCode,
 } from "@/lib/scoped-access";
-
-// 5.19up 知识库方案 A · PR-A3 · 知识库文档 列表 + 上传
-// 5.30up · B 半 RBAC 改造（R2 通过）：
-//   - GET：父 KB load → canReadRow（404 屏蔽）
-//   - POST：requireWriteAccess + canWriteRow（404 屏蔽）+ 审计
+import { NextRequest, NextResponse, after } from "next/server";
 
 const KB_WRITE_ROLES = ["super_admin", "system_admin", "org_admin"] as const;
 
@@ -28,23 +25,29 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
 
-  // 5.30up · 父 KB load → canReadRow → 404 屏蔽
   const { data: kb, error: kbErr } = await db
     .from("knowledge_bases")
     .select("id, tenant_code")
     .eq("id", id)
     .maybeSingle();
   if (kbErr) {
-    console.error("[kb documents list] 父 KB 查询失败", kbErr);
+    console.error("[kb documents list] parent kb query failed", kbErr);
     return apiError("加载知识库失败", "INTERNAL_ERROR");
   }
   if (!kb) return apiError("知识库不存在", "NOT_FOUND");
-  if (!canReadRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
+
+  if (!ctx.isCustomAdmin && !canReadRow(ctx.access as AdminPayload, kb)) {
+    return apiError("知识库不存在", "NOT_FOUND");
+  }
+  if (ctx.role !== "super_admin") {
+    const accessErr = await requireAccess(ctx.actor, "knowledge_base", "read", { row: kb });
+    if (accessErr) return accessErr;
+  }
 
   const { data, error } = await db
     .from("kb_documents")
@@ -62,31 +65,37 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
-  // 5.30up · R2 §1 双闸门
-  const gate = requireWriteAccess(admin, [...KB_WRITE_ROLES]);
-  if (gate) return gate;
+  if (!ctx.isCustomAdmin) {
+    const gate = requireWriteAccess(ctx.access as AdminPayload, [...KB_WRITE_ROLES]);
+    if (gate) return gate;
+  }
 
   const { id: kbId } = await params;
 
-  // 5.30up · 父 KB load → canWriteRow → 404 屏蔽（防 org_admin 把文档塞到别 org 的 KB）
   const { data: kb, error: kbErr } = await db
     .from("knowledge_bases")
     .select("id, tenant_code")
     .eq("id", kbId)
     .maybeSingle();
   if (kbErr) {
-    console.error("[kb documents upload] 父 KB 查询失败", kbErr);
+    console.error("[kb documents upload] parent kb query failed", kbErr);
     return apiError("加载知识库失败，请重试", "INTERNAL_ERROR");
   }
   if (!kb) return apiError("知识库不存在", "NOT_FOUND");
-  if (!canWriteRow(admin, kb)) return apiError("知识库不存在", "NOT_FOUND");
 
-  // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 存在
-  if (admin.role === "org_admin" && admin.tenantCode) {
-    const ok = await validateTenantCode(admin.tenantCode);
+  if (!ctx.isCustomAdmin && !canWriteRow(ctx.access as AdminPayload, kb)) {
+    return apiError("知识库不存在", "NOT_FOUND");
+  }
+  if (ctx.role !== "super_admin") {
+    const accessErr = await requireAccess(ctx.actor, "knowledge_base", "update", { row: kb });
+    if (accessErr) return accessErr;
+  }
+
+  if ((ctx.role === "org_admin" || ctx.isCustomAdmin) && ctx.tenantCode) {
+    const ok = await validateTenantCode(ctx.tenantCode);
     if (!ok) return apiError("您所属的组织不存在或已失效，请联系平台管理员", "FORBIDDEN");
   }
 
@@ -123,7 +132,7 @@ export async function POST(
       upsert: false,
     });
   if (upErr) {
-    console.error("[kb documents upload] storage upload 失败", upErr);
+    console.error("[kb documents upload] storage upload failed", upErr);
     return apiError("文件上传失败，请重试", "INTERNAL_ERROR");
   }
 
@@ -135,44 +144,36 @@ export async function POST(
       file_type: ext,
       storage_path: storagePath,
       status: "pending",
-      created_by: admin.adminId,
+      created_by: ctx.adminId,
     })
     .select("id")
     .single();
   if (insErr || !doc) {
-    console.error("[kb documents upload] 文档入库失败", insErr);
-    // 回滚已上传的文件
+    console.error("[kb documents upload] insert failed", insErr);
     await db.storage.from(KB_STORAGE_BUCKET).remove([storagePath]);
     return apiError("文档入库失败，请重试", "INTERNAL_ERROR");
   }
 
-  // 5.30up · R2 §5 · 文档上传审计：资源记父 KB（含 tenant_code），detail 带 document_id + filename
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
-    resourceTenantCode: kb.tenant_code,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
+    resourceTenantCode: kb.tenant_code ?? null,
     action: "create",
     resourceType: "knowledge_base",
     resourceId: kbId,
     detail: { document_id: doc.id, filename, file_type: ext },
   });
 
-  // 5.28up · A · ingest 转后台异步：next/server `after()` 在响应发出后继续在
-  //   同进程里跑（Next 15+ 稳定 API）。upload POST 立刻返回 pending 状态，
-  //   前端轮询文档列表看 status 从 pending → indexing → done/failed。
-  //   旧 D6 同步语义：D6（同步摄取）在大文档上必超时；这条注释保留作为历史索引。
   after(async () => {
     try {
       await ingestDocument(doc.id);
     } catch (e) {
-      // ingestDocument 内部已经 try/catch 落到 status=failed；这里再兜一层防 after 上下文吞错
-      console.error("[kb documents upload · after()] ingest 异常", doc.id, e);
+      console.error("[kb documents upload after] ingest failed", doc.id, e);
     }
   });
 
-  // 返回此刻 DB 里的 pending 行；前端据 status 轮询直到 done/failed
   const { data: pendingDoc } = await db
     .from("kb_documents")
     .select(DOC_FIELDS)

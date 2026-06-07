@@ -13,23 +13,40 @@
 
 import { dbError, apiError } from "@/lib/api-error";
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
-import { isWorkflowConfigAdmin } from "@/lib/admin-permissions";
+import {
+  getWorkflowActionScope,
+  requireWorkflowAction,
+  visibleWorkflowIdsForScope,
+} from "@/lib/workflow-admin-access";
 
 const HARD_CAP = 5000;
 
 export async function GET() {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isWorkflowConfigAdmin(admin.role)) return apiError("无权访问工作流配置", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const accessErr = await requireWorkflowAction(ctx, "read");
+  if (accessErr) return accessErr;
+  const allowedScope = await getWorkflowActionScope(ctx.actor, "read");
+  if (!allowedScope) return apiError("无权访问工作流配置", "FORBIDDEN");
 
-  const { data, error } = await db
+  let query = db
     .from("workflows")
     .select("id, name, description, enabled, visible_to")
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true })
     .limit(HARD_CAP);
+
+  const visibleIds = await visibleWorkflowIdsForScope(allowedScope);
+  if (visibleIds !== null) {
+    if (visibleIds.length === 0) {
+      return NextResponse.json({ data: [], truncated: false, hardCap: HARD_CAP });
+    }
+    query = query.in("id", visibleIds);
+  }
+
+  const { data, error } = await query;
   if (error) return dbError(error);
 
   return NextResponse.json({

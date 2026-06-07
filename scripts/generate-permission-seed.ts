@@ -35,7 +35,7 @@ import {
 //   - user.create.{org,all}（2 keys；现状全平台无人能通过 admin API 创建用户）
 //
 // ORG_ADMIN 入包规则（仅 .org 后缀 + 4 项例外）：
-//   - workflow / agent / agent_draft / kb / provider / notice / user / dept / team 全 .org
+//   - workflow / agent / agent_draft / kb / provider / notice / user / dept / team / user_group 全 .org
 //     + 4 项例外：tenant.read.all、category.* 4 个（org_admin 也能管全平台分类）、audit.read.org
 
 const SYSTEM_ADMIN_EXCLUDE = new Set<string>([
@@ -108,6 +108,7 @@ const GROUPS: GroupMeta[] = [
   },
   { resource: "dept", commentSystem: "-- dept（8 keys）", commentOrg: "-- dept（4 keys，仅 org）" },
   { resource: "team", commentSystem: "-- team（8 keys）", commentOrg: "-- team（4 keys，仅 org）" },
+  { resource: "user_group", commentSystem: "-- user_group（8 keys）", commentOrg: "-- user_group（4 keys，仅 org）" },
   { resource: "audit", commentSystem: "-- audit（2 keys）", commentOrg: "-- audit（1 key）" },
 ];
 

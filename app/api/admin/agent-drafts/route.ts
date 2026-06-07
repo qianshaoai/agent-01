@@ -1,20 +1,11 @@
 import { apiError } from "@/lib/api-error";
-import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
-import { db } from "@/lib/db";
+import { requireAccess } from "@/lib/access-facade";
+import type { AdminPayload } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
+import { db } from "@/lib/db";
+import { requireAdminActor, type AdminActorContext } from "@/lib/session";
 import { canReadRow } from "@/lib/scoped-access";
-// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
-import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
-
-// 5.14up PR-B · 智能体草稿列表 + 新增
-// 权限：super_admin + system_admin 可见 / 创建；org_admin 不可
-// 默认可见性：owner_only（小A D-3 推荐，发布时由 super_admin 在 UI 扩大范围）
-//
-// 5.30up · R1 §2 草稿链路 RBAC 收口：
-//   POST 时校验入参 provider_id + builder_config.knowledge_base_ids 全部 canReadRow，
-//   任一不可见 → 422 + 列出。防 org_admin 在草稿层塞别 org 的资源 id 绕过 publish 校验。
+import { NextRequest, NextResponse } from "next/server";
 
 type DraftRow = {
   id: string;
@@ -36,47 +27,57 @@ type DraftRow = {
   updated_at: string;
 };
 
-export async function GET() {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+type TenantOwnedRow = { id: string; tenant_code: string | null };
 
-  // Phase D D-2 · list 走 env-gated hasPermission 粗粒度 check（HC2）
-  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const okOrg = actor.tenantCode
-      ? await hasPermission(actor, "agent_draft.read.org", [
-          { scope_type: "org", scope_id: actor.tenantCode },
-        ])
-      : false;
-    const okAll = await hasPermission(actor, "agent_draft.read.all");
-    if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+async function canReadTenantOwned(
+  ctx: AdminActorContext,
+  resourceKind: "model_provider" | "knowledge_base",
+  row: TenantOwnedRow,
+) {
+  if (ctx.isCustomAdmin) {
+    return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
   }
+  return canReadRow(ctx.access as AdminPayload, row);
+}
 
-  // 5.19up · org_admin 可用搭建器，但列表只看自己创建的草稿
+export async function GET() {
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+
   let query = db
     .from("agent_drafts")
     .select("*")
     .neq("status", "archived");
-  if (admin.role === "org_admin") query = query.eq("created_by", admin.adminId);
-  const { data, error } = await query.order("updated_at", { ascending: false });
 
+  if (ctx.role === "org_admin" && !ctx.actor.v2Loaded) {
+    query = query.eq("created_by", ctx.adminId);
+  }
+
+  const { data, error } = await query.order("updated_at", { ascending: false });
   if (error) {
     console.error("[agent-drafts list]", error);
     return apiError("获取列表失败", "INTERNAL_ERROR");
   }
 
-  return NextResponse.json({ data: data ?? [] });
+  let rows = data ?? [];
+  if (ctx.role !== "super_admin") {
+    const visible = [];
+    for (const row of rows) {
+      const err = await requireAccess(ctx.actor, "agent_draft", "read", { id: row.id });
+      if (!err) visible.push(row);
+    }
+    rows = visible;
+  }
+
+  return NextResponse.json({ data: rows });
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  // 5.19up · org_admin 可创建草稿（created_by 即本人，列表/编辑/发布均按此归属）
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
-  // Phase D D-2 · v2 第二闸 create（env-gated；adapter.checkCreate 按 actor 自身 org/all 判）
-  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const err = await requireAccess(actor, "agent_draft", "create");
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "agent_draft", "create");
     if (err) return err;
   }
 
@@ -96,9 +97,6 @@ export async function POST(req: NextRequest) {
     ? (kbIdsRaw as unknown[]).filter((x): x is string => typeof x === "string" && x.length > 0)
     : [];
 
-  // 5.30up · R1 §2 · 草稿引用资源 RBAC 校验（硬阻断口径）
-  //   POST/PATCH 时入参 provider_id + KB ids 全部 canReadRow，任一不可见 → 422
-  //   防 org_admin 在草稿层塞别 org 资源 id 绕过 publish 校验
   if (providerId) {
     const { data: prov } = await db
       .from("model_providers")
@@ -106,21 +104,25 @@ export async function POST(req: NextRequest) {
       .eq("id", providerId)
       .maybeSingle();
     if (!prov) return apiError("引用的供应商不存在", "VALIDATION_ERROR");
-    if (!canReadRow(admin, prov as { tenant_code: string | null })) {
+    if (!(await canReadTenantOwned(ctx, "model_provider", prov as TenantOwnedRow))) {
       return apiError("引用的供应商不存在或无权访问", "VALIDATION_ERROR");
     }
   }
+
   if (kbIds.length > 0) {
     const { data: kbRows } = await db
       .from("knowledge_bases")
       .select("id, tenant_code")
       .in("id", kbIds);
-    const rows = (kbRows ?? []) as { id: string; tenant_code: string | null }[];
-    const visibleIds = new Set(rows.filter((r) => canReadRow(admin, r)).map((r) => r.id));
+    const rows = (kbRows ?? []) as TenantOwnedRow[];
+    const visibleIds = new Set<string>();
+    for (const row of rows) {
+      if (await canReadTenantOwned(ctx, "knowledge_base", row)) visibleIds.add(row.id);
+    }
     const invisible = kbIds.filter((id) => !visibleIds.has(id));
     if (invisible.length > 0) {
       return apiError(
-        `引用的知识库${invisible.length} 个不存在或无权访问（${invisible.slice(0, 3).join("、")}${invisible.length > 3 ? "…" : ""}）`,
+        `引用的知识库${invisible.length} 个不存在或无权访问（${invisible.slice(0, 3).join("、")}${invisible.length > 3 ? "..." : ""}）`,
         "VALIDATION_ERROR",
       );
     }
@@ -140,8 +142,8 @@ export async function POST(req: NextRequest) {
         ? body.visibility_config
         : { visible_to: "owner_only", scope: [] },
     status: "draft" as const,
-    created_by: admin.adminId,
-    updated_by: admin.adminId,
+    created_by: ctx.adminId,
+    updated_by: ctx.adminId,
   };
 
   const { data, error } = await db
@@ -156,10 +158,10 @@ export async function POST(req: NextRequest) {
   }
 
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
     action: "create",
     resourceType: "agent_draft",
     resourceId: data.id,

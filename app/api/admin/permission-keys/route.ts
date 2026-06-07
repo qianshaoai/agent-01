@@ -15,6 +15,7 @@ import {
   PERMISSION_KEYS,
   WORKFLOW_PERMISSION_KEYS,
   ADMIN_PERMISSION_KEYS,
+  CUSTOM_ROLE_PERMISSION_KEYS,
   KEYS_BY_RESOURCE,
   PERMISSION_TEMPLATES,
   PermissionKey,
@@ -28,6 +29,7 @@ export const dynamic = "force-dynamic";
 // 6.4up v2 Phase A · 按 set 分组返
 //   workflow set：custom-roles 写入校验范围
 //   admin set：admin-overrides 写入校验范围（v2 通道全集）
+//   custom set：custom-roles 写入校验范围（6.6up 起等同 admin set）
 //   PERMISSION_KEYS：两 set 并集 dedup，仅用于 type union / 总体清单
 //   KEYS_BY_RESOURCE：按 resource 分块，给 UI Tab 1 / 2 矩阵展示
 function describeKey(k: string) {
@@ -53,6 +55,7 @@ export async function GET() {
     // 6.4up v2 Phase A · 新增分组
     workflow: WORKFLOW_PERMISSION_KEYS.map((k) => describeKey(k)),
     admin: ADMIN_PERMISSION_KEYS.map((k) => describeKey(k)),
+    custom: CUSTOM_ROLE_PERMISSION_KEYS.map((k) => describeKey(k)),
     by_resource: Object.fromEntries(
       Object.entries(KEYS_BY_RESOURCE).map(([resource, keys]) => [
         resource,

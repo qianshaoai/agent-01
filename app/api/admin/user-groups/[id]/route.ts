@@ -1,16 +1,21 @@
 import { dbError, apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { requireAccess } from "@/lib/access-facade";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
   const { name, description } = await req.json();
   if (!name?.trim()) return apiError("分组名称不能为空", "VALIDATION_ERROR");
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "user_group", "update", { id });
+    if (err) return err;
+  }
 
   const { data, error } = await db
     .from("user_groups")
@@ -21,17 +26,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode,
     action: "update", resourceType: "user_group", resourceId: id, resourceName: data.name,
   });
   return NextResponse.json(data);
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "user_group", "delete", { id });
+    if (err) return err;
+  }
 
   // 检查是否被权限配置引用
   const { count } = await db
@@ -51,7 +60,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const { error } = await db.from("user_groups").delete().eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode,
     action: "delete", resourceType: "user_group", resourceId: id, resourceName: grp?.name,
   });
   return NextResponse.json({ ok: true });

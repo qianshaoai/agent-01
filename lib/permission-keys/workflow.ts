@@ -4,7 +4,7 @@
  * 与 6.4up 原 `lib/permission-keys.ts` 的 PERMISSION_KEYS 完全一致：12 个 workflow keys。
  * 这些 keys 同时存在于 ADMIN_PERMISSION_KEYS（让 super 在 v2 通道也能 grant 给 builtin admin）。
  * 双通道独占的是**写入校验**而非 key 本身：
- *   - custom-roles POST/PATCH → 入参严校 WORKFLOW_PERMISSION_KEYS
+ *   - workflow 专用模板/旧入口；6.6up 后 custom-roles POST/PATCH 改校验 CUSTOM_ROLE_PERMISSION_KEYS
  *   - admin-overrides POST/PATCH（v2 新）→ 入参严校 ADMIN_PERMISSION_KEYS
  */
 

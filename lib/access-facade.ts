@@ -29,7 +29,9 @@
  *   if (accessErr) return accessErr;
  *
  * Flag 控制（方案 §3.4）：
- *   - PERMISSION_V2_ENFORCE_RESOURCES CSV 不含该 resourceKind → requireAccess 完全 no-op
+ *   - PERMISSION_V2_ENFORCE_RESOURCES=none → requireAccess 完全 no-op
+ *   - PERMISSION_V2_ENFORCE_RESOURCES 未设置 / all → 6.6up 默认全资源 enforce
+ *   - PERMISSION_V2_ENFORCE_RESOURCES CSV 不含该 resourceKind → requireAccess no-op
  *     - 不调 adapter 任何方法（不 load、不 check）
  *     - 不读 v52 两张新表
  *     - 直接 return null
@@ -62,17 +64,24 @@ export type {
 // ─── flag 解析 ───────────────────────────────────────────────────
 
 function getEnforcedResources(): Set<string> {
-  const csv = process.env.PERMISSION_V2_ENFORCE_RESOURCES ?? "";
+  const csv = (process.env.PERMISSION_V2_ENFORCE_RESOURCES ?? "all").trim();
+  if (csv === "" || csv.toLowerCase() === "all") {
+    return new Set(["*"]);
+  }
+  if (csv.toLowerCase() === "none") {
+    return new Set();
+  }
   const parts = csv.split(",").map((s) => s.trim()).filter(Boolean);
   return new Set(parts);
 }
 
 /**
  * 当前进程是否对该 resource 启用 v2 enforce
- * 空 flag = 全部不启用 → requireAccess no-op
+ * 6.6up：空 flag / all = 全部启用；none = 全部关闭；CSV = 指定资源启用
  */
 export function isResourceEnforced(resourceKind: string): boolean {
-  return getEnforcedResources().has(resourceKind);
+  const set = getEnforcedResources();
+  return set.has("*") || set.has(resourceKind);
 }
 
 // ─── requireAccess · 路由层统一闸 ────────────────────────────────
@@ -95,8 +104,10 @@ export async function requireAccess(
   action: string,
   opts: import("@/lib/access-facade-types").RequireAccessOpts = {},
 ): Promise<Response | null> {
-  // ─── flag gate：未启用该 resource → 完全 no-op ─────────────────
-  if (!isResourceEnforced(resourceKind)) return null;
+  // ─── flag gate：未启用该 resource → builtin 通道 no-op ───────────
+  // custom_admin 没有 legacy role fallback；即使 PERMISSION_V2_ENFORCE_RESOURCES=none，
+  // 也必须按 custom_role_permissions 判定，避免回滚开关变成 custom 越权放行。
+  if (actor.source !== "custom_admin" && !isResourceEnforced(resourceKind)) return null;
 
   // super_admin 公式第 1 行硬全权
   if (actor.builtinRole === "super_admin") return null;

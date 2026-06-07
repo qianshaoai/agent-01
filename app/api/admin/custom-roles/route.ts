@@ -14,15 +14,13 @@ import { apiError, dbError } from "@/lib/api-error";
 import { requireAdmin } from "@/lib/session";
 import { writeAuditLog } from "@/lib/audit";
 import {
-  isWorkflowPermissionKey,
+  isCustomRolePermissionKey,
   requiresSuperAdminToGrant,
-  WorkflowPermissionKey,
+  CustomRolePermissionKey,
 } from "@/lib/permission-keys";
 
-// 6.4up v2 Phase A · custom-roles 写入校验严格用 WORKFLOW_PERMISSION_KEYS
-//   custom 通道角色只能持有 workflow.* keys；ADMIN_PERMISSION_KEYS（v2 通道全集）
-//   走 admin-overrides 路径而非本接口
-const isPermissionKey = isWorkflowPermissionKey;
+// 6.6up · custom roles 从 workflow-only 升级为后台全资源权限。
+const isPermissionKey = isCustomRolePermissionKey;
 
 export const dynamic = "force-dynamic";
 
@@ -90,12 +88,11 @@ export async function POST(req: NextRequest) {
     return apiError("角色 code 仅允许小写字母 + 数字 + 下划线，且首字符为字母", "VALIDATION_ERROR");
   }
 
-  // 6.4up v2 Phase A · permissions 校验仅放过 WORKFLOW_PERMISSION_KEYS
-  //   ADMIN_PERMISSION_KEYS（agent / kb / provider / ... 等 v2 通道全集）走 admin-overrides
-  const validKeys: WorkflowPermissionKey[] = [];
+  // 6.6up · permissions 校验放过 CUSTOM_ROLE_PERMISSION_KEYS（当前等同 ADMIN_PERMISSION_KEYS）
+  const validKeys: CustomRolePermissionKey[] = [];
   for (const k of permissions ?? []) {
     if (!isPermissionKey(k)) {
-      return apiError(`权限项 ${String(k)} 不在 workflow 自定义角色合法清单中`, "VALIDATION_ERROR");
+      return apiError(`权限项 ${String(k)} 不在自定义角色合法清单中`, "VALIDATION_ERROR");
     }
     if (requiresSuperAdminToGrant(k) && admin.role !== "super_admin") {
       return apiError(`权限 ${k} 仅超级管理员可授予`, "FORBIDDEN");

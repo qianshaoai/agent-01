@@ -14,17 +14,18 @@
 //   头部提示"超出部分需升级服务端搜索后才能查找"
 
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { dbError } from "@/lib/api-error";
+import { requireAccess } from "@/lib/access-facade";
 
 export const dynamic = "force-dynamic";
 
 const PICKER_HARD_CAP = 2000;
 
 export async function GET() {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   // 用 head: true 只取 count，不拉行数据；data 用单独 limit(2000) 查询拿前 2000 条
   const [countRes, dataRes] = await Promise.all([
@@ -41,8 +42,18 @@ export async function GET() {
   if (countRes.error) return dbError(countRes.error);
   if (dataRes.error) return dbError(dataRes.error);
 
-  const totalCount = countRes.count ?? 0;
-  const data = dataRes.data ?? [];
+  let totalCount = countRes.count ?? 0;
+  let data = dataRes.data ?? [];
+
+  if (ctx.role !== "super_admin") {
+    const visible = [];
+    for (const row of data) {
+      const err = await requireAccess(ctx.actor, "agent", "read", { id: row.id });
+      if (!err) visible.push(row);
+    }
+    data = visible;
+    totalCount = visible.length;
+  }
 
   return NextResponse.json({
     data,

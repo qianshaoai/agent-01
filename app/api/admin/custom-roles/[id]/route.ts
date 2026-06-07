@@ -20,13 +20,13 @@ import { apiError, dbError } from "@/lib/api-error";
 import { requireAdmin } from "@/lib/session";
 import { writeAuditLog } from "@/lib/audit";
 import {
-  isWorkflowPermissionKey,
+  isCustomRolePermissionKey,
   requiresSuperAdminToGrant,
-  WorkflowPermissionKey,
+  CustomRolePermissionKey,
 } from "@/lib/permission-keys";
 
-// 6.4up v2 Phase A · custom-roles PATCH 同样严校 WORKFLOW_PERMISSION_KEYS
-const isPermissionKey = isWorkflowPermissionKey;
+// 6.6up · custom roles 从 workflow-only 升级为后台全资源权限。
+const isPermissionKey = isCustomRolePermissionKey;
 
 export const dynamic = "force-dynamic";
 
@@ -108,14 +108,14 @@ export async function PATCH(
     if (updErr) return dbError(updErr);
   }
 
-  // 6.4up v2 Phase A · permissions 全量替换：严校 WORKFLOW_PERMISSION_KEYS
-  let validKeys: WorkflowPermissionKey[] | null = null;
+  // 6.6up · permissions 全量替换：严校 CUSTOM_ROLE_PERMISSION_KEYS
+  let validKeys: CustomRolePermissionKey[] | null = null;
   if (permissions !== undefined) {
     if (!Array.isArray(permissions)) return apiError("permissions 必须是数组", "VALIDATION_ERROR");
     validKeys = [];
     for (const k of permissions) {
       if (!isPermissionKey(k)) {
-        return apiError(`权限项 ${String(k)} 不在 workflow 自定义角色合法清单中`, "VALIDATION_ERROR");
+        return apiError(`权限项 ${String(k)} 不在自定义角色合法清单中`, "VALIDATION_ERROR");
       }
       if (requiresSuperAdminToGrant(k) && admin.role !== "super_admin") {
         return apiError(`权限 ${k} 仅超级管理员可授予`, "FORBIDDEN");

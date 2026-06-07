@@ -1,18 +1,46 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor, type AdminActorContext } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
-import { isTagAdmin } from "@/lib/admin-permissions";
+import { isTagAdmin, type AdminRole } from "@/lib/admin-permissions";
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+
+async function requireCategoryDisplayRead(ctx: AdminActorContext, agentId: string) {
+  const agentErr = await requireAccess(ctx.actor, "agent", "read", { id: agentId });
+  if (agentErr) return agentErr;
+  return requireAccess(ctx.actor, "category", "read", { row: { id: "category-display" } });
+}
+
+async function requireCategoryDisplayWrite(ctx: AdminActorContext, agentId: string, categoryIds: string[]) {
+  if (
+    !ctx.isCustomAdmin &&
+    !isResourceEnforced("agent") &&
+    !isResourceEnforced("category") &&
+    !isTagAdmin(ctx.role as AdminRole)
+  ) {
+    return apiError("无权管理标签", "FORBIDDEN");
+  }
+  const agentErr = await requireAccess(ctx.actor, "agent", "update", { id: agentId });
+  if (agentErr) return agentErr;
+  for (const categoryId of categoryIds) {
+    const categoryErr = await requireAccess(ctx.actor, "category", "update", { row: { id: categoryId } });
+    if (categoryErr) return categoryErr;
+  }
+  return null;
+}
 
 // GET /api/admin/category-display?agentId=X
 // 返回该智能体在所有分类下的展示状态
 export async function GET(req: NextRequest) {
-  { const _a = await requireAdmin(); if (_a instanceof Response) return _a; }
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { searchParams } = new URL(req.url);
   const agentId = searchParams.get("agentId");
   if (!agentId) return apiError("缺少 agentId", "VALIDATION_ERROR");
+  const accessErr = await requireCategoryDisplayRead(ctx, agentId);
+  if (accessErr) return accessErr;
 
   // 所有分类
   const { data: categories } = await db
@@ -75,9 +103,8 @@ export async function GET(req: NextRequest) {
 // 支持单条 { agentId, categoryId, isManual, isHidden }
 // 或批量 { agentId, items: [{ categoryId, isManual, isHidden }, ...] }
 export async function PATCH(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const body = await req.json();
   const { agentId } = body;
@@ -90,6 +117,15 @@ export async function PATCH(req: NextRequest) {
   if (items.length === 0 || !items[0].categoryId) {
     return apiError("缺少 categoryId", "VALIDATION_ERROR");
   }
+  if (!items.every((item) => typeof item.categoryId === "string" && item.categoryId.length > 0)) {
+    return apiError("categoryId 含非法值", "VALIDATION_ERROR");
+  }
+  const accessErr = await requireCategoryDisplayWrite(
+    ctx,
+    agentId,
+    items.map((item) => item.categoryId),
+  );
+  if (accessErr) return accessErr;
 
   const toUpsert: { agent_id: string; category_id: string; is_manual: boolean; is_hidden: boolean; created_at: string }[] = [];
   const toDelete: string[] = [];
@@ -126,7 +162,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId, adminUsername: ctx.username, adminRole: ctx.role, adminTenantCode: ctx.tenantCode ?? null,
     action: "update", resourceType: "category", resourceId: agentId, resourceName: "分类展示设置",
     detail: { items },
   });

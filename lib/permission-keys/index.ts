@@ -5,7 +5,8 @@
  * 经 TS 模块解析自动指向本文件，调用方无需改 import 路径。
  *
  * 暴露内容：
- *   - 三个 set 常量：WORKFLOW_PERMISSION_KEYS / ADMIN_PERMISSION_KEYS / PERMISSION_KEYS
+ *   - set 常量：WORKFLOW_PERMISSION_KEYS / ADMIN_PERMISSION_KEYS /
+ *     CUSTOM_ROLE_PERMISSION_KEYS / PERMISSION_KEYS
  *   - 类型：PermissionKey / WorkflowPermissionKey / AdminPermissionKey
  *   - 类型守卫：isPermissionKey / isWorkflowPermissionKey / isAdminPermissionKey
  *   - scope 解析：getPermissionScopeSuffix / getPermissionAction / getPermissionResource
@@ -23,6 +24,8 @@ import {
 import {
   ADMIN_PERMISSION_KEYS,
   AdminPermissionKey,
+  CUSTOM_ROLE_PERMISSION_KEYS,
+  CustomRolePermissionKey,
   KEYS_BY_RESOURCE,
 } from "./admin";
 import { AGENT_DRAFT_PERMISSION_KEYS, AgentDraftPermissionKey } from "./agent-draft";
@@ -34,12 +37,14 @@ import { AGENT_DRAFT_PERMISSION_KEYS, AgentDraftPermissionKey } from "./agent-dr
 export type PermissionKey =
   | WorkflowPermissionKey
   | AdminPermissionKey
+  | CustomRolePermissionKey
   | AgentDraftPermissionKey;
 
 const _allKeys = Array.from(
   new Set<string>([
     ...WORKFLOW_PERMISSION_KEYS,
     ...ADMIN_PERMISSION_KEYS,
+    ...CUSTOM_ROLE_PERMISSION_KEYS,
     ...AGENT_DRAFT_PERMISSION_KEYS,
   ]),
 ) as PermissionKey[];
@@ -48,6 +53,7 @@ export const PERMISSION_KEYS: readonly PermissionKey[] = _allKeys;
 
 const _workflowSet = new Set<string>(WORKFLOW_PERMISSION_KEYS);
 const _adminSet = new Set<string>(ADMIN_PERMISSION_KEYS);
+const _customRoleSet = new Set<string>(CUSTOM_ROLE_PERMISSION_KEYS);
 const _agentDraftSet = new Set<string>(AGENT_DRAFT_PERMISSION_KEYS);
 const _allSet = new Set<string>(_allKeys);
 
@@ -61,6 +67,10 @@ export function isWorkflowPermissionKey(x: unknown): x is WorkflowPermissionKey 
 
 export function isAdminPermissionKey(x: unknown): x is AdminPermissionKey {
   return typeof x === "string" && _adminSet.has(x);
+}
+
+export function isCustomRolePermissionKey(x: unknown): x is CustomRolePermissionKey {
+  return typeof x === "string" && _customRoleSet.has(x);
 }
 
 export function isAgentDraftPermissionKey(x: unknown): x is AgentDraftPermissionKey {
@@ -98,6 +108,7 @@ export function requiresSuperAdminToGrant(key: PermissionKey): boolean {
 export {
   WORKFLOW_PERMISSION_KEYS,
   ADMIN_PERMISSION_KEYS,
+  CUSTOM_ROLE_PERMISSION_KEYS,
   AGENT_DRAFT_PERMISSION_KEYS,
   PERMISSION_TEMPLATES,
   KEYS_BY_RESOURCE,
@@ -106,6 +117,7 @@ export {
 export type {
   WorkflowPermissionKey,
   AdminPermissionKey,
+  CustomRolePermissionKey,
   AgentDraftPermissionKey,
   PermissionTemplateCode,
 };

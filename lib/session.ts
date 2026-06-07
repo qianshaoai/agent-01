@@ -166,6 +166,50 @@ export async function getAdminAccessPayload(): Promise<AdminAccessPayload | null
   return getCurrentAdminAccess();
 }
 
+export type AdminActorContext = {
+  access: AdminAccessPayload;
+  actor: PermissionActor;
+  /** builtin: adminId; custom: userId */
+  adminId: string;
+  username: string;
+  role: AdminRole | "custom_admin";
+  /** actor/source tenant, if any */
+  tenantCode: string | null;
+  source: "admin_table" | "user_admin" | "custom_admin";
+  isCustomAdmin: boolean;
+};
+
+/**
+ * 6.6up · 后台 actor 统一入口。
+ *
+ * requireAdmin() 只接受 builtin admin；6.6up 后绝大多数业务接口需要同时接受
+ * builtin admin 与 custom_admin，因此统一通过 access payload 构造 PermissionActor。
+ */
+export async function requireAdminActor(): Promise<AdminActorContext | Response> {
+  const access = await getAdminAccessPayload();
+  if (!access) return apiError("未登录或权限已变更", "UNAUTHORIZED");
+
+  if (!isCustomAdminPayload(access) && (access as AdminPayload).firstLogin === true) {
+    return apiError(
+      "首次登录需先修改初始密码，请回登录页完成密码修改",
+      "FORBIDDEN",
+    );
+  }
+
+  const actor = await buildPermissionActor(access);
+  const isCustom = isCustomAdminPayload(access);
+  return {
+    access,
+    actor,
+    adminId: actor.actorId,
+    username: actor.username,
+    role: isCustom ? "custom_admin" : actor.builtinRole ?? (access as AdminPayload).role,
+    tenantCode: actor.tenantCode,
+    source: isCustom ? "custom_admin" : (access as AdminPayload).source ?? "admin_table",
+    isCustomAdmin: isCustom,
+  };
+}
+
 /**
  * 鉴权辅助：业务接口要求 actor 持有 permissionKey 才能执行。
  *

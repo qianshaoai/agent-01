@@ -1,14 +1,14 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { decrypt } from "@/lib/crypto";
 import { streamChat, ChatMessage } from "@/lib/adapters";
 import { writeAuditLog } from "@/lib/audit";
+import type { AdminPayload } from "@/lib/auth";
 import { canReadRow, canWriteRow, requireWriteAccess } from "@/lib/scoped-access";
 // 6.4up v2 Phase D · D-5 · provider test enforce（resourceKind=model_provider；env "model_provider"；空时 no-op）
-import { isResourceEnforced } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 
 // 5.14up PR-A · 模型供应商连通性测试
 // 权限：
@@ -58,11 +58,14 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+  const actor = ctx.actor;
   // 5.30up · R2 §1 双闸：test 白名单含 system_admin（仅查/测口径沿用）
-  const gate = requireWriteAccess(admin, ["super_admin", "system_admin", "org_admin"]);
-  if (gate) return gate;
+  if (!ctx.isCustomAdmin) {
+    const gate = requireWriteAccess(ctx.access as AdminPayload, ["super_admin", "system_admin", "org_admin"]);
+    if (gate) return gate;
+  }
 
   const { id } = await params;
   const { data: row, error: loadError } = await db
@@ -79,21 +82,19 @@ export async function POST(
   if (!provider) return apiError("供应商不存在", "NOT_FOUND");
 
   // 5.30up · 归属判定：org_admin 不可见 → 404 屏蔽；可见但非 own → 403（仅 own 可测）
-  if (!canReadRow(admin, provider)) return apiError("供应商不存在", "NOT_FOUND");
-  if (!canWriteRow(admin, provider)) {
+  if (!ctx.isCustomAdmin && !canReadRow(ctx.access as AdminPayload, provider)) {
+    return apiError("供应商不存在", "NOT_FOUND");
+  }
+  if (!ctx.isCustomAdmin && !canWriteRow(ctx.access as AdminPayload, provider)) {
     return apiError("无权测试该供应商（仅可测自己组织的）", "FORBIDDEN");
   }
 
   // Phase D D-5 · v2 第二闸 test（env-gated；按 actor 自身 test 能力 OR .all/.org；canWriteRow 已限 org_admin own）
-  if (isResourceEnforced("model_provider") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const okAll = await hasPermission(actor, "provider.test.all");
-    const okOrg = actor.tenantCode
-      ? await hasPermission(actor, "provider.test.org", [
-          { scope_type: "org", scope_id: actor.tenantCode },
-        ])
-      : false;
-    if (!okAll && !okOrg) return apiError("权限不足", "FORBIDDEN");
+  if ((ctx.isCustomAdmin || isResourceEnforced("model_provider")) && ctx.role !== "super_admin") {
+    const err = await requireAccess(actor, "model_provider", "test", {
+      row: { id, tenant_code: provider.tenant_code },
+    });
+    if (err) return err;
   }
 
   if (!provider.enabled) return apiError("供应商已禁用，无法测试", "VALIDATION_ERROR");
@@ -178,10 +179,10 @@ export async function POST(
 
   // 写审计 + 失败/成功都记
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode,
     action: "test",
     resourceType: "model_provider",
     resourceId: provider.id,

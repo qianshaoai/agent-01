@@ -1,12 +1,12 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor, type AdminActorContext } from "@/lib/session";
+import type { AdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { canReadRow } from "@/lib/scoped-access";
-// 6.4up v2 Phase D · D-2 · agent_draft enforce（env "agent_draft" 启用时生效；空时完全 no-op）
-import { isResourceEnforced } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { requireAccess } from "@/lib/access-facade";
+import { hasPermission } from "@/lib/permission-actor";
 
 // 5.14up PR-B · 复制草稿
 // 复制所有字段，但：
@@ -37,12 +37,25 @@ type DraftRow = {
   source_agent_id: string | null;
 };
 
+type TenantOwnedRow = { id: string; tenant_code: string | null };
+
+async function canReadTenantOwned(
+  ctx: AdminActorContext,
+  resourceKind: "model_provider" | "knowledge_base",
+  row: TenantOwnedRow,
+) {
+  if (ctx.isCustomAdmin) {
+    return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
+  }
+  return canReadRow(ctx.access as AdminPayload, row);
+}
+
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
   const { data: src, error: loadError } = await db
@@ -60,9 +73,12 @@ export async function POST(
   // 5.30up R4 #2 · 放宽：org_admin 也可复制 super/system 创建的草稿（视为"平台模板/demo"）
   //   方案 R1 §2 软降级语义要求 —— 复制 demo agent 是高频路径；不可见的 provider/KB 已由
   //   下方剥离机制托底。但仍禁止复制别 org_admin 的草稿（隐私 + 越权）。
-  if (admin.role === "org_admin") {
+  if (ctx.isCustomAdmin) {
+    const err = await requireAccess(ctx.actor, "agent_draft", "read", { id });
+    if (err) return err;
+  } else if (ctx.role === "org_admin" && !ctx.actor.v2Loaded) {
     const srcCreatedBy = (src as { created_by?: string }).created_by;
-    if (srcCreatedBy !== admin.adminId) {
+    if (srcCreatedBy !== ctx.adminId) {
       // 查 created_by 的角色：先 admins 表，再 users 表（5.28up · 后台账号可能在 users 表）
       let creatorRole: string | null = null;
       const { data: a1 } = await db
@@ -82,12 +98,11 @@ export async function POST(
   // Phase D D-2 · v2 第二闸 duplicate（env-gated）：按 actor 自身 duplicate 能力判（OR .all/.org），
   //   不按 source scope —— source 可能是 super/system 的平台模板（all scope），用 source scope 会误拒
   //   org_admin 复制模板（5.30up R4 放权）。上方 source 创建者角色检查仍限制可复制的源。
-  if (isResourceEnforced("agent_draft") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const okAll = await hasPermission(actor, "agent_draft.duplicate.all");
-    const okOrg = actor.tenantCode
-      ? await hasPermission(actor, "agent_draft.duplicate.org", [
-          { scope_type: "org", scope_id: actor.tenantCode },
+  if (ctx.role !== "super_admin") {
+    const okAll = await hasPermission(ctx.actor, "agent_draft.duplicate.all");
+    const okOrg = ctx.actor.tenantCode
+      ? await hasPermission(ctx.actor, "agent_draft.duplicate.org", [
+          { scope_type: "org", scope_id: ctx.actor.tenantCode },
         ])
       : false;
     if (!okAll && !okOrg) return apiError("权限不足", "FORBIDDEN");
@@ -104,7 +119,7 @@ export async function POST(
       .select("id, tenant_code")
       .eq("id", effProviderId)
       .maybeSingle();
-    if (!prov || !canReadRow(admin, prov as { tenant_code: string | null })) {
+    if (!prov || !(await canReadTenantOwned(ctx, "model_provider", prov as TenantOwnedRow))) {
       strippedProvider = effProviderId;
       effProviderId = null;
     }
@@ -123,7 +138,10 @@ export async function POST(
       .select("id, tenant_code")
       .in("id", srcKbIds);
     const rows = (kbRows ?? []) as { id: string; tenant_code: string | null }[];
-    const visibleSet = new Set(rows.filter((r) => canReadRow(admin, r)).map((r) => r.id));
+    const visibleSet = new Set<string>();
+    for (const row of rows) {
+      if (await canReadTenantOwned(ctx, "knowledge_base", row)) visibleSet.add(row.id);
+    }
     visibleKbIds = srcKbIds.filter((kid) => visibleSet.has(kid));
     for (const kid of srcKbIds) if (!visibleSet.has(kid)) strippedKbs.push(kid);
   }
@@ -147,8 +165,8 @@ export async function POST(
     status: "draft" as const,
     source_agent_id: source.source_agent_id,
     published_agent_id: null,
-    created_by: admin.adminId,
-    updated_by: admin.adminId,
+    created_by: ctx.adminId,
+    updated_by: ctx.adminId,
   };
 
   const { data, error } = await db
@@ -163,10 +181,10 @@ export async function POST(
   }
 
   await writeAuditLog({
-    adminId: admin.adminId,
-    adminUsername: admin.username,
-    adminRole: admin.role,
-    adminTenantCode: admin.tenantCode ?? null,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
     action: "create",
     resourceType: "agent_draft",
     resourceId: data.id,

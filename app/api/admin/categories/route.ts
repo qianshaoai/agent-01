@@ -1,22 +1,17 @@
 import { dbError, apiError, parsePagination, paginatedResponse } from "@/lib/api-error";
-import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
-import { db } from "@/lib/db";
+import { requireAccess } from "@/lib/access-facade";
 import { writeAuditLog } from "@/lib/audit";
-import { isTagAdmin } from "@/lib/admin-permissions";
-// 6.4up v2 Phase C · enforce 叠加（env "category" 启用时生效；空时完全 no-op）
-import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { db } from "@/lib/db";
+import { requireAdminActor } from "@/lib/session";
+import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
-  // Phase C HC2 · list 走 env-gated hasPermission 粗粒度 check
-  if (isResourceEnforced("category") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    const ok = await hasPermission(actor, "category.read.all");
-    if (!ok) return apiError("权限不足", "FORBIDDEN");
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "category", "read", { row: { id: "__list__" } });
+    if (err) return err;
   }
 
   const { page, pageSize, start } = parsePagination(req, 100);
@@ -30,21 +25,23 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
-  if (!isTagAdmin(admin.role)) return apiError("无权管理标签", "FORBIDDEN");
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
-  // Phase C · v2 第二闸 create（platform-level，category.create.all）
-  if (isResourceEnforced("category")) {
-    const actor = await buildPermissionActor(admin);
-    const accessErr = await requireAccess(actor, "category", "create");
+  if (ctx.role !== "super_admin") {
+    const accessErr = await requireAccess(ctx.actor, "category", "create");
     if (accessErr) return accessErr;
   }
 
   const { name } = await req.json();
   if (!name?.trim()) return apiError("分类名称不能为空", "VALIDATION_ERROR");
 
-  const { data: existing } = await db.from("categories").select("sort_order").order("sort_order", { ascending: false }).limit(1).single();
+  const { data: existing } = await db
+    .from("categories")
+    .select("sort_order")
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .single();
   const nextOrder = (existing?.sort_order ?? 0) + 1;
 
   const { data, error } = await db
@@ -55,8 +52,14 @@ export async function POST(req: NextRequest) {
 
   if (error) return dbError(error);
   await writeAuditLog({
-    adminId: admin.adminId, adminUsername: admin.username, adminRole: admin.role, adminTenantCode: admin.tenantCode ?? null,
-    action: "create", resourceType: "category", resourceId: data.id, resourceName: data.name,
+    adminId: ctx.adminId,
+    adminUsername: ctx.username,
+    adminRole: ctx.role,
+    adminTenantCode: ctx.tenantCode ?? null,
+    action: "create",
+    resourceType: "category",
+    resourceId: data.id,
+    resourceName: data.name,
   });
   return NextResponse.json(data, { status: 201 });
 }

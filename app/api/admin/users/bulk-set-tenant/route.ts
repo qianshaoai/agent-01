@@ -1,11 +1,11 @@
 import { apiError } from "@/lib/api-error";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/session";
+import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 // 6.4up v2 Phase D · D-1 · user enforce（env "user" 启用时生效；空时完全 no-op）
 import { isResourceEnforced } from "@/lib/access-facade";
-import { buildPermissionActor, hasPermission } from "@/lib/permission-actor";
+import { hasPermission } from "@/lib/permission-actor";
 
 export const dynamic = "force-dynamic";
 
@@ -17,18 +17,17 @@ const BULK_LIMIT = 200;
 //
 // 单条 RPC 失败收集到 failed[]，整体永远返回 200（前端按 succeeded/failed 长度展示结果）
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin();
-  if (admin instanceof Response) return admin;
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
 
   // org_admin 没有跨组织调动权限（与单人 set-tenant 保持一致）
-  if (admin.role === "org_admin") {
+  if (!ctx.isCustomAdmin && !isResourceEnforced("user") && ctx.role === "org_admin") {
     return apiError("无权批量修改用户所属组织", "FORBIDDEN");
   }
 
   // Phase D D-1 · v2 第二闸（env-gated）：批量跨组织调动是高权操作，要求 user.tenant.transfer.all
-  if (isResourceEnforced("user") && admin.role !== "super_admin") {
-    const actor = await buildPermissionActor(admin);
-    if (!(await hasPermission(actor, "user.tenant.transfer.all"))) {
+  if ((ctx.isCustomAdmin || isResourceEnforced("user")) && ctx.role !== "super_admin") {
+    if (!(await hasPermission(ctx.actor, "user.tenant.transfer.all"))) {
       return apiError("权限不足", "FORBIDDEN");
     }
   }
@@ -99,10 +98,10 @@ export async function POST(req: NextRequest) {
 
     // 每个成功用户单独写一条 audit（标记 bulk=true 便于审计页查询）
     await writeAuditLog({
-      adminId: admin.adminId,
-      adminUsername: admin.username,
-      adminRole: admin.role,
-      adminTenantCode: admin.tenantCode ?? null,
+      adminId: ctx.adminId,
+      adminUsername: ctx.username,
+      adminRole: ctx.role,
+      adminTenantCode: ctx.tenantCode ?? null,
       // 目标组织作为本条 audit 的 resourceTenantCode（迁出后 resolveResourceTenantCode 会查到新值，提前传更明确）
       resourceTenantCode: tenantCode === "PERSONAL" ? null : tenantCode,
       action: "update",
