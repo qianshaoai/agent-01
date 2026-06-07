@@ -15,6 +15,7 @@ import { PermissionKey } from "@/lib/permission-keys";
 // 6.4up v2 Phase D · D-3 · workflow builtin 路径 enforce（env "workflow" 启用时生效；空时 no-op）
 //   custom_admin 分支完全不走 requireAccess（R0.1 F3 双通道隔离）。
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { requireActorCreatorHierarchy, requireCreatorHierarchy } from "@/lib/creator-hierarchy";
 
 export const dynamic = "force-dynamic";
 
@@ -147,7 +148,7 @@ export async function PATCH(
 
     const { data: wfRow } = await db
       .from("workflows")
-      .select("id, name")
+      .select("id, name, created_by_role")
       .eq("id", id)
       .maybeSingle();
     if (!wfRow) return apiError("工作流不存在", "NOT_FOUND");
@@ -159,6 +160,12 @@ export async function PATCH(
     }
     const allowed = await hasPermission(actor, updateKey, targetScopes);
     if (!allowed) return apiError("目标工作流超出权限范围", "FORBIDDEN");
+    const hierarchyErr = requireActorCreatorHierarchy(
+      actor,
+      "workflow",
+      (wfRow as { created_by_role: string | null }).created_by_role,
+    );
+    if (hierarchyErr) return hierarchyErr;
 
     const body = await req.json();
     // R1.2 · 验收 15：禁止改 enabled；同时禁止改 visible_to / permissions（避免越权扩散可见性）
@@ -328,6 +335,15 @@ export async function DELETE(
   if (ctx.isCustomAdmin) {
     const e = await requireAccess(ctx.actor, "workflow", "delete", { id });
     if (e) return e;
+    const { data: wfRow, error: wfErr } = await db
+      .from("workflows")
+      .select("created_by_role")
+      .eq("id", id)
+      .maybeSingle();
+    if (wfErr) return dbError(wfErr);
+    if (!wfRow) return apiError("工作流不存在", "NOT_FOUND");
+    const hierarchyErr = requireCreatorHierarchy(ctx, "workflow", wfRow.created_by_role);
+    if (hierarchyErr) return hierarchyErr;
   } else {
     const admin = ctx.access as AdminPayload;
   // 5.11up · 先做上下级权限校验

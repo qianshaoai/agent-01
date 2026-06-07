@@ -8,8 +8,9 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Key, Settings2, Bot, Tag, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, X, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight, ChevronDown, ChevronRight } from "lucide-react";
+import { Edit2, Key, Settings2, Bot, Tag, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, X, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight, ChevronDown, ChevronRight } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
+import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
 import {
   schemaForPlatform,
   parseAdvancedJson,
@@ -43,6 +44,7 @@ type Agent = {
   tenant_codes?: string[];
   permissions?: { scope_type: string; scope_id: string | null }[];
   workflows?: WorkflowRef[];
+  created_by_role?: "super_admin" | "system_admin" | "org_admin" | null;
 };
 type ApiProvider = { id: string; name: string; platform: string; enabled: boolean };
 type Category = { id: string; name: string; icon_url?: string | null };
@@ -146,17 +148,9 @@ export default function AgentsAdminPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
-  // 5.7up · 当前管理员角色：org_admin 只读，所有写操作按钮不显示
-  const [adminRole, setAdminRole] = useState<"super_admin" | "system_admin" | "org_admin" | null>(null);
-  useEffect(() => {
-    fetch("/api/admin/me", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.role) setAdminRole(d.role);
-      })
-      .catch(() => {});
-  }, []);
-  const isOrgAdmin = adminRole === "org_admin";
+  const adminPerms = useAdminPermissions();
+  // 5.7up 旧兜底保留：builtin org_admin 在本页仍按只读展示；custom admin 走权限 key。
+  const isOrgAdmin = adminPerms.role === "org_admin";
   // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留智能体列表（无 Tab 切换）
   // 6.3up · 智能体管理改风格 · 分类分组默认折叠 · 点 chevron 展开
   const [expandedAgentSections, setExpandedAgentSections] = useState<Set<string>>(new Set());
@@ -307,7 +301,6 @@ export default function AgentsAdminPage() {
     });
   }, [focusAgentId, agents]);
 
-  function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   async function openApi(a: Agent) {
     setShowApiModal(a);
@@ -541,6 +534,10 @@ export default function AgentsAdminPage() {
   }), [agents, agentTypeFilter, agentCategoryFilter, agentStatusFilter]);
   const hasAgentFilter = agentTypeFilter || agentCategoryFilter || agentStatusFilter;
 
+  function canTouchAgent(a: Agent, action: "basic.update" | "enable" | "delete"): boolean {
+    return adminPerms.canAction("agent", action) && adminPerms.canActOnCreator("agent", a.created_by_role);
+  }
+
   // 5.16up R4 · 完整展示按分类分组：多分类智能体在每个所属分类下都出现（D4-1）；
   // 未分类兜底分区；分区顺序按 categories（接口已按 sort_order 排）。
   const groupedSections = useMemo(() => {
@@ -569,11 +566,6 @@ export default function AgentsAdminPage() {
           icon={<Bot size={20} />}
           title="智能体管理"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {agents.length} 个</span>}
-          actions={
-            !isOrgAdmin ? (
-              <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
-            ) : null
-          }
         />
 
         {/* 6.5up · 智能体列表主体（旧分类管理 Tab 已抽到 /admin/tags） */}
@@ -604,7 +596,7 @@ export default function AgentsAdminPage() {
             {loading ? (
               <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
             ) : groupedSections.length === 0 ? (
-              <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体，点击右上角新增" : "没有符合筛选条件的智能体"}</p></div>
+              <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体" : "没有符合筛选条件的智能体"}</p></div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm table-sticky-head table-fixed">
@@ -772,24 +764,45 @@ export default function AgentsAdminPage() {
                           {isOrgAdmin ? (
                             <div className="flex justify-center"><span className="text-xs text-gray-300">仅可查看</span></div>
                           ) : (
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              onClick={() => toggleAgentEnabled(a)}
-                              className={`p-1.5 rounded-[8px] transition-colors ${a.enabled ? "text-green-600 hover:bg-green-50" : "text-gray-400 hover:bg-gray-100"}`}
-                              title={a.enabled ? "已启用，点击禁用" : "已禁用，点击启用"}
-                              aria-label={a.enabled ? "禁用" : "启用"}
-                            >
-                              {a.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                            </button>
-                            <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
-                            {/* 5.19up · 搭建器发布的智能体 API 配置归搭建器管，此处不放按钮，防误触误改 */}
-                            {a.agent_type !== "external" && !a.published_from_draft_id && (
-                              <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置" aria-label="API 配置"><Key size={14} /></button>
-                            )}
-                            <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置" aria-label="权限设置"><Settings2 size={14} /></button>
-                            <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="标签展示配置" aria-label="标签展示配置"><LayoutGrid size={14} /></button>
-                            <button onClick={() => setDeletingAgent(a)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
-                          </div>
+                          (() => {
+                            const canUpdate = canTouchAgent(a, "basic.update");
+                            const canEnable = canTouchAgent(a, "enable");
+                            const canDelete = canTouchAgent(a, "delete");
+                            const canDisplay = adminPerms.canAction("category", "update") && adminPerms.canActOnCreator("agent", a.created_by_role);
+                            if (!canUpdate && !canEnable && !canDelete && !canDisplay) {
+                              return <div className="flex justify-center"><span className="text-xs text-gray-300">仅可查看</span></div>;
+                            }
+                            return (
+                              <div className="flex items-center justify-center gap-1">
+                                {canEnable && (
+                                  <button
+                                    onClick={() => toggleAgentEnabled(a)}
+                                    className={`p-1.5 rounded-[8px] transition-colors ${a.enabled ? "text-green-600 hover:bg-green-50" : "text-gray-400 hover:bg-gray-100"}`}
+                                    title={a.enabled ? "已启用，点击禁用" : "已禁用，点击启用"}
+                                    aria-label={a.enabled ? "禁用" : "启用"}
+                                  >
+                                    {a.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                                  </button>
+                                )}
+                                {canUpdate && (
+                                  <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
+                                )}
+                                {/* 5.19up · 搭建器发布的智能体 API 配置归搭建器管，此处不放按钮，防误触误改 */}
+                                {canUpdate && a.agent_type !== "external" && !a.published_from_draft_id && (
+                                  <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置" aria-label="API 配置"><Key size={14} /></button>
+                                )}
+                                {canUpdate && (
+                                  <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置" aria-label="权限设置"><Settings2 size={14} /></button>
+                                )}
+                                {canDisplay && (
+                                  <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="标签展示配置" aria-label="标签展示配置"><LayoutGrid size={14} /></button>
+                                )}
+                                {canDelete && (
+                                  <button onClick={() => setDeletingAgent(a)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
+                                )}
+                              </div>
+                            );
+                          })()
                           )}
                         </td>
                       </tr>

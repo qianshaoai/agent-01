@@ -7,7 +7,13 @@ import {
   isCustomRolePermissionKey,
   isPermissionKey,
   isWorkflowPermissionKey,
+  type PermissionKey,
 } from "../lib/permission-keys";
+import {
+  actorHierarchyRole,
+  canActorTouchCreator,
+} from "../lib/creator-hierarchy";
+import type { PermissionActor } from "../lib/permission-actor";
 
 let failed = 0;
 
@@ -18,6 +24,23 @@ function check(label: string, condition: boolean, detail?: string) {
   }
   failed++;
   console.error(`FAIL ${label}${detail ? ` - ${detail}` : ""}`);
+}
+
+function customActor(keys: PermissionKey[]): PermissionActor {
+  return {
+    actorId: "custom-user",
+    source: "custom_admin",
+    tenantCode: "ORG_A",
+    deptId: "DEPT_A",
+    teamId: "TEAM_A",
+    userType: "organization",
+    builtinRole: null,
+    customRoleCodes: ["smoke_custom"],
+    permissions: new Set(keys),
+    v2Loaded: false,
+    effectivePermissions: new Set<string>(),
+    username: "smoke-custom",
+  };
 }
 
 async function main() {
@@ -48,6 +71,15 @@ async function main() {
   process.env.PERMISSION_V2_ENFORCE_RESOURCES = "workflow,agent";
   check("enforce flag CSV enables listed resource", isResourceEnforced("workflow"));
   check("enforce flag CSV leaves unlisted resource disabled", !isResourceEnforced("knowledge_base"));
+
+  const kbOrgActor = customActor(["kb.update.org"]);
+  check("custom org write maps to org_admin hierarchy", actorHierarchyRole(kbOrgActor, "knowledge_base") === "org_admin");
+  check("custom org write cannot touch system-created KB", !canActorTouchCreator(kbOrgActor, "knowledge_base", "system_admin"));
+  const kbAllActor = customActor(["kb.update.all"]);
+  check("custom all write maps to system_admin hierarchy", actorHierarchyRole(kbAllActor, "knowledge_base") === "system_admin");
+  check("custom all write cannot touch super-created KB", !canActorTouchCreator(kbAllActor, "knowledge_base", "super_admin"));
+  const workflowAllActor = customActor(["workflow.update.all"]);
+  check("workflow all custom can touch system-created workflow", canActorTouchCreator(workflowAllActor, "workflow", "system_admin"));
 
   if (failed > 0) process.exit(1);
 }

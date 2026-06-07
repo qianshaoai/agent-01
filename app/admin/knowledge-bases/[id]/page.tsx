@@ -18,6 +18,7 @@ import {
   CheckCircle2,
   Bot,
 } from "lucide-react";
+import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
 
 type KbDocStatus = "pending" | "indexing" | "done" | "failed";
 
@@ -44,6 +45,7 @@ type KnowledgeBase = {
   created_at: string;
   // 5.30up · 归属字段：NULL = 平台公共
   tenant_code: string | null;
+  created_by_role?: "super_admin" | "system_admin" | "org_admin" | null;
 };
 
 type RefAgent = { id: string; name: string };
@@ -54,7 +56,7 @@ type AdminMe = {
   tenantCode: string | null;
 };
 
-const READONLY_TITLE = "无写权限：仅本组织新建的资源可改";
+const READONLY_TITLE = "无写权限或该知识库由上级管理员创建";
 
 const STATUS_LABEL: Record<KbDocStatus, string> = {
   pending: "待索引",
@@ -92,31 +94,24 @@ export default function KnowledgeBaseDetailPage() {
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
 
-  // 5.30up · 拉当前管理员（给写按钮做 ownership 灰显）
-  const [me, setMe] = useState<AdminMe | null>(null);
-  useEffect(() => {
-    fetch("/api/admin/me", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.role) setMe({ role: d.role, tenantCode: d.tenantCode ?? null });
-      })
-      .catch(() => {});
-  }, []);
+  const adminPerms = useAdminPermissions();
+  const me: AdminMe | null = adminPerms.role
+    ? { role: adminPerms.role, tenantCode: adminPerms.tenantCode }
+    : null;
 
-  // 5.30up · 与后端 canWriteRow 完全同口径（参见 lib/scoped-access.ts）：
-  //   super/system → true
-  //   org_admin + 有 tenantCode + kb.tenant_code === admin.tenantCode → true（NULL 排除）
-  //   其它 → false
-  // 前端只做 UX 辅助；后端 canWriteRow + 双闸是真正的安全边界。
-  const canWrite = useMemo(() => {
-    if (!me || !kb) return false;
-    if (me.role === "super_admin" || me.role === "system_admin") return true;
-    if (me.role === "org_admin") {
-      if (!me.tenantCode) return false;
-      return kb.tenant_code === me.tenantCode;
-    }
-    return false;
-  }, [me, kb]);
+  const canUpdateKb = useMemo(() => {
+    if (!adminPerms.loaded || !kb) return false;
+    if (!adminPerms.canActOnCreator("kb", kb.created_by_role)) return false;
+    if (adminPerms.has("kb.update.all")) return true;
+    return adminPerms.has("kb.update.org") && !!kb.tenant_code && kb.tenant_code === adminPerms.tenantCode;
+  }, [adminPerms, kb]);
+
+  const canDeleteKb = useMemo(() => {
+    if (!adminPerms.loaded || !kb) return false;
+    if (!adminPerms.canActOnCreator("kb", kb.created_by_role)) return false;
+    if (adminPerms.has("kb.delete.all")) return true;
+    return adminPerms.has("kb.delete.org") && !!kb.tenant_code && kb.tenant_code === adminPerms.tenantCode;
+  }, [adminPerms, kb]);
 
   // 5.28up · A · Fix 2 · load 加 silent 参数 —— 轮询不触发全屏 "加载中…" 闪屏。
   //   首次挂载 / 手动操作（删除 / 编辑后刷新）走 silent=false 显示骨架屏；
@@ -167,6 +162,7 @@ export default function KnowledgeBaseDetailPage() {
   }, [docs, load]);
 
   async function handleUpload(file: File) {
+    if (!canUpdateKb) return;
     setUploading(true);
     setErr("");
     setMsg("");
@@ -195,6 +191,7 @@ export default function KnowledgeBaseDetailPage() {
   }
 
   async function handleReindex(doc: KbDocument) {
+    if (!canUpdateKb) return;
     setBusyDoc(doc.id);
     setErr("");
     setMsg("");
@@ -213,6 +210,7 @@ export default function KnowledgeBaseDetailPage() {
   }
 
   async function handleDeleteDoc(doc: KbDocument) {
+    if (!canUpdateKb) return;
     if (!window.confirm(`确认删除文档「${doc.filename}」？`)) return;
     setBusyDoc(doc.id);
     setErr("");
@@ -231,7 +229,7 @@ export default function KnowledgeBaseDetailPage() {
   }
 
   async function handleDeleteKb() {
-    if (!kb) return;
+    if (!kb || !canDeleteKb) return;
     if (!window.confirm(`确认删除知识库「${kb.name}」？文档与索引会一并删除（被智能体引用时会阻止）。`)) return;
     setErr("");
     try {
@@ -245,6 +243,7 @@ export default function KnowledgeBaseDetailPage() {
   }
 
   async function handleSaveEdit() {
+    if (!canUpdateKb) return;
     if (!editName.trim()) {
       setErr("名称不能为空");
       return;
@@ -266,7 +265,7 @@ export default function KnowledgeBaseDetailPage() {
   }
 
   async function toggleStatus() {
-    if (!kb) return;
+    if (!kb || !canUpdateKb) return;
     const next = kb.status === "active" ? "disabled" : "active";
     // 停用是 "暂不参与检索"，文档和绑定都保留 —— 做个确认避免被误解为删除 / 解绑
     if (next === "disabled") {
@@ -349,8 +348,8 @@ export default function KnowledgeBaseDetailPage() {
                   <div className="flex gap-2">
                     <button
                       onClick={handleSaveEdit}
-                      disabled={!canWrite}
-                      title={canWrite ? undefined : READONLY_TITLE}
+                      disabled={!canUpdateKb}
+                      title={canUpdateKb ? undefined : READONLY_TITLE}
                       className="px-4 py-2 rounded-[10px] text-sm font-semibold text-white bg-[#002FA7] hover:bg-[#1a47c0] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       保存
@@ -386,25 +385,25 @@ export default function KnowledgeBaseDetailPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {/* 5.30up · 写按钮按 ownership 灰显：org_admin 看平台公共 / 别 org 时 disabled */}
+                    {/* 6.6up · 写按钮按权限 key + ownership + created_by_role 层级灰显 */}
                     <button
                       onClick={() => {
                         setEditing(true);
                         setEditName(kb.name);
                         setEditDesc(kb.description);
                       }}
-                      disabled={!canWrite}
-                      title={canWrite ? undefined : READONLY_TITLE}
+                      disabled={!canUpdateKb}
+                      title={canUpdateKb ? undefined : READONLY_TITLE}
                       className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-[#002FA7] px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-600 disabled:cursor-not-allowed"
                     >
                       <Edit size={12} /> 编辑
                     </button>
                     <button
                       onClick={toggleStatus}
-                      disabled={!canWrite}
+                      disabled={!canUpdateKb}
                       className="text-xs text-gray-600 hover:text-amber-600 px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-600 disabled:cursor-not-allowed"
                       title={
-                        !canWrite
+                        !canUpdateKb
                           ? READONLY_TITLE
                           : kb.status === "active"
                           ? "停用检索：智能体不再命中本库，但文档与绑定关系保留（≠ 删除）"
@@ -415,8 +414,8 @@ export default function KnowledgeBaseDetailPage() {
                     </button>
                     <button
                       onClick={handleDeleteKb}
-                      disabled={!canWrite}
-                      title={canWrite ? undefined : READONLY_TITLE}
+                      disabled={!canDeleteKb}
+                      title={canDeleteKb ? undefined : READONLY_TITLE}
                       className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-red-600 px-3 py-1.5 rounded-[8px] hover:bg-red-50 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-500 disabled:cursor-not-allowed"
                     >
                       <Trash2 size={12} /> 删除
@@ -482,8 +481,8 @@ export default function KnowledgeBaseDetailPage() {
                 />
                 <button
                   onClick={() => fileRef.current?.click()}
-                  disabled={uploading || !canWrite}
-                  title={!canWrite ? READONLY_TITLE : undefined}
+                  disabled={uploading || !canUpdateKb}
+                  title={!canUpdateKb ? READONLY_TITLE : undefined}
                   className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-[#002FA7] hover:bg-[#1a47c0] text-white text-sm font-semibold transition-colors shadow-[0_4px_12px_rgba(0,47,167,0.25)] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Upload size={15} />
@@ -537,22 +536,22 @@ export default function KnowledgeBaseDetailPage() {
                           // 5.28up · A · async ingest 后，pending 也不能再点（否则并发跑同一文档会撞库）
                           // 5.30up · 写按钮按 ownership 灰显
                           disabled={
-                            !canWrite ||
+                            !canUpdateKb ||
                             busyDoc === doc.id ||
                             doc.status === "indexing" ||
                             doc.status === "pending"
                           }
                           className="inline-flex items-center gap-1 text-xs text-gray-600 hover:text-[#002FA7] px-2.5 py-1.5 rounded-[8px] hover:bg-gray-100 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
-                          title={canWrite ? "重建索引" : READONLY_TITLE}
+                          title={canUpdateKb ? "重建索引" : READONLY_TITLE}
                         >
                           <RotateCcw size={12} />
                           重建
                         </button>
                         <button
                           onClick={() => handleDeleteDoc(doc)}
-                          disabled={!canWrite || busyDoc === doc.id}
+                          disabled={!canUpdateKb || busyDoc === doc.id}
                           className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-red-600 px-2.5 py-1.5 rounded-[8px] hover:bg-red-50 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
-                          title={canWrite ? "删除文档" : READONLY_TITLE}
+                          title={canUpdateKb ? "删除文档" : READONLY_TITLE}
                         >
                           <Trash2 size={12} />
                           删除

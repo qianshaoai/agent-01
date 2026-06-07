@@ -14,6 +14,7 @@ import {
 import { PermissionKey } from "@/lib/permission-keys";
 // 6.4up v2 Phase D · D-3 · workflow step builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { requireActorCreatorHierarchy } from "@/lib/creator-hierarchy";
 
 /** 给步骤路由用：custom admin 持有的最高 update key */
 function pickStepUpdateKey(actor: PermissionActor): PermissionKey | null {
@@ -89,6 +90,12 @@ export async function POST(
     return apiError("首次登录需先修改初始密码", "FORBIDDEN");
   }
   const { id: workflowId } = await params;
+  const { data: parentWf } = await db
+    .from("workflows")
+    .select("created_by_role")
+    .eq("id", workflowId)
+    .maybeSingle();
+  if (!parentWf) return apiError("工作流不存在", "NOT_FOUND");
 
   // 6.4up · custom admin：校验对父 workflow 是否有 update 权限
   let admin: { adminId: string; username: string; role: string; tenantCode?: string | null };
@@ -100,6 +107,8 @@ export async function POST(
     if (scopes.length === 0) return apiError("工作流无 scope 归属，无法操作", "FORBIDDEN");
     const ok = await hasPermission(actor, updateKey, scopes);
     if (!ok) return apiError("目标工作流超出权限范围", "FORBIDDEN");
+    const hierarchyErr = requireActorCreatorHierarchy(actor, "workflow", parentWf.created_by_role);
+    if (hierarchyErr) return hierarchyErr;
     admin = {
       adminId: actor.actorId,
       username: actor.username,
@@ -108,13 +117,7 @@ export async function POST(
     };
   } else {
     // 5.11up · builtin：上下级权限校验
-    const { data: wf } = await db
-      .from("workflows")
-      .select("created_by_role")
-      .eq("id", workflowId)
-      .single();
-    if (!wf) return apiError("工作流不存在", "NOT_FOUND");
-    const creatorRole = (wf.created_by_role ?? null) as AdminRole | null;
+    const creatorRole = (parentWf.created_by_role ?? null) as AdminRole | null;
     const actorRole = (access.role ?? "super_admin") as AdminRole;
     if (!canActOnRole(actorRole, creatorRole)) {
       return apiError(noWritePermissionMessage(creatorRole), "FORBIDDEN");
@@ -197,6 +200,8 @@ export async function PUT(
     if (scopes.length === 0) return apiError("工作流无 scope 归属，无法操作", "FORBIDDEN");
     const ok = await hasPermission(actor, updateKey, scopes);
     if (!ok) return apiError("目标工作流超出权限范围", "FORBIDDEN");
+    const hierarchyErr = requireActorCreatorHierarchy(actor, "workflow", wf.created_by_role);
+    if (hierarchyErr) return hierarchyErr;
     admin = {
       adminId: actor.actorId,
       username: actor.username,

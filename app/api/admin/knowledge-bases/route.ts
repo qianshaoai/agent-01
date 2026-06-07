@@ -14,6 +14,7 @@ import {
 // 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用时生效；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import { hasPermission } from "@/lib/permission-actor";
+import { actorHierarchyRole } from "@/lib/creator-hierarchy";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库列表 + 新建
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -174,6 +175,7 @@ export async function POST(req: NextRequest) {
       description,
       embedding_model,
       created_by: ctx.adminId,
+      created_by_role: actorHierarchyRole(ctx.actor, "knowledge_base"),
       tenant_code: ownership.tenant_code, // 5.30up · 写入归属
     })
     .select("*")

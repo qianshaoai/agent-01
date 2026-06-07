@@ -8,6 +8,7 @@ import { z } from "zod";
 import { writeAuditLog } from "@/lib/audit";
 import { requireAccess } from "@/lib/access-facade";
 import { mapResourcePermissionRowsToScopes } from "@/lib/adapters/access/_scope-utils";
+import { actorHierarchyRole } from "@/lib/creator-hierarchy";
 
 const createAgentSchema = z.object({
   agentCode: z.string().min(1, "请填写智能体编号"),
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest) {
   const { page, pageSize, start } = parsePagination(req, 50);
   const [agentsRes, rpRes, acRes, catRes] = await Promise.all([
     db.from("agents")
-      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params, provider_id, published_from_draft_id", { count: "exact" })
+      .select("id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, api_endpoint, api_key_enc, model_params, provider_id, published_from_draft_id, created_by_role", { count: "exact" })
       .order("created_at", { ascending: false })
       .range(start, start + pageSize - 1),
     db.from("resource_permissions").select("resource_id, scope_type, scope_id").eq("resource_type", "agent"),
@@ -169,6 +170,7 @@ export async function POST(req: NextRequest) {
       api_endpoint: apiEndpoint ?? "",
       api_key_enc: apiKey ? encrypt(apiKey) : "",
       model_params: modelParams ?? {},
+      created_by_role: actorHierarchyRole(ctx.actor, "agent"),
     })
     .select()
     .single();

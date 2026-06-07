@@ -6,6 +6,7 @@ import { writeAuditLog } from "@/lib/audit";
 // 6.4up v2 Phase D · D-3 · duplicate 原本零结构闸（R0.1 F8/§7 越权点）→ 补 hierarchy + org scope + v2 duplicate 闸
 import { canActOnRole, noWritePermissionMessage, type AdminRole } from "@/lib/admin-permissions";
 import { requireAccess } from "@/lib/access-facade";
+import { actorHierarchyRole, requireCreatorHierarchy } from "@/lib/creator-hierarchy";
 // 6.4up v2 Phase D · D-3 Fix · 副本同步克隆 resource_permissions（纯函数挑行）
 import { selectDuplicatePermRows, type RawScopeRow } from "@/lib/adapters/access/_scope-utils";
 
@@ -50,6 +51,9 @@ export async function POST(
       if (!canActOnRole(actorRoleGuard, creatorRole)) {
         return apiError(noWritePermissionMessage(creatorRole), "FORBIDDEN");
       }
+    } else {
+      const hierarchyErr = requireCreatorHierarchy(ctx, "workflow", src.created_by_role);
+      if (hierarchyErr) return hierarchyErr;
     }
     // 2) org_admin：source 必须归属本组织（resource_permissions 命中本组织/部门/小组）
     if (ctx.role === "org_admin") {
@@ -103,9 +107,10 @@ export async function POST(
       enabled: false,
       visible_to: src.visible_to,
       created_by: ctx.adminId,
+      created_by_role: actorHierarchyRole(ctx.actor, "workflow"),
       ...(ctx.isCustomAdmin
         ? { created_by_kind: "custom_admin", created_by_role_code: roleCodeSnapshot }
-        : { created_by_role: builtinAdminRole }),
+        : {}),
     })
     .select()
     .single();

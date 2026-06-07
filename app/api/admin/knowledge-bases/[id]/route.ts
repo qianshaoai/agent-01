@@ -14,6 +14,7 @@ import {
 } from "@/lib/scoped-access";
 // 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { requireCreatorHierarchy } from "@/lib/creator-hierarchy";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库详情 / 更新 / 删除
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -135,7 +136,7 @@ export async function PATCH(
   // 先 load row 判归属（404 屏蔽别 org / 不存在）
   const { data: existing, error: loadErr } = await db
     .from("knowledge_bases")
-    .select("id, tenant_code")
+    .select("id, tenant_code, created_by_role")
     .eq("id", id)
     .maybeSingle();
   if (loadErr) {
@@ -153,6 +154,8 @@ export async function PATCH(
     const err = await requireAccess(actor, "knowledge_base", "update", { row: existing });
     if (err) return err;
   }
+  const hierarchyErr = requireCreatorHierarchy(ctx, "knowledge_base", existing.created_by_role);
+  if (hierarchyErr) return hierarchyErr;
 
   // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 表存在
   if ((ctx.role === "org_admin" || ctx.isCustomAdmin) && ctx.tenantCode) {
@@ -281,7 +284,7 @@ export async function DELETE(
   // 先 load row 判归属
   const { data: existing, error: loadErr } = await db
     .from("knowledge_bases")
-    .select("id, name, tenant_code")
+    .select("id, name, tenant_code, created_by_role")
     .eq("id", id)
     .maybeSingle();
   if (loadErr) {
@@ -298,6 +301,8 @@ export async function DELETE(
     const err = await requireAccess(actor, "knowledge_base", "delete", { row: existing });
     if (err) return err;
   }
+  const hierarchyErr = requireCreatorHierarchy(ctx, "knowledge_base", existing.created_by_role);
+  if (hierarchyErr) return hierarchyErr;
 
   // 5.30up · org_admin 额外校验 admin.tenantCode 在 tenants 表存在
   if ((ctx.role === "org_admin" || ctx.isCustomAdmin) && ctx.tenantCode) {

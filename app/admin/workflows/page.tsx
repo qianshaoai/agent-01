@@ -156,37 +156,48 @@ export default function WorkflowsAdminPage() {
   //   modal 内 enabled / visible_to / permissions 禁用；create 按钮按权限显示）
   //   注：分类管理 Tab 已于 6.5up 整体迁至 /admin/tags，本页不再有该 Tab
   const isCustomAdmin = accessSource === "custom_admin";
-  const hasAnyCustomUpdate =
-    customPermissions.has("workflow.update.team") ||
-    customPermissions.has("workflow.update.dept") ||
-    customPermissions.has("workflow.update.org") ||
-    customPermissions.has("workflow.update.all");
-  const hasAnyCustomCreate =
-    customPermissions.has("workflow.create.team") ||
-    customPermissions.has("workflow.create.dept") ||
-    customPermissions.has("workflow.create.org") ||
-    customPermissions.has("workflow.create.all");
+  function canWorkflowAction(action: "create" | "update" | "enable" | "duplicate" | "delete"): boolean {
+    if (adminRole === "super_admin") return true;
+    return (
+      customPermissions.has(`workflow.${action}.team`) ||
+      customPermissions.has(`workflow.${action}.dept`) ||
+      customPermissions.has(`workflow.${action}.org`) ||
+      customPermissions.has(`workflow.${action}.all`)
+    );
+  }
   // R2 收口 · 衍生的 UI 能力（独立 helper 防散落）
-  const canCreateWf = isCustomAdmin ? hasAnyCustomCreate : !!adminRole;
-  const canCopyWf = !isCustomAdmin; // v1 不开放给 custom admin
-  const canDeleteWf = !isCustomAdmin; // v1 不开放
-  const canToggleWfEnabled = !isCustomAdmin; // v1 不开放
+  const canCreateWf = canWorkflowAction("create");
+  const canCopyWf = canWorkflowAction("duplicate");
+  const canDeleteWf = canWorkflowAction("delete");
+  const canToggleWfEnabled = canWorkflowAction("enable");
 
   // 5.11up · 上下级权限工具：super=3 / system=2 / org=1，actor >= creator 才能动
   const ROLE_LEVEL_MAP: Record<string, number> = { super_admin: 3, system_admin: 2, org_admin: 1 };
   const ROLE_LABEL_MAP: Record<string, string> = { super_admin: "超级管理员", system_admin: "系统管理员", org_admin: "组织管理员" };
-  function canTouchWf(wf: Workflow): boolean {
-    // 6.4up · custom admin：持有任一 workflow.update.* 即放行编辑（具体 scope 校验由后端做）
-    if (isCustomAdmin) return hasAnyCustomUpdate;
-    if (!adminRole) return false;
-    const creatorRole = wf.created_by_role ?? "system_admin"; // 兜底
-    return (ROLE_LEVEL_MAP[adminRole] ?? 0) >= (ROLE_LEVEL_MAP[creatorRole] ?? 0);
+  function actorHierarchyRoleForWf(): "super_admin" | "system_admin" | "org_admin" | null {
+    if (adminRole) return adminRole;
+    if (!isCustomAdmin) return null;
+    return (
+      customPermissions.has("workflow.create.all") ||
+      customPermissions.has("workflow.update.all") ||
+      customPermissions.has("workflow.enable.all") ||
+      customPermissions.has("workflow.duplicate.all") ||
+      customPermissions.has("workflow.delete.all")
+    ) ? "system_admin" : "org_admin";
   }
-  function noTouchReason(wf: Workflow): string {
-    if (isCustomAdmin) {
-      return hasAnyCustomUpdate
-        ? "该工作流超出你的可改范围"
-        : "你的角色未授予 workflow 编辑权限";
+  function canActOnWf(wf: Workflow, action: "update" | "enable" | "duplicate" | "delete"): boolean {
+    if (!canWorkflowAction(action)) return false;
+    const actorRole = actorHierarchyRoleForWf();
+    if (!actorRole) return false;
+    const creatorRole = wf.created_by_role ?? "system_admin"; // 兜底
+    return (ROLE_LEVEL_MAP[actorRole] ?? 0) >= (ROLE_LEVEL_MAP[creatorRole] ?? 0);
+  }
+  function canTouchWf(wf: Workflow): boolean {
+    return canActOnWf(wf, "update");
+  }
+  function noTouchReason(wf: Workflow, action: "update" | "enable" | "duplicate" | "delete" = "update"): string {
+    if (!canWorkflowAction(action)) {
+      return "你的角色未授予对应 workflow 权限";
     }
     const creatorRole = wf.created_by_role ?? "system_admin";
     const label = ROLE_LABEL_MAP[creatorRole] ?? creatorRole;
@@ -978,20 +989,23 @@ export default function WorkflowsAdminPage() {
                       {/* 5.11up · 决策 5=A：无权时按钮置灰 + tooltip 说明原因，不直接隐藏 */}
                       {/* 6.4up · custom admin 直接隐藏 启停 / 复制 / 删除 三类按钮（v1 不开放） */}
                       {(() => {
-                        const ok = canTouchWf(wf);
-                        const reason = ok ? "" : noTouchReason(wf);
+                        const canUpdateRow = canActOnWf(wf, "update");
+                        const canEnableRow = canActOnWf(wf, "enable");
+                        const canDuplicateRow = canActOnWf(wf, "duplicate");
+                        const canDeleteRow = canActOnWf(wf, "delete");
+                        const updateReason = canUpdateRow ? "" : noTouchReason(wf, "update");
                         return <>
                           {canToggleWfEnabled && (
-                            <button onClick={() => ok && toggleWfEnabled(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={ok ? (wf.enabled ? "停用" : "启用") : reason}>
+                            <button onClick={() => canEnableRow && toggleWfEnabled(wf)} disabled={!canEnableRow} className={`p-1.5 rounded-[8px] transition-colors ${!canEnableRow ? "text-gray-300 cursor-not-allowed" : wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={canEnableRow ? (wf.enabled ? "停用" : "启用") : noTouchReason(wf, "enable")}>
                               {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                             </button>
                           )}
                           {canCopyWf && (
-                            <button onClick={() => duplicateWf(wf)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="复制工作流" aria-label="复制工作流"><Copy size={14} /></button>
+                            <button onClick={() => canDuplicateRow && duplicateWf(wf)} disabled={!canDuplicateRow} className={`p-1.5 rounded-[8px] transition-colors ${!canDuplicateRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={canDuplicateRow ? "复制工作流" : noTouchReason(wf, "duplicate")} aria-label="复制工作流"><Copy size={14} /></button>
                           )}
-                          <button onClick={() => ok && openEditWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={ok ? "编辑" : reason} aria-label="编辑"><Edit2 size={14} /></button>
+                          <button onClick={() => canUpdateRow && openEditWf(wf)} disabled={!canUpdateRow} className={`p-1.5 rounded-[8px] transition-colors ${!canUpdateRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={canUpdateRow ? "编辑" : updateReason} aria-label="编辑"><Edit2 size={14} /></button>
                           {canDeleteWf && (
-                            <button onClick={() => ok && deleteWf(wf)} disabled={!ok} className={`p-1.5 rounded-[8px] transition-colors ${!ok ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-500"}`} title={ok ? "删除" : reason} aria-label="删除"><Trash2 size={14} /></button>
+                            <button onClick={() => canDeleteRow && deleteWf(wf)} disabled={!canDeleteRow} className={`p-1.5 rounded-[8px] transition-colors ${!canDeleteRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-500"}`} title={canDeleteRow ? "删除" : noTouchReason(wf, "delete")} aria-label="删除"><Trash2 size={14} /></button>
                           )}
                         </>;
                       })()}
@@ -1213,16 +1227,14 @@ export default function WorkflowsAdminPage() {
                                     {/* 5.16up R5 · 上 / 下移：拖拽的窄屏 / 无障碍 fallback */}
                                     <button onClick={() => okStep && moveStep(step, "up")} disabled={!okStep || moving !== null || idx === 0} className={`p-1 rounded-[6px] transition-colors ${(!okStep || idx === 0) ? "text-gray-200 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "上移" : reasonStep} aria-label="上移"><ArrowUp size={12} /></button>
                                     <button onClick={() => okStep && moveStep(step, "down")} disabled={!okStep || moving !== null || idx === steps.length - 1} className={`p-1 rounded-[6px] transition-colors ${(!okStep || idx === steps.length - 1) ? "text-gray-200 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "下移" : reasonStep} aria-label="下移"><ArrowDown size={12} /></button>
-                                    {/* 6.4up · custom admin 隐藏步骤启停 / 删除 */}
+                                    {/* 6.4up · custom admin 仍隐藏步骤启停（后端禁止改 enabled） */}
                                     {!isCustomAdmin && (
                                       <button onClick={() => okStep && toggleStepEnabled(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors text-xs ${!okStep ? "text-gray-300 cursor-not-allowed" : step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={okStep ? (step.enabled ? "停用" : "启用") : reasonStep}>
                                         {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
                                       </button>
                                     )}
                                     <button onClick={() => okStep && openEditStep(wf.id, step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={okStep ? "编辑步骤" : reasonStep}><Edit2 size={12} /></button>
-                                    {!isCustomAdmin && (
-                                      <button onClick={() => okStep && deleteStep(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-400"}`} title={okStep ? "删除步骤" : reasonStep}><Trash2 size={12} /></button>
-                                    )}
+                                    <button onClick={() => okStep && deleteStep(step)} disabled={!okStep} className={`p-1 rounded-[6px] transition-colors ${!okStep ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-400"}`} title={okStep ? "删除步骤" : reasonStep}><Trash2 size={12} /></button>
                                   </>;
                                 })()}
                               </div>
@@ -1693,9 +1705,9 @@ function WorkflowFlowView(props: {
   // 6.5up R1 · picker 接口 capped/totalCount 透传给节点内 AgentBindPopover
   agentsCapped: boolean;
   agentsTotalCount: number;
-  // 6.4up R2.2 · 与列表视图同口径：custom admin 隐藏启停 / 删除；无 update 权时所有"改"按钮置灰 / 隐藏
-  //   canEditSteps：包含 builtin canTouchWf 与 custom hasAnyCustomUpdate 两个语义（外层已合并）
-  //   isCustomAdmin：仅用于决定"启停 / 删除"两类按钮是否完全隐藏（v1 不开放给 custom admin）
+  // 6.6up · 与列表视图同口径：custom admin 仍隐藏启停；删除/编辑/排序按 update 权 + created_by_role 层级判定
+  //   canEditSteps：包含权限 key、scope 后端兜底、created_by_role 层级三层语义（外层已合并）
+  //   isCustomAdmin：仅用于决定"启停"按钮是否完全隐藏（后端禁止 custom 改 enabled）
   canEditSteps: boolean;
   isCustomAdmin: boolean;
 }) {
@@ -1901,18 +1913,15 @@ function WorkflowFlowView(props: {
                     >
                       <Edit2 size={12} />
                     </button>
-                    {/* R2.2 · custom admin 隐藏删除按钮（v1 不开放） */}
-                    {!isCustomAdmin && (
-                      <button
-                        onClick={() => deleteStep(step)}
-                        disabled={!canEditSteps || moving !== null}
-                        className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
-                        title="删除"
-                        aria-label="删除"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
+                    <button
+                      onClick={() => deleteStep(step)}
+                      disabled={!canEditSteps || moving !== null}
+                      className="p-1 rounded-[6px] hover:bg-red-50 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:cursor-not-allowed"
+                      title="删除"
+                      aria-label="删除"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 </div>
 

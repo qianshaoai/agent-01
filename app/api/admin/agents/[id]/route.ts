@@ -4,6 +4,7 @@ import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog, resolveResourceTenantCode } from "@/lib/audit";
 import { requireAccess } from "@/lib/access-facade";
+import { requireCreatorHierarchy } from "@/lib/creator-hierarchy";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,16 @@ export async function PATCH(
       if (err) return err;
     }
   }
+
+  const { data: targetAgent, error: targetErr } = await db
+    .from("agents")
+    .select("name, created_by_role")
+    .eq("id", id)
+    .maybeSingle();
+  if (targetErr) return dbError(targetErr);
+  if (!targetAgent) return apiError("智能体不存在", "NOT_FOUND");
+  const hierarchyErr = requireCreatorHierarchy(ctx, "agent", targetAgent.created_by_role);
+  if (hierarchyErr) return hierarchyErr;
 
   const updates: Record<string, unknown> = {};
 
@@ -127,7 +138,6 @@ export async function PATCH(
   }
 
   if (Object.keys(updates).length > 0) {
-    const { data: agentRow } = await db.from("agents").select("name").eq("id", id).single();
     const { error } = await db
       .from("agents")
       .update(updates)
@@ -145,7 +155,7 @@ export async function PATCH(
       action,
       resourceType: "agent",
       resourceId: id,
-      resourceName: agentRow?.name,
+      resourceName: targetAgent.name,
     });
   }
 
@@ -176,6 +186,16 @@ export async function DELETE(
     const err = await requireAccess(ctx.actor, "agent", "delete", { id });
     if (err) return err;
   }
+
+  const { data: targetAgent, error: targetErr } = await db
+    .from("agents")
+    .select("id, name, created_by_role")
+    .eq("id", id)
+    .maybeSingle();
+  if (targetErr) return dbError(targetErr);
+  if (!targetAgent) return apiError("智能体不存在或已被删除", "NOT_FOUND");
+  const hierarchyErr = requireCreatorHierarchy(ctx, "agent", targetAgent.created_by_role);
+  if (hierarchyErr) return hierarchyErr;
 
   // 1) 引用检查：聚合到工作流维度
   const { data: refs, error: refsErr } = await db

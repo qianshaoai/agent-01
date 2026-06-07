@@ -13,6 +13,7 @@ import {
 import { PermissionKey, getPermissionScopeSuffix } from "@/lib/permission-keys";
 // 6.4up v2 Phase D · D-3 · workflow builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
 import { isResourceEnforced } from "@/lib/access-facade";
+import { actorHierarchyRole } from "@/lib/creator-hierarchy";
 
 export const dynamic = "force-dynamic";
 
@@ -291,7 +292,7 @@ export async function POST(req: NextRequest) {
         enabled: enabled ?? true,
         visible_to: "custom",
         created_by: actor.actorId,
-        // 不写 created_by_role —— custom admin 不在 builtin RBAC 等级体系内
+        created_by_role: actorHierarchyRole(actor, "workflow"),
         created_by_kind: "custom_admin",
         created_by_role_code: roleCodeSnapshot,
       })

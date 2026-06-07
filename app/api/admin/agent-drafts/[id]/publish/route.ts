@@ -7,6 +7,7 @@ import { writeAuditLog } from "@/lib/audit";
 import { canReadRow } from "@/lib/scoped-access";
 import { requireAccess } from "@/lib/access-facade";
 import { hasPermission } from "@/lib/permission-actor";
+import { actorHierarchyRole } from "@/lib/creator-hierarchy";
 
 // 5.14up PR-C · 把草稿发布到正式 agents 表
 //
@@ -255,13 +256,30 @@ export async function POST(
 
   // ── 找已存在的 agent（重发布场景）──
   let existingAgentId: string | null = draft.published_agent_id;
+  let existingAgentCreatedByRole: string | null = null;
+  if (existingAgentId) {
+    const { data: existingAgent } = await db
+      .from("agents")
+      .select("id, created_by_role")
+      .eq("id", existingAgentId)
+      .maybeSingle();
+    if (existingAgent) {
+      existingAgentId = (existingAgent as { id: string }).id;
+      existingAgentCreatedByRole = (existingAgent as { created_by_role: string | null }).created_by_role ?? null;
+    } else {
+      existingAgentId = null;
+    }
+  }
   if (!existingAgentId) {
     const { data: foundAgent } = await db
       .from("agents")
-      .select("id")
+      .select("id, created_by_role")
       .eq("published_from_draft_id", draft.id)
       .maybeSingle();
-    if (foundAgent) existingAgentId = (foundAgent as { id: string }).id;
+    if (foundAgent) {
+      existingAgentId = (foundAgent as { id: string }).id;
+      existingAgentCreatedByRole = (foundAgent as { created_by_role: string | null }).created_by_role ?? null;
+    }
   }
 
   // agent_code 生成
@@ -336,11 +354,15 @@ export async function POST(
     agent_type: draft.agent_type,
     external_url: draft.external_url ?? "",
   };
+  const creatorRoleSnapshot = actorHierarchyRole(ctx.actor, "agent");
 
   let agentId: string;
 
   if (existingAgentId) {
     // 重发布：UPDATE
+    if (!existingAgentCreatedByRole) {
+      agentPayload.created_by_role = creatorRoleSnapshot;
+    }
     const { data: updated, error: upErr } = await db
       .from("agents")
       .update(agentPayload)
@@ -354,7 +376,7 @@ export async function POST(
     agentId = (updated as { id: string }).id;
   } else {
     // 首发：INSERT
-    const insertPayload = { ...agentPayload, agent_code: agentCode };
+    const insertPayload = { ...agentPayload, agent_code: agentCode, created_by_role: creatorRoleSnapshot };
     const { data: inserted, error: insErr } = await db
       .from("agents")
       .insert(insertPayload)

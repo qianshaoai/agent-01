@@ -4,12 +4,42 @@ import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
 import { requireAccess } from "@/lib/access-facade";
+import { requireCreatorHierarchy } from "@/lib/creator-hierarchy";
+import type { AdminActorContext } from "@/lib/session";
 
 function mapResourcePermissionTarget(
   resourceType: string,
 ): { kind: string; writeAction: string } | null {
   if (resourceType === "agent") return { kind: "agent", writeAction: "basic.update" };
   if (resourceType === "workflow") return { kind: "workflow", writeAction: "update" };
+  return null;
+}
+
+async function requireTargetCreatorHierarchy(
+  ctx: AdminActorContext,
+  resourceType: string,
+  resourceId: string,
+): Promise<Response | null> {
+  if (resourceType === "agent") {
+    const { data, error } = await db
+      .from("agents")
+      .select("created_by_role")
+      .eq("id", resourceId)
+      .maybeSingle();
+    if (error) return dbError(error);
+    if (!data) return apiError("智能体不存在", "NOT_FOUND");
+    return requireCreatorHierarchy(ctx, "agent", data.created_by_role);
+  }
+  if (resourceType === "workflow") {
+    const { data, error } = await db
+      .from("workflows")
+      .select("created_by_role")
+      .eq("id", resourceId)
+      .maybeSingle();
+    if (error) return dbError(error);
+    if (!data) return apiError("工作流不存在", "NOT_FOUND");
+    return requireCreatorHierarchy(ctx, "workflow", data.created_by_role);
+  }
   return null;
 }
 
@@ -105,6 +135,8 @@ export async function POST(req: NextRequest) {
     const err = await requireAccess(ctx.actor, target.kind, target.writeAction, { id: resourceId });
     if (err) return err;
   }
+  const hierarchyErr = await requireTargetCreatorHierarchy(ctx, resourceType, resourceId);
+  if (hierarchyErr) return hierarchyErr;
 
   const { data, error } = await db
     .from("resource_permissions")
@@ -138,6 +170,8 @@ export async function DELETE(req: NextRequest) {
     const err = await requireAccess(ctx.actor, target.kind, target.writeAction, { id: perm.resource_id });
     if (err) return err;
   }
+  const hierarchyErr = await requireTargetCreatorHierarchy(ctx, perm.resource_type, perm.resource_id);
+  if (hierarchyErr) return hierarchyErr;
   const { error } = await db.from("resource_permissions").delete().eq("id", id);
   if (error) return dbError(error);
   await writeAuditLog({

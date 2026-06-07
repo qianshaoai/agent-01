@@ -2,6 +2,7 @@ import { apiError } from "@/lib/api-error";
 import { requireAccess } from "@/lib/access-facade";
 import type { AdminPayload } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
+import { requireCreatorHierarchy } from "@/lib/creator-hierarchy";
 import { db } from "@/lib/db";
 import { ingestDocument, KB_STORAGE_BUCKET } from "@/lib/kb/ingest";
 import { requireAdminActor, type AdminActorContext } from "@/lib/session";
@@ -23,7 +24,7 @@ async function loadWritableKb(
 ) {
   const { data: kb, error: kbErr } = await db
     .from("knowledge_bases")
-    .select("id, tenant_code")
+    .select("id, tenant_code, created_by_role")
     .eq("id", id)
     .maybeSingle();
   if (kbErr) {
@@ -39,6 +40,8 @@ async function loadWritableKb(
     const accessErr = await requireAccess(ctx.actor, "knowledge_base", "update", { row: kb });
     if (accessErr) return accessErr;
   }
+  const hierarchyErr = requireCreatorHierarchy(ctx, "knowledge_base", kb.created_by_role);
+  if (hierarchyErr) return hierarchyErr;
 
   if ((ctx.role === "org_admin" || ctx.isCustomAdmin) && ctx.tenantCode) {
     const ok = await validateTenantCode(ctx.tenantCode);

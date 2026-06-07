@@ -14,6 +14,7 @@ import {
 import { PermissionKey } from "@/lib/permission-keys";
 // 6.4up v2 Phase D · D-3 · workflow step builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
+import { requireActorCreatorHierarchy, requireCreatorHierarchy } from "@/lib/creator-hierarchy";
 
 function pickStepUpdateKey(actor: PermissionActor): PermissionKey | null {
   const order: PermissionKey[] = [
@@ -77,11 +78,12 @@ export async function PATCH(
     // 反查 step 所属 workflow + scopes
     const { data: step } = await db
       .from("workflow_steps")
-      .select("workflow_id")
+      .select("workflow_id, workflows ( created_by_role )")
       .eq("id", id)
       .maybeSingle();
     if (!step) return apiError("步骤不存在", "NOT_FOUND");
     const workflowId = (step as { workflow_id: string }).workflow_id;
+    const wf = (step.workflows as unknown) as { created_by_role: string | null } | null;
     const actor = await buildPermissionActor(access);
     const updateKey = pickStepUpdateKey(actor);
     if (!updateKey) return apiError("无修改工作流权限", "FORBIDDEN");
@@ -89,6 +91,8 @@ export async function PATCH(
     if (scopes.length === 0) return apiError("工作流无 scope 归属，无法操作", "FORBIDDEN");
     const ok = await hasPermission(actor, updateKey, scopes);
     if (!ok) return apiError("目标工作流超出权限范围", "FORBIDDEN");
+    const hierarchyErr = requireActorCreatorHierarchy(actor, "workflow", wf?.created_by_role ?? null);
+    if (hierarchyErr) return hierarchyErr;
     admin = {
       adminId: actor.actorId,
       username: actor.username,
@@ -157,11 +161,19 @@ export async function DELETE(
   if (ctx instanceof Response) return ctx;
 
   const { id } = await params;
-  const { data: st } = await db.from("workflow_steps").select("workflow_id").eq("id", id).maybeSingle();
+  const { data: st } = await db
+    .from("workflow_steps")
+    .select("workflow_id, workflows ( created_by_role )")
+    .eq("id", id)
+    .maybeSingle();
   if (!st) return apiError("步骤不存在", "NOT_FOUND");
   if (!ctx.isCustomAdmin) {
     const guard = await ensureCanTouchStep({ role: ctx.role }, id);
     if (guard) return guard;
+  } else {
+    const wf = (st.workflows as unknown) as { created_by_role: string | null } | null;
+    const hierarchyErr = requireCreatorHierarchy(ctx, "workflow", wf?.created_by_role ?? null);
+    if (hierarchyErr) return hierarchyErr;
   }
   // Phase D D-3 · v2 第二闸（builtin；step 删视为 workflow update）
   const e = await requireAccess(ctx.actor, "workflow", "update", {

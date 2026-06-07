@@ -12,6 +12,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
+import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
 
 type KnowledgeBase = {
   id: string;
@@ -22,6 +23,7 @@ type KnowledgeBase = {
   created_at: string;
   // 5.30up · 组织级 ownership：NULL = 平台公共；非空 = 某 org 建
   tenant_code: string | null;
+  created_by_role?: "super_admin" | "system_admin" | "org_admin" | null;
 };
 
 type AdminMe = {
@@ -38,16 +40,11 @@ export default function KnowledgeBasesPage() {
   const [newDesc, setNewDesc] = useState("");
   // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
   const createGuard = useSubmitGuard();
-  // 5.30up · 读当前管理员角色与 tenantCode，给卡片打"平台公共 / 本组织 / 某 org"徽章
-  const [me, setMe] = useState<AdminMe | null>(null);
-  useEffect(() => {
-    fetch("/api/admin/me", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.role) setMe({ role: d.role, tenantCode: d.tenantCode ?? null });
-      })
-      .catch(() => {});
-  }, []);
+  const adminPerms = useAdminPermissions();
+  const me: AdminMe | null = adminPerms.role
+    ? { role: adminPerms.role, tenantCode: adminPerms.tenantCode }
+    : null;
+  const canCreateKb = adminPerms.canAction("kb", "create");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -114,15 +111,17 @@ export default function KnowledgeBasesPage() {
               <span className="text-[13px] text-gray-400 font-medium">({list.length})</span>
             </div>
           </div>
-          <button
-            onClick={() => {
-              setShowCreate(true);
-              setErr("");
-            }}
-            className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-[#002FA7] hover:bg-[#1a47c0] text-white text-sm font-semibold transition-colors shadow-[0_4px_12px_rgba(0,47,167,0.25)]"
-          >
-            <Plus size={16} /> 新建知识库
-          </button>
+          {canCreateKb && (
+            <button
+              onClick={() => {
+                setShowCreate(true);
+                setErr("");
+              }}
+              className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-[#002FA7] hover:bg-[#1a47c0] text-white text-sm font-semibold transition-colors shadow-[0_4px_12px_rgba(0,47,167,0.25)]"
+            >
+              <Plus size={16} /> 新建知识库
+            </button>
+          )}
         </div>
 
         {err && (
@@ -151,7 +150,7 @@ export default function KnowledgeBasesPage() {
               <BookOpen size={24} className="text-gray-300" />
             </div>
             <p className="text-sm font-medium text-gray-500">还没有知识库</p>
-            <p className="text-xs text-gray-400 mt-1">点右上角「新建知识库」开始</p>
+            {canCreateKb && <p className="text-xs text-gray-400 mt-1">点右上角「新建知识库」开始</p>}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
