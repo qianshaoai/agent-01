@@ -326,6 +326,9 @@ export default function AgentBuilderEditPage({
   const { toast } = useToast();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
+  // 6.6up Fix · 供应商列表是否因加载失败 / 无 provider.read 权限而拿不到
+  //   （区别于"确实没配过供应商"，给精确提示用）
+  const [providersUnavailable, setProvidersUnavailable] = useState(false);
   // 5.19up · 组织列表（"指定组织可见"多选用）
   const [tenants, setTenants] = useState<{ code: string; name: string }[]>([]);
   // 5.19up 知识库B · 知识库列表（「知识库」分区多选用；方案A 的接口未上线时为空）
@@ -336,6 +339,10 @@ export default function AgentBuilderEditPage({
   // 5.19up · 当前管理员角色（org_admin 只能发"本组织可见"）
   const [adminRole, setAdminRole] = useState<string | null>(null);
   const isOrgAdmin = adminRole === "org_admin";
+  // 6.6up Fix · 发布可见范围是否按「org 范围」对待 = builtin org_admin，或 custom 角色但无 agent_draft.publish.all。
+  //   与后端 publish 路由口径一致（custom && !publish.all → 强制最大本组织）。修「自定义角色被前端当平台管理员、
+  //   误显示『全平台/指定组织可见』+ 空组织选择器」。
+  const [isPublishOrgScoped, setIsPublishOrgScoped] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -367,18 +374,25 @@ export default function AgentBuilderEditPage({
         fetch(`/api/admin/agent-drafts/${id}`, { cache: "no-store" }),
         // 5.16up 回归修复 · 搭建器只建模型对话型智能体 → 只列 category=model 的供应商，
         // 不混入 coze / 元器 / 清言等智能体平台 API（category=agent）
-        fetch(`/api/admin/model-providers?category=model`, { cache: "no-store" }),
+        // 6.6up Fix · 供应商列表拉取失败（如 custom 角色只授了 agent_draft、缺 provider.read）
+        //   不再 hard-fail，降级为空列表照常打开搭建器（与下方知识库同款容错），修复
+        //   「只授新建草稿权限 → 建得了草稿却打不开搭建器、误弹"权限不足"」的口径不一致。
+        fetch(`/api/admin/model-providers?category=model`, { cache: "no-store" }).catch(() => null),
         // 5.19up · 当前管理员角色（决定可见范围选项）
         fetch(`/api/admin/me`, { cache: "no-store" }),
         // 5.19up 知识库B · 知识库列表（方案A 交付的接口；A 未上线时静默降级为空列表）
         fetch(`/api/admin/knowledge-bases`, { cache: "no-store" }).catch(() => null),
       ]);
       const draftData = await draftRes.json();
-      const provData = await provRes.json();
       const meData = await meRes.json().catch(() => ({}));
       if (!draftRes.ok) throw new Error(draftData.error ?? "草稿加载失败");
-      if (!provRes.ok) throw new Error(provData.error ?? "供应商加载失败");
       const role: string | null = meRes.ok && typeof meData?.role === "string" ? meData.role : null;
+      // 6.6up Fix · 识别「发布按 org 范围对待」：builtin org_admin，或 custom 角色但无 agent_draft.publish.all
+      const meSource: string | null = meRes.ok && typeof meData?.source === "string" ? meData.source : null;
+      const mePerms: string[] = meRes.ok && Array.isArray(meData?.permissions) ? (meData.permissions as string[]) : [];
+      const orgScopedPublish =
+        role === "org_admin" ||
+        (meSource === "custom_admin" && !mePerms.includes("agent_draft.publish.all"));
 
       // 5.19up 知识库B · 解析知识库列表：A 未交付 / 接口异常 → kbList 空、kbFetchOk=false
       // 5.19up 二轮收口 · 保留每个 KB 的 status（A 接口默认返回 active + disabled）
@@ -423,15 +437,27 @@ export default function AgentBuilderEditPage({
           .filter((kid) => validKb.has(kid));
       }
 
-      const loadedProviders = (provData.data ?? []) as Provider[];
+      // 6.6up Fix · 供应商列表降级解析：拉取失败 / 403 → 空列表 + 标记 providersUnavailable，
+      //   让搭建器照常打开，模型设置区给出"缺 API 读取权限"而非"没配供应商"的精确提示。
+      let loadedProviders: Provider[] = [];
+      if (provRes && provRes.ok) {
+        try {
+          const provData = await provRes.json();
+          loadedProviders = (provData.data ?? []) as Provider[];
+        } catch { /* 解析失败 → 空列表降级 */ }
+        setProvidersUnavailable(false);
+      } else {
+        setProvidersUnavailable(true);
+      }
       // 5.29up R5 Fix 1 · 加载老 draft 时把空 model 补成 provider 默认（如果默认在
       //   推荐列表里），避免新 UI 误把 "用户主动选自定义" 跟 "老 draft 空 model" 混淆。
       setDraft(maybeSeedModelFromDefault(d, loadedProviders));
       setProviders(loadedProviders);
       setKnowledgeBases(kbList);
       setAdminRole(role);
-      // 5.19up · 仅 super/system 需要组织列表（org_admin 只发"本组织可见"、无多选）
-      setTenants(role === "org_admin" ? [] : await fetchAllTenants().catch(() => []));
+      setIsPublishOrgScoped(orgScopedPublish);
+      // 5.19up · 仅平台级（super/system）需要组织列表；org 范围（org_admin / custom 无 publish.all）只发本组织、无多选
+      setTenants(orgScopedPublish ? [] : await fetchAllTenants().catch(() => []));
       setDirty(false);
     } catch (e: unknown) {
       toast(e instanceof Error ? e.message : "加载失败", "error");
@@ -709,8 +735,8 @@ export default function AgentBuilderEditPage({
             </button>
             <button
               onClick={() => {
-                // 5.19up · super/system 选「指定组织可见」但未勾组织 → 拦下
-                if (!isOrgAdmin && draft.visibility_config.visible_to === "org"
+                // 5.19up · 平台级 选「指定组织可见」但未勾组织 → 拦下（org 范围无此分支）
+                if (!isPublishOrgScoped && draft.visibility_config.visible_to === "org"
                     && draft.visibility_config.scope.length === 0) {
                   toast("「指定组织可见」请先勾选至少一个组织", "error");
                   return;
@@ -816,11 +842,18 @@ export default function AgentBuilderEditPage({
                       }}
                     />
                     {enabledProviders.length === 0 && (
-                      <p className="text-[11px] text-amber-600 mt-1">
-                        当前没有可用供应商。请先去
-                        <Link href="/admin/model-providers" className="underline mx-1">模型接入</Link>
-                        添加并启用。
-                      </p>
+                      providersUnavailable ? (
+                        <p className="text-[11px] text-amber-600 mt-1">
+                          无法加载模型供应商列表（可能缺少「API 读取」权限）。可先编辑其他内容；
+                          模型选择需联系管理员补授供应商读取权限后再来。
+                        </p>
+                      ) : (
+                        <p className="text-[11px] text-amber-600 mt-1">
+                          当前没有可用供应商。请先去
+                          <Link href="/admin/model-providers" className="underline mx-1">模型接入</Link>
+                          添加并启用。
+                        </p>
+                      )
                     )}
                   </Field>
 
@@ -1045,13 +1078,13 @@ export default function AgentBuilderEditPage({
                     }))}
                     className="w-full h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]"
                   >
-                    {!isOrgAdmin && <option value="all">全平台可见</option>}
-                    <option value="org">{isOrgAdmin ? "本组织可见" : "指定组织可见"}</option>
+                    {!isPublishOrgScoped && <option value="all">全平台可见</option>}
+                    <option value="org">{isPublishOrgScoped ? "本组织可见" : "指定组织可见"}</option>
                     <option value="owner_only">暂不公开（仅自己测试，前台不可见）</option>
                   </select>
                 </Field>
-                {/* 5.19up · 指定组织可见 → 组织多选（仅 super/system；org_admin 固定本组织、无多选）*/}
-                {!isOrgAdmin && draft.visibility_config.visible_to === "org" && (
+                {/* 5.19up · 指定组织可见 → 组织多选（仅平台级 super/system；org 范围固定本组织、无多选）*/}
+                {!isPublishOrgScoped && draft.visibility_config.visible_to === "org" && (
                   <Field label="选择可见组织" hint="勾选的组织，其成员能在前台看到这个智能体">
                     {tenants.length === 0 ? (
                       <p className="text-xs text-gray-400">暂无组织</p>

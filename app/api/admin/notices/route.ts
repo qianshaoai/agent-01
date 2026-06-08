@@ -7,6 +7,7 @@ import { writeAuditLog } from "@/lib/audit";
 // R1：notice 的 POST 因业务转换（org_admin 强制 / 全局-vs-组织）不走 facade，直接 hasPermission
 // R3：POST 改为 OR-check（.all || .org），修 R1 在 finalTenantCode != null 时漏 .all 兜底的窄分支
 import { hasPermission } from "@/lib/permission-actor";
+import { tenantPublicOrOwnFilter } from "@/lib/scoped-access";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,8 @@ export async function GET(req: NextRequest) {
   // 组织管理员只能看自己组织的公告 + 全局公告
   if (ctx.role !== "super_admin" && !(await hasPermission(ctx.actor, "notice.read.all"))) {
     if (!ctx.tenantCode) return paginatedResponse([], 0, page, pageSize);
-    query = query.eq("tenant_code", ctx.tenantCode);
+    // 6.6up Fix · 公共(NULL=全局公告) + 本组织（原 `.eq(本组织)` 与上方注释不符，漏掉全局公告）
+    query = query.or(tenantPublicOrOwnFilter(ctx.tenantCode));
   }
 
   const { data, count } = await query.range(start, start + pageSize - 1);

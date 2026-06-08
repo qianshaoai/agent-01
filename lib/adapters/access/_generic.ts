@@ -35,6 +35,13 @@ export function buildTenantOwnedAdapter(config: {
   table: string;
   permissionPrefix: string; // 例 "kb" / "notice" / "provider"
   readAction?: string;       // 默认 "read"
+  /**
+   * 6.6up Fix · 公共行（tenant_code=NULL）是否对「持任一 read scope」的 org actor 可读。
+   *   平台公共资源 = 全平台可见 → 与 builtin 通道 scoped-access.canReadRow 的「NULL 或本组织」
+   *   对齐：kb / provider / notice 这类共享资源置 true；audit（平台级日志不外泄给 org）等保持
+   *   false（公共行仍需 .read.all）。checkWrite 不受此影响——org 永远不能改平台公共资源。
+   */
+  publicReadableByOrg?: boolean;
 }): ResourceAccessAdapter<TenantOwnedRow> {
   const readAct = config.readAction ?? "read";
   const adapter: ResourceAccessAdapter<TenantOwnedRow> = {
@@ -53,6 +60,18 @@ export function buildTenantOwnedAdapter(config: {
     },
 
     async checkRead(actor, row) {
+      // 6.6up Fix · 公共行（tenant_code=NULL）= 全平台可见：对持任一 read scope（all/org/dept/team）
+      //   的 actor 放行，与 builtin scoped-access.canReadRow 的「NULL 或本组织」对齐。仅
+      //   publicReadableByOrg 声明的共享资源开放；其余资源公共行仍需 .read.all（下方默认分支）。
+      if (!row.tenant_code && config.publicReadableByOrg) {
+        return await checkAnyScopedPermission(
+          actor,
+          config.permissionPrefix,
+          readAct,
+          [],
+          ["all", "org", "dept", "team"],
+        );
+      }
       const scope: "org" | "all" = row.tenant_code ? "org" : "all";
       const key = `${config.permissionPrefix}.${readAct}.${scope}` as PermissionKey;
       return await hasPermission(actor, key, scopesFromTenantRow(row));

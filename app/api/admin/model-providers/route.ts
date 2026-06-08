@@ -11,6 +11,7 @@ import {
   requireWriteAccess,
   validateTenantCode,
   ScopeAdminNoTenantError,
+  tenantPublicOrOwnFilter,
 } from "@/lib/scoped-access";
 // 6.4up v2 Phase D · D-5 · provider enforce（resourceKind=model_provider；env "model_provider" 启用；空时 no-op）
 //   注：system_admin 现状被 requireWriteAccess 排除，seed 也无 provider 写 key，行为一致。
@@ -98,7 +99,8 @@ export async function GET(req: NextRequest) {
     const okAll = await hasPermission(actor, "provider.read.all");
     if (!okAll) {
       if (!actor.tenantCode) return apiError("权限不足", "FORBIDDEN");
-      query = query.eq("tenant_code", actor.tenantCode);
+      // 6.6up Fix · 公共(NULL) + 本组织（原 `.eq(本组织)` 漏掉平台公共供应商）
+      query = query.or(tenantPublicOrOwnFilter(actor.tenantCode));
     }
   } else {
     const scope = listScopeFilter(ctx.access as AdminPayload);

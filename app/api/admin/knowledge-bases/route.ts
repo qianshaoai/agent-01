@@ -10,6 +10,7 @@ import {
   requireWriteAccess,
   validateTenantCode,
   ScopeAdminNoTenantError,
+  tenantPublicOrOwnFilter,
 } from "@/lib/scoped-access";
 // 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用时生效；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
@@ -55,7 +56,8 @@ export async function GET(req: NextRequest) {
     const okAll = await hasPermission(actor, "kb.read.all");
     if (!okAll) {
       if (!actor.tenantCode) return apiError("权限不足", "FORBIDDEN");
-      query = query.eq("tenant_code", actor.tenantCode);
+      // 6.6up Fix · 公共(NULL) + 本组织（原 `.eq(本组织)` 漏掉平台公共知识库）
+      query = query.or(tenantPublicOrOwnFilter(actor.tenantCode));
     }
   } else {
     const scope = listScopeFilter(ctx.access as AdminPayload);

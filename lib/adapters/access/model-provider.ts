@@ -7,4 +7,6 @@ export const providerAccessAdapter = buildTenantOwnedAdapter({
   resourceKind: "model_provider",
   table: "model_providers",
   permissionPrefix: "provider",
+  // 6.6up Fix · 平台公共供应商（tenant_code=NULL）对持任一 provider.read scope 的 org actor 可读
+  publicReadableByOrg: true,
 });

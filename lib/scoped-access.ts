@@ -41,6 +41,17 @@ export type ScopedResourceKind = "model_provider" | "knowledge_base";
 const IMPOSSIBLE_FILTER = "id.eq.00000000-0000-0000-0000-000000000000";
 
 /**
+ * 6.6up Fix · 「平台公共(tenant_code=NULL) + 本组织」列表过滤串（单一口径来源）。
+ *   builtin 通道（listScopeFilter）与 custom/v2 角色的列表分支共用，避免 v2 通道漏掉
+ *   平台公共资源（kb / provider / notice 的 custom 列表分支原本只 `.eq(本组织)` → 漏公共）。
+ *   Supabase .or() 不接受双引号 / 复杂转义；tenantCode 已是 [a-zA-Z0-9_-] 形态。
+ *   Route 用法：query = query.or(tenantPublicOrOwnFilter(tenantCode));
+ */
+export function tenantPublicOrOwnFilter(tenantCode: string): string {
+  return `tenant_code.is.null,tenant_code.eq.${tenantCode}`;
+}
+
+/**
  * GET list 时的 ownership 过滤字符串。
  * Route 用法：
  *   const scope = listScopeFilter(admin);
@@ -50,8 +61,7 @@ export function listScopeFilter(admin: AdminPayload): string | null {
   if (admin.role === "super_admin" || admin.role === "system_admin") return null;
   if (admin.role === "org_admin") {
     if (!admin.tenantCode) return IMPOSSIBLE_FILTER; // R2 §2 fail-closed
-    // Supabase .or() 不接受双引号 / 复杂转义；tenantCode 已是 [a-zA-Z0-9_-] 形态
-    return `tenant_code.is.null,tenant_code.eq.${admin.tenantCode}`;
+    return tenantPublicOrOwnFilter(admin.tenantCode);
   }
   return IMPOSSIBLE_FILTER;
 }
