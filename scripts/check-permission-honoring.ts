@@ -16,6 +16,8 @@
  *
  * 跑法：tsx scripts/check-permission-honoring.ts（已挂到 package.json 的 ci:test）
  */
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { ADMIN_PERMISSION_KEYS } from "../lib/permission-keys/admin";
 
 const SCOPES = new Set(["team", "dept", "org", "all"]);
@@ -26,6 +28,35 @@ function parseKey(key: string): { resource: string; action: string } {
   const last = parts[parts.length - 1];
   const body = SCOPES.has(last) ? parts.slice(0, -1) : parts;
   return { resource: body[0], action: body.slice(1).join(".") };
+}
+
+const PERMISSION_PREFIX_BY_RESOURCE_KIND: Record<string, string> = {
+  knowledge_base: "kb",
+  model_provider: "provider",
+};
+
+function permissionPrefixFor(resourceKind: string): string {
+  return PERMISSION_PREFIX_BY_RESOURCE_KIND[resourceKind] ?? resourceKind;
+}
+
+function buildAllowedActions(): Record<string, Set<string>> {
+  const out: Record<string, Set<string>> = {};
+  for (const key of ADMIN_PERMISSION_KEYS) {
+    const { resource, action } = parseKey(key);
+    (out[resource] ??= new Set<string>()).add(action);
+  }
+  return out;
+}
+
+function listFiles(root: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    const st = statSync(path);
+    if (st.isDirectory()) out.push(...listFiles(path));
+    else if (/\.(ts|tsx)$/.test(name)) out.push(path);
+  }
+  return out;
 }
 
 /**
@@ -83,6 +114,23 @@ for (const key of ADMIN_PERMISSION_KEYS) {
   orphans.push(key);
 }
 
+const allowedActions = buildAllowedActions();
+const invalidRequireAccessCalls: string[] = [];
+const requireAccessCallRe =
+  /requireAccess\s*\(\s*[^,]+,\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']/g;
+for (const file of listFiles(join(process.cwd(), "app", "api", "admin"))) {
+  const text = readFileSync(file, "utf8");
+  for (const m of text.matchAll(requireAccessCallRe)) {
+    const resourceKind = m[1];
+    const action = m[2];
+    const permissionPrefix = permissionPrefixFor(resourceKind);
+    if (allowedActions[permissionPrefix]?.has(action)) continue;
+    invalidRequireAccessCalls.push(
+      `${file.replace(process.cwd() + "\\", "")}: requireAccess("${resourceKind}", "${action}")`,
+    );
+  }
+}
+
 if (orphans.length > 0) {
   console.error(
     "[check-permission-honoring] 以下权限键未声明 honoring（授了可能白授 / 报权限不足）：",
@@ -92,6 +140,15 @@ if (orphans.length > 0) {
     "修法：① 给对应路由接 requireAccess/hasPermission，并在 HONORED_ACTIONS 补该动作；" +
       "② 或登记 INTENTIONAL_ORPHANS 并写清原因（建议同时从键集移除）。",
   );
+  process.exit(1);
+}
+
+if (invalidRequireAccessCalls.length > 0) {
+  console.error(
+    "[check-permission-honoring] 以下 requireAccess 静态 action 不在权限键清单中（可能永远 403）：",
+  );
+  for (const item of invalidRequireAccessCalls) console.error("  - " + item);
+  console.error("修法：把 action 改成对应 permission key 的中段，或补充合法权限键。");
   process.exit(1);
 }
 

@@ -13,8 +13,15 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
-import { Plus, Users, Pencil, Trash2, X, Search } from "lucide-react";
+import { Plus, Users, Pencil, Trash2, X, Search, Shield, Lock } from "lucide-react";
 import { PermissionMatrix } from "./permission-matrix";
+import { RoleDefaultPackModal, type EditableRole } from "./role-default-pack-modal";
+
+// 6.6up · 内置角色（默认包，置顶不可删；「编辑权限」走 role-default-pack-modal）。super_admin 硬全权，不列。
+const BUILTIN_ROLES: { role: EditableRole; label: string; desc: string }[] = [
+  { role: "system_admin", label: "系统管理员", desc: "平台级内置角色 · 默认包对所有系统管理员生效" },
+  { role: "org_admin", label: "组织管理员", desc: "组织级内置角色 · 默认包对所有组织管理员生效" },
+];
 
 type RoleRow = {
   id: string;
@@ -39,7 +46,7 @@ type TemplateMap = Record<
   { label: string; description: string; permissions: readonly string[] }
 >;
 
-export function PermissionsTabCustomRoles() {
+export function PermissionsTabCustomRoles({ adminKeys }: { adminKeys: readonly string[] }) {
   const router = useRouter();
   const { toast } = useToast();
 
@@ -49,6 +56,26 @@ export function PermissionsTabCustomRoles() {
 
   const [editTarget, setEditTarget] = useState<RoleRow | "new" | null>(null);
   const [bindTarget, setBindTarget] = useState<RoleRow | null>(null);
+  // 6.6up · 内置角色默认包信息（卡片显示 key 数 + 受影响人数）+ 当前在编辑哪个内置角色
+  const [builtinPacks, setBuiltinPacks] = useState<Record<string, { count: number; affected: number }>>({});
+  const [editPackRole, setEditPackRole] = useState<EditableRole | null>(null);
+
+  const loadBuiltinPacks = useCallback(async () => {
+    const out: Record<string, { count: number; affected: number }> = {};
+    await Promise.all(
+      BUILTIN_ROLES.map(async ({ role }) => {
+        try {
+          const r = await fetch(`/api/admin/role-permissions/${role}`, { cache: "no-store" });
+          if (!r.ok) return;
+          const d = await r.json();
+          out[role] = { count: (d.permissionKeys ?? []).length, affected: d.affectedCount ?? 0 };
+        } catch {
+          /* 拉不到只影响卡片计数显示，不阻塞 */
+        }
+      }),
+    );
+    setBuiltinPacks(out);
+  }, []);
 
   const loadRoles = useCallback(async () => {
     setLoading(true);
@@ -69,6 +96,7 @@ export function PermissionsTabCustomRoles() {
 
   useEffect(() => {
     void loadRoles();
+    void loadBuiltinPacks();
     fetch("/api/admin/permission-keys", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -79,7 +107,7 @@ export function PermissionsTabCustomRoles() {
         });
       })
       .catch(() => {});
-  }, [loadRoles]);
+  }, [loadRoles, loadBuiltinPacks]);
 
   async function handleDelete(role: RoleRow) {
     if (
@@ -103,12 +131,51 @@ export function PermissionsTabCustomRoles() {
   }
 
   return (
-    <div className="mt-4">
-      <div className="flex justify-end mb-3">
-        <Button onClick={() => setEditTarget("new")}>
-          <Plus size={16} className="mr-1" /> 新建角色
-        </Button>
-      </div>
+    <div className="mt-4 space-y-6">
+      {/* 6.6up · 内置角色（置顶·不可删，只「编辑权限」编辑默认包；super_admin 硬全权不列） */}
+      <section className="space-y-2">
+        <div className="flex items-center gap-1.5">
+          <Lock size={13} className="text-gray-400" />
+          <h2 className="text-[13px] font-medium text-gray-700">内置角色 · 置顶不可删</h2>
+        </div>
+        <div className="space-y-3">
+          {BUILTIN_ROLES.map(({ role, label, desc }) => (
+            <Card key={role} className="p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Shield size={14} className="text-violet-500 shrink-0" />
+                    <h3 className="text-[15px] font-semibold text-gray-900">{label}</h3>
+                    <span className="text-[11px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded">内置</span>
+                  </div>
+                  <p className="text-[12px] text-gray-500 mt-1.5">
+                    {desc}
+                    {builtinPacks[role] && (
+                      <span className="text-gray-400">
+                        {` · 默认包 ${builtinPacks[role].count} 项 · 影响 ${builtinPacks[role].affected} 人`}
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="ghost" size="sm" onClick={() => setEditPackRole(role)}>
+                    <Pencil size={14} className="mr-1" /> 编辑权限
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      {/* 自定义角色 */}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-[13px] font-medium text-gray-700">自定义角色</h2>
+          <Button onClick={() => setEditTarget("new")}>
+            <Plus size={16} className="mr-1" /> 新建角色
+          </Button>
+        </div>
 
       <div className="space-y-3">
         {loading && (
@@ -160,6 +227,7 @@ export function PermissionsTabCustomRoles() {
             </Card>
           ))}
       </div>
+      </section>
 
       {editTarget !== null && meta && (
         <RoleEditModal
@@ -178,6 +246,17 @@ export function PermissionsTabCustomRoles() {
           onClose={(refresh) => {
             setBindTarget(null);
             if (refresh) void loadRoles();
+          }}
+        />
+      )}
+
+      {editPackRole && (
+        <RoleDefaultPackModal
+          role={editPackRole}
+          adminKeys={adminKeys}
+          onClose={(refresh) => {
+            setEditPackRole(null);
+            if (refresh) void loadBuiltinPacks();
           }}
         />
       )}

@@ -1,14 +1,18 @@
 "use client";
 /**
- * 6.4up v2 Phase B · 权限管理 4 Tab 容器
+ * 6.4up v2 Phase B · 权限管理 Tab 容器
  *
- * 3 Tab（6.6up · 「个人权限」入口按用户验收意见隐藏；后端 admin-overrides/admin-effective/
- *   builtin-admins 接口与 admin_permission_overrides 表保留不动，仅去 UI 入口、可逆）：
- *   1. 角色模板（system_admin / org_admin 默认包 + 二次确认 + 双护栏）
- *   2. 自定义角色（搬 6.4up 原 page 内容；行为不变）
- *   3. 权限审计（audit_logs 三类资源筛选）
+ * 2 Tab（6.6up 合并）：
+ *   1. 角色管理（= 内置角色「系统/组织管理员」默认包编辑[双护栏弹窗] + 自定义角色 CRUD；
+ *      原「角色模板」「自定义角色」两 tab 合并，见 components/permissions/v2/tab-custom-roles.tsx
+ *      + role-default-pack-modal.tsx）
+ *   2. 权限审计（audit_logs 三类资源筛选）
  *
- * URL 同步：?tab=templates|custom-roles|audit（默认 custom-roles）
+ * 6.6up 历史：「个人权限」tab 已隐藏（后端 admin-overrides/admin-effective/builtin-admins 接口
+ *   与 admin_permission_overrides 表保留不动、可逆）；「角色模板」并入角色管理（tab-templates.tsx
+ *   逻辑已被 role-default-pack-modal 复用，旧文件留存不引用）。
+ *
+ * URL 同步：?tab=custom-roles|audit（默认 custom-roles；旧 personal/templates 书签回落默认）
  *   - 浏览器前进/后退保留状态
  *   - 深链分享
  *
@@ -19,25 +23,24 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { PageHeader } from "@/components/ui/page-header";
-import { KeyRound, Shield, FileCheck, Users } from "lucide-react";
+import { KeyRound, FileCheck, Users } from "lucide-react";
 
-import { PermissionsTabTemplates } from "@/components/permissions/v2/tab-templates";
 import { PermissionsTabCustomRoles } from "@/components/permissions/v2/tab-custom-roles";
 import { PermissionsTabAudit } from "@/components/permissions/v2/tab-audit";
 
-type TabKey = "templates" | "custom-roles" | "audit";
+type TabKey = "custom-roles" | "audit";
 
 const TABS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
-  { key: "templates", label: "角色模板", icon: <Shield size={14} /> },
-  { key: "custom-roles", label: "自定义角色", icon: <Users size={14} /> },
+  // 6.6up · 「角色模板」（内置角色默认包）已并入「角色管理」（= 内置角色 + 自定义角色）
+  { key: "custom-roles", label: "角色管理", icon: <Users size={14} /> },
   { key: "audit", label: "权限审计", icon: <FileCheck size={14} /> },
 ];
 
 function parseTab(value: string | null): TabKey {
-  if (value === "templates" || value === "custom-roles" || value === "audit") {
+  if (value === "custom-roles" || value === "audit") {
     return value;
   }
-  // 6.6up · 「个人权限」tab 已隐藏；旧 ?tab=personal 书签回落到默认
+  // 6.6up · 旧 ?tab=personal / ?tab=templates 书签回落到默认「角色管理」
   return "custom-roles";
 }
 
@@ -105,10 +108,8 @@ function PermissionsAdminPageInner() {
   const body = useMemo(() => {
     if (permissionGuard !== "ok") return null;
     switch (tab) {
-      case "templates":
-        return <PermissionsTabTemplates adminKeys={adminKeys} />;
       case "custom-roles":
-        return <PermissionsTabCustomRoles />;
+        return <PermissionsTabCustomRoles adminKeys={adminKeys} />;
       case "audit":
         return <PermissionsTabAudit />;
     }

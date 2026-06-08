@@ -21,7 +21,7 @@ async function requireCategoryDisplayWrite(ctx: AdminActorContext, agentId: stri
   ) {
     return apiError("无权管理标签", "FORBIDDEN");
   }
-  const agentErr = await requireAccess(ctx.actor, "agent", "update", { id: agentId });
+  const agentErr = await requireAccess(ctx.actor, "agent", "basic.update", { id: agentId });
   if (agentErr) return agentErr;
   for (const categoryId of categoryIds) {
     const categoryErr = await requireAccess(ctx.actor, "category", "update", { row: { id: categoryId } });
