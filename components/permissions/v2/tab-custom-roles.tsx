@@ -125,55 +125,36 @@ export function PermissionsTabCustomRoles() {
         {!loading &&
           roles.map((r) => (
             <Card key={r.id} className="p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-[15px] font-semibold text-gray-900">{r.name}</h3>
-                    <code className="text-[11px] px-2 py-0.5 bg-gray-100 rounded text-gray-600">
-                      {r.code}
-                    </code>
-                    {!r.enabled && (
-                      <span className="text-[11px] px-2 py-0.5 bg-amber-100 text-amber-700 rounded">
-                        已停用
-                      </span>
-                    )}
-                    <span className="text-[11px] text-gray-400 ml-auto">
-                      已绑定 {r.user_count} 个用户
-                    </span>
-                  </div>
-                  {r.description && (
-                    <p className="text-[12px] text-gray-500 mt-1.5">{r.description}</p>
-                  )}
-                  <div className="flex flex-wrap gap-1.5 mt-3">
-                    {r.permissions.length === 0 && (
-                      <span className="text-[12px] text-gray-400">尚未配置权限</span>
-                    )}
-                    {r.permissions.map((k) => (
-                      <span
-                        key={k}
-                        className="text-[11px] px-2 py-1 bg-[#002FA7]/8 text-[#002FA7] rounded font-mono"
-                      >
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex flex-col gap-2 shrink-0">
-                  <Button variant="ghost" size="sm" onClick={() => setBindTarget(r)}>
-                    <Users size={14} className="mr-1" /> 用户
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setEditTarget(r)}>
-                    <Pencil size={14} className="mr-1" /> 编辑
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleDelete(r)}
-                    className="text-red-600 hover:bg-red-50"
-                  >
-                    <Trash2 size={14} className="mr-1" /> 删除
-                  </Button>
-                </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-[15px] font-semibold text-gray-900">{r.name}</h3>
+                <code className="text-[11px] px-2 py-0.5 bg-gray-100 rounded text-gray-600">
+                  {r.code}
+                </code>
+                {!r.enabled && (
+                  <span className="text-[11px] px-2 py-0.5 bg-amber-100 text-amber-700 rounded">
+                    已停用
+                  </span>
+                )}
+              </div>
+              {r.description && (
+                <p className="text-[12px] text-gray-500 mt-1.5">{r.description}</p>
+              )}
+              {/* 6.6up · 三个操作横排，放在原权限 chip 的位置（chip 已移除、不再显示权限 key） */}
+              <div className="flex items-center gap-2 mt-3">
+                <Button variant="ghost" size="sm" onClick={() => setBindTarget(r)}>
+                  <Users size={14} className="mr-1" /> 用户
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setEditTarget(r)}>
+                  <Pencil size={14} className="mr-1" /> 编辑
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDelete(r)}
+                  className="text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 size={14} className="mr-1" /> 删除
+                </Button>
               </div>
             </Card>
           ))}
@@ -220,7 +201,6 @@ function RoleEditModal({
     ? { name: "", code: "", description: "", enabled: true, permissions: [] as string[] }
     : target;
   const [name, setName] = useState(initial.name);
-  const [code, setCode] = useState(initial.code);
   const [description, setDescription] = useState(initial.description);
   const [enabled, setEnabled] = useState(initial.enabled);
   const [perms, setPerms] = useState<Set<string>>(new Set(initial.permissions));
@@ -234,10 +214,6 @@ function RoleEditModal({
 
   async function save() {
     if (!name.trim()) return toast("请填写角色名称", "error");
-    if (!code.trim()) return toast("请填写角色 code", "error");
-    if (!/^[a-z][a-z0-9_]*$/.test(code)) {
-      return toast("角色 code 仅允许小写字母 + 数字 + 下划线", "error");
-    }
     setSaving(true);
     try {
       const url = isNew
@@ -249,7 +225,6 @@ function RoleEditModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
-          code: code.trim(),
           description,
           enabled,
           permissions: Array.from(perms),
@@ -272,23 +247,10 @@ function RoleEditModal({
   return (
     <ModalShell title={isNew ? "新建自定义角色" : "编辑角色"} onClose={() => onClose()}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-[12px] text-gray-600 mb-1 block">角色名称</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：小组长" />
-          </div>
-          <div>
-            <label className="text-[12px] text-gray-600 mb-1 block">
-              角色 code <span className="text-gray-400">（小写字母 + 数字 + 下划线）</span>
-            </label>
-            <Input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="group_leader"
-              disabled={!isNew}
-              className={!isNew ? "bg-gray-50 text-gray-500" : ""}
-            />
-          </div>
+        <div>
+          <label className="text-[12px] text-gray-600 mb-1 block">角色名称</label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：小组长" />
+          {/* 6.6up · 角色 code 由系统自动生成（role_xxxx），不再让用户填写 */}
         </div>
         <div>
           <label className="text-[12px] text-gray-600 mb-1 block">说明（可选）</label>

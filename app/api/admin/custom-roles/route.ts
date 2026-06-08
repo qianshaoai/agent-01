@@ -9,6 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { apiError, dbError } from "@/lib/api-error";
 import { requireAdmin } from "@/lib/session";
@@ -83,9 +84,15 @@ export async function POST(req: NextRequest) {
   };
 
   if (!name || typeof name !== "string") return apiError("请填写角色名称", "VALIDATION_ERROR");
-  if (!code || typeof code !== "string") return apiError("请填写角色 code", "VALIDATION_ERROR");
-  if (!/^[a-z][a-z0-9_]*$/.test(code)) {
-    return apiError("角色 code 仅允许小写字母 + 数字 + 下划线，且首字符为字母", "VALIDATION_ERROR");
+  // 6.6up · 角色 code 由系统自动生成，前端不再填写；仍兼容显式传入的合法 code（如 API 调用方）
+  let finalCode: string;
+  if (typeof code === "string" && code.trim() !== "") {
+    if (!/^[a-z][a-z0-9_]*$/.test(code.trim())) {
+      return apiError("角色 code 仅允许小写字母 + 数字 + 下划线，且首字符为字母", "VALIDATION_ERROR");
+    }
+    finalCode = code.trim();
+  } else {
+    finalCode = `role_${randomUUID().replace(/-/g, "").slice(0, 10)}`;
   }
 
   // 6.6up · permissions 校验放过 CUSTOM_ROLE_PERMISSION_KEYS（当前等同 ADMIN_PERMISSION_KEYS）
@@ -104,12 +111,12 @@ export async function POST(req: NextRequest) {
   const { data: existing } = await db
     .from("custom_roles")
     .select("id, name, code")
-    .or(`name.eq.${name},code.eq.${code}`)
+    .or(`name.eq.${name},code.eq.${finalCode}`)
     .limit(1);
   if (existing && existing.length > 0) {
     const dup = existing[0] as { name: string; code: string };
     return apiError(
-      dup.name === name ? `角色名称「${name}」已存在` : `角色 code「${code}」已被占用`,
+      dup.name === name ? `角色名称「${name}」已存在` : `角色 code「${finalCode}」已被占用`,
       "VALIDATION_ERROR",
     );
   }
@@ -118,7 +125,7 @@ export async function POST(req: NextRequest) {
     .from("custom_roles")
     .insert({
       name,
-      code,
+      code: finalCode,
       description: description ?? "",
       enabled: enabled ?? true,
       created_by: admin.adminId,
@@ -147,8 +154,8 @@ export async function POST(req: NextRequest) {
     resourceType: "custom_role",
     resourceId: created.id,
     resourceName: name,
-    detail: { code, permissions: validKeys },
+    detail: { code: finalCode, permissions: validKeys },
   });
 
-  return NextResponse.json({ data: { id: created.id, name, code, permissions: validKeys } }, { status: 201 });
+  return NextResponse.json({ data: { id: created.id, name, code: created.code, permissions: validKeys } }, { status: 201 });
 }
