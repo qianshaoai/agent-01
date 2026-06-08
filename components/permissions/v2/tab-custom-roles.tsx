@@ -125,36 +125,37 @@ export function PermissionsTabCustomRoles() {
         {!loading &&
           roles.map((r) => (
             <Card key={r.id} className="p-5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-[15px] font-semibold text-gray-900">{r.name}</h3>
-                <code className="text-[11px] px-2 py-0.5 bg-gray-100 rounded text-gray-600">
-                  {r.code}
-                </code>
-                {!r.enabled && (
-                  <span className="text-[11px] px-2 py-0.5 bg-amber-100 text-amber-700 rounded">
-                    已停用
-                  </span>
-                )}
-              </div>
-              {r.description && (
-                <p className="text-[12px] text-gray-500 mt-1.5">{r.description}</p>
-              )}
-              {/* 6.6up · 三个操作横排，放在原权限 chip 的位置（chip 已移除、不再显示权限 key） */}
-              <div className="flex items-center gap-2 mt-3">
-                <Button variant="ghost" size="sm" onClick={() => setBindTarget(r)}>
-                  <Users size={14} className="mr-1" /> 用户
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setEditTarget(r)}>
-                  <Pencil size={14} className="mr-1" /> 编辑
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDelete(r)}
-                  className="text-red-600 hover:bg-red-50"
-                >
-                  <Trash2 size={14} className="mr-1" /> 删除
-                </Button>
+              {/* 6.6up · 名称/说明在左，三个操作横排靠右；不再显示自动生成的角色 code */}
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-[15px] font-semibold text-gray-900">{r.name}</h3>
+                    {!r.enabled && (
+                      <span className="text-[11px] px-2 py-0.5 bg-amber-100 text-amber-700 rounded">
+                        已停用
+                      </span>
+                    )}
+                  </div>
+                  {r.description && (
+                    <p className="text-[12px] text-gray-500 mt-1.5">{r.description}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="ghost" size="sm" onClick={() => setBindTarget(r)}>
+                    <Users size={14} className="mr-1" /> 用户
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setEditTarget(r)}>
+                    <Pencil size={14} className="mr-1" /> 编辑
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleDelete(r)}
+                    className="text-red-600 hover:bg-red-50"
+                  >
+                    <Trash2 size={14} className="mr-1" /> 删除
+                  </Button>
+                </div>
               </div>
             </Card>
           ))}

@@ -26,7 +26,20 @@ async function computeCustomAdminVisibleWorkflowIds(
   const scope = listReadableScopes(actor);
   if (scope.all) return null; // null 表示不限制
   const orFilters: string[] = [];
-  if (scope.org) orFilters.push(`and(scope_type.eq.org,scope_id.eq.${scope.org})`);
+  if (scope.org) {
+    // 6.6up Fix · read.org 覆盖：本组织 org + 本组织下【所有 dept / team】工作流（与 builtin org_admin
+    //   路径同口径）。原本只 push org-scope 过滤 → 漏掉本组织里的小组级 / 部门级工作流，
+    //   导致 custom 角色看不到它们（"改完工作流不见了"）。
+    orFilters.push(`and(scope_type.eq.org,scope_id.eq.${scope.org})`);
+    const [{ data: orgDepts }, { data: orgTeams }] = await Promise.all([
+      db.from("departments").select("id").eq("tenant_code", scope.org),
+      db.from("teams").select("id").eq("tenant_code", scope.org),
+    ]);
+    const orgDeptIds = (orgDepts ?? []).map((d: { id: string }) => d.id);
+    const orgTeamIds = (orgTeams ?? []).map((t: { id: string }) => t.id);
+    if (orgDeptIds.length > 0) orFilters.push(`and(scope_type.eq.dept,scope_id.in.(${orgDeptIds.join(",")}))`);
+    if (orgTeamIds.length > 0) orFilters.push(`and(scope_type.eq.team,scope_id.in.(${orgTeamIds.join(",")}))`);
+  }
   if (scope.dept) {
     orFilters.push(`and(scope_type.eq.dept,scope_id.eq.${scope.dept})`);
     // dept 范围还看本 dept 下所有 team
