@@ -2,13 +2,13 @@
 /**
  * 6.4up v2 Phase B · 权限管理 4 Tab 容器
  *
- * 4 Tab（D5 顺序）：
- *   1. 个人权限（admin 列表 + 详情 + 单条 override）
- *   2. 角色模板（system_admin / org_admin 默认包 + 二次确认 + 双护栏）
- *   3. 自定义角色（搬 6.4up 原 page 内容；行为不变）
- *   4. 权限审计（audit_logs 三类资源筛选）
+ * 3 Tab（6.6up · 「个人权限」入口按用户验收意见隐藏；后端 admin-overrides/admin-effective/
+ *   builtin-admins 接口与 admin_permission_overrides 表保留不动，仅去 UI 入口、可逆）：
+ *   1. 角色模板（system_admin / org_admin 默认包 + 二次确认 + 双护栏）
+ *   2. 自定义角色（搬 6.4up 原 page 内容；行为不变）
+ *   3. 权限审计（audit_logs 三类资源筛选）
  *
- * URL 同步：?tab=personal|templates|custom-roles|audit
+ * URL 同步：?tab=templates|custom-roles|audit（默认 custom-roles）
  *   - 浏览器前进/后退保留状态
  *   - 深链分享
  *
@@ -19,27 +19,26 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { PageHeader } from "@/components/ui/page-header";
-import { KeyRound, Shield, UserCog, FileCheck, Users } from "lucide-react";
+import { KeyRound, Shield, FileCheck, Users } from "lucide-react";
 
-import { PermissionsTabPersonal } from "@/components/permissions/v2/tab-personal";
 import { PermissionsTabTemplates } from "@/components/permissions/v2/tab-templates";
 import { PermissionsTabCustomRoles } from "@/components/permissions/v2/tab-custom-roles";
 import { PermissionsTabAudit } from "@/components/permissions/v2/tab-audit";
 
-type TabKey = "personal" | "templates" | "custom-roles" | "audit";
+type TabKey = "templates" | "custom-roles" | "audit";
 
 const TABS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
-  { key: "personal", label: "个人权限", icon: <UserCog size={14} /> },
   { key: "templates", label: "角色模板", icon: <Shield size={14} /> },
   { key: "custom-roles", label: "自定义角色", icon: <Users size={14} /> },
   { key: "audit", label: "权限审计", icon: <FileCheck size={14} /> },
 ];
 
 function parseTab(value: string | null): TabKey {
-  if (value === "personal" || value === "templates" || value === "custom-roles" || value === "audit") {
+  if (value === "templates" || value === "custom-roles" || value === "audit") {
     return value;
   }
-  return "personal";
+  // 6.6up · 「个人权限」tab 已隐藏；旧 ?tab=personal 书签回落到默认
+  return "custom-roles";
 }
 
 export default function PermissionsAdminPage() {
@@ -106,8 +105,6 @@ function PermissionsAdminPageInner() {
   const body = useMemo(() => {
     if (permissionGuard !== "ok") return null;
     switch (tab) {
-      case "personal":
-        return <PermissionsTabPersonal adminKeys={adminKeys} />;
       case "templates":
         return <PermissionsTabTemplates adminKeys={adminKeys} />;
       case "custom-roles":

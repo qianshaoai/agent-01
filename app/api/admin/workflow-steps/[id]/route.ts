@@ -122,10 +122,9 @@ export async function PATCH(
 
   const body = await req.json();
 
-  // 6.4up · custom admin 禁止启停步骤（方案 R1.2 不开放范围）
-  if (admin.role === "custom_admin" && body.enabled !== undefined) {
-    return apiError("custom 角色不能启停步骤", "FORBIDDEN");
-  }
+  // 6.6up Fix · 步骤启停归 workflow.update（编辑工作流内部结构）。本路由 custom 分支
+  //   上方已按 pickStepUpdateKey(workflow.update.*) + scope + 层级闸把关，故不再一刀切
+  //   硬拒 enabled——原先"custom 角色不能启停步骤"会让授了 workflow.update 的角色仍开关不了步骤。
 
   const updates: Record<string, unknown> = {};
   if (body.stepOrder !== undefined) updates.step_order = body.stepOrder;

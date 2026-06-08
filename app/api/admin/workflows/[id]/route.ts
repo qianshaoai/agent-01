@@ -128,6 +128,18 @@ function pickUpdateKey(actor: PermissionActor): PermissionKey | null {
   return null;
 }
 
+/** 6.6up Fix · custom admin 持有的最高级 enable key（启停工作流按 workflow.enable.* 判定） */
+function pickEnableKey(actor: PermissionActor): PermissionKey | null {
+  const order: PermissionKey[] = [
+    "workflow.enable.all",
+    "workflow.enable.org",
+    "workflow.enable.dept",
+    "workflow.enable.team",
+  ];
+  for (const k of order) if (actor.permissions.has(k)) return k;
+  return null;
+}
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -143,8 +155,6 @@ export async function PATCH(
   // ── 6.4up · custom admin PATCH ──
   if (isCustomAdminPayload(access)) {
     const actor = await buildPermissionActor(access);
-    const updateKey = pickUpdateKey(actor);
-    if (!updateKey) return apiError("无修改工作流权限", "FORBIDDEN");
 
     const { data: wfRow } = await db
       .from("workflows")
@@ -158,8 +168,45 @@ export async function PATCH(
       // 没有任何 scope 行 → 无法判定归属，custom admin 拒绝（方案 R1.2 P0-5：禁止用 visible_to 字面值兜底）
       return apiError("工作流无 scope 归属，custom admin 无法修改", "FORBIDDEN");
     }
-    const allowed = await hasPermission(actor, updateKey, targetScopes);
-    if (!allowed) return apiError("目标工作流超出权限范围", "FORBIDDEN");
+
+    const body = await req.json();
+    // custom 角色不能调整可见范围（无对应权限键，故意不开放）
+    if (body.visibleTo !== undefined || body.permissions !== undefined) {
+      return apiError("custom 角色不能调整可见范围", "FORBIDDEN");
+    }
+
+    // 6.6up Fix · enable 与 update 各按自己的权限键判定。
+    //   原先 enabled 被一刀切硬拒（"custom 角色不能启停工作流"），导致授了
+    //   workflow.enable.* 仍报"权限不足"——授了白授。现：改 enabled → 需 workflow.enable.*；
+    //   改其它字段 → 需 workflow.update.*（均对目标工作流 scopes 做 hasPermission）。
+    const isEnableChange = body.enabled !== undefined;
+    const isFieldChange =
+      body.name !== undefined ||
+      body.description !== undefined ||
+      body.category !== undefined ||
+      body.sortOrder !== undefined ||
+      Array.isArray(body.categoryIds);
+    if (!isEnableChange && !isFieldChange) {
+      return apiError("没有可更新的字段", "VALIDATION_ERROR");
+    }
+
+    let usedKey: PermissionKey | null = null;
+    if (isEnableChange) {
+      const enableKey = pickEnableKey(actor);
+      if (!enableKey) return apiError("无启停工作流权限", "FORBIDDEN");
+      const ok = await hasPermission(actor, enableKey, targetScopes);
+      if (!ok) return apiError("目标工作流超出权限范围", "FORBIDDEN");
+      usedKey = enableKey;
+    }
+    if (isFieldChange) {
+      const updateKey = pickUpdateKey(actor);
+      if (!updateKey) return apiError("无修改工作流权限", "FORBIDDEN");
+      const ok = await hasPermission(actor, updateKey, targetScopes);
+      if (!ok) return apiError("目标工作流超出权限范围", "FORBIDDEN");
+      usedKey = updateKey;
+    }
+
+    // 创建者层级闸（enable / update 两种改动都要过）
     const hierarchyErr = requireActorCreatorHierarchy(
       actor,
       "workflow",
@@ -167,20 +214,12 @@ export async function PATCH(
     );
     if (hierarchyErr) return hierarchyErr;
 
-    const body = await req.json();
-    // R1.2 · 验收 15：禁止改 enabled；同时禁止改 visible_to / permissions（避免越权扩散可见性）
-    if (body.enabled !== undefined) {
-      return apiError("custom 角色不能启停工作流", "FORBIDDEN");
-    }
-    if (body.visibleTo !== undefined || body.permissions !== undefined) {
-      return apiError("custom 角色不能调整可见范围", "FORBIDDEN");
-    }
-
     const updates: Record<string, unknown> = {};
     if (body.name !== undefined) updates.name = body.name;
     if (body.description !== undefined) updates.description = body.description;
     if (body.category !== undefined) updates.category = body.category;
     if (body.sortOrder !== undefined) updates.sort_order = body.sortOrder;
+    if (body.enabled !== undefined) updates.enabled = body.enabled;
 
     if (Object.keys(updates).length > 0) {
       const { error } = await db.from("workflows").update(updates).eq("id", id);
@@ -196,17 +235,20 @@ export async function PATCH(
       }
     }
 
+    const auditAction = isEnableChange
+      ? (body.enabled === true ? "enable" : "disable")
+      : "update";
     await writeAuditLog({
       adminId: actor.actorId,
       adminUsername: actor.username,
       adminRole: "custom_admin",
       adminTenantCode: actor.tenantCode ?? null,
-      action: "update",
+      action: auditAction,
       resourceType: "workflow",
       resourceId: id,
       resourceName: (wfRow as { name: string }).name,
       detail: {
-        permission_key: updateKey,
+        permission_key: usedKey,
         scopes: targetScopes,
         updates,
       },
