@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Edit2, Key, Settings2, Bot, Tag, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, PlusCircle, X, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight, ChevronDown, ChevronRight } from "lucide-react";
+import { Edit2, Key, Settings2, Bot, Tag, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, Plus, PlusCircle, X, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight, ChevronDown, ChevronRight } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
 import {
@@ -151,6 +151,9 @@ export default function AgentsAdminPage() {
   const adminPerms = useAdminPermissions();
   // 5.7up 旧兜底保留：builtin org_admin 在本页仍按只读展示；custom admin 走权限 key。
   const isOrgAdmin = adminPerms.role === "org_admin";
+  // 6.6up 验收修复 · 恢复 cc96106 误删的「新增智能体」入口（外链/外部接入型唯一创建路径，搭建器只产 chat 型）。
+  // 可见范围严格对齐后端 POST /api/admin/agents：org_admin 与自定义角色被硬拒（5.7up），故仅超管/系统管理员显示。
+  const canCreateAgent = adminPerms.role === "super_admin" || adminPerms.role === "system_admin";
   // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留智能体列表（无 Tab 切换）
   // 6.3up · 智能体管理改风格 · 分类分组默认折叠 · 点 chevron 展开
   const [expandedAgentSections, setExpandedAgentSections] = useState<Set<string>>(new Set());
@@ -301,6 +304,7 @@ export default function AgentsAdminPage() {
     });
   }, [focusAgentId, agents]);
 
+  function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
   function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
   async function openApi(a: Agent) {
     setShowApiModal(a);
@@ -566,6 +570,9 @@ export default function AgentsAdminPage() {
           icon={<Bot size={20} />}
           title="智能体管理"
           badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {agents.length} 个</span>}
+          actions={canCreateAgent ? (
+            <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
+          ) : null}
         />
 
         {/* 6.5up · 智能体列表主体（旧分类管理 Tab 已抽到 /admin/tags） */}
@@ -596,7 +603,7 @@ export default function AgentsAdminPage() {
             {loading ? (
               <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
             ) : groupedSections.length === 0 ? (
-              <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? "暂无智能体" : "没有符合筛选条件的智能体"}</p></div>
+              <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? (canCreateAgent ? "暂无智能体，点击右上角新增" : "暂无智能体") : "没有符合筛选条件的智能体"}</p></div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm table-sticky-head table-fixed">
