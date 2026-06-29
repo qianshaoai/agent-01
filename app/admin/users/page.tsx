@@ -365,7 +365,10 @@ export default function AdminUsersPage() {
         body: JSON.stringify({ action: "set-role", role: newRole }),
       });
       if (res.ok) { setRoleTarget(null); fetchUsers(page); toast("角色变更成功"); }
-      else { toast("角色变更失败", "error"); }
+      else {
+        const data: { error?: string } = await res.json().catch(() => ({}));
+        toast(data.error ?? "角色变更失败", "error");
+      }
     } finally {
       setRoleSaving(false);
     }
