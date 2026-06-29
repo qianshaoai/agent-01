@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
   const kind = detectKind(fileName, mimeType);
   if (!kind) {
     return NextResponse.json(
-      { error: "不支持的文件类型，仅支持图片（jpg/png/gif/webp/bmp）和文档（pdf/docx/xlsx/pptx/csv/txt/md）" },
+      { error: "不支持的文件类型，仅支持图片（jpg/png/gif/webp/bmp）和文档（pdf/doc/docx/xls/xlsx/pptx/csv/txt/md）" },
       { status: 400 }
     );
   }

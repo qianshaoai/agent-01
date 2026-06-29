@@ -8,6 +8,7 @@
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
+import { extractLegacyDocText } from "./legacy-doc-extract";
 
 /** 提取后的文本截断上限（字符数） */
 const TEXT_MAX_CHARS = 30_000;
@@ -39,10 +40,11 @@ export async function parseDocumentText(
       const parser = new PDFParse({ data: buffer });
       const result = await parser.getText();
       raw = result.text ?? "";
-    } else if (ext === "docx" || ext === "doc") {
-      // mammoth 主要支持 .docx；.doc（旧二进制格式）多数情况会失败但试一次
+    } else if (ext === "docx") {
       const result = await mammoth.extractRawText({ buffer });
       raw = result.value ?? "";
+    } else if (ext === "doc") {
+      raw = await extractLegacyDocText(buffer, fileName);
     } else if (ext === "txt" || ext === "md") {
       raw = decodeText(buffer);
     } else if (ext === "csv") {

@@ -1468,7 +1468,9 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   kind,
                   url: data.url,
                   status: ok ? "ok" : "failed",
-                  errorReason: ok ? undefined : "解析失败：文件可能损坏或格式不支持",
+                  errorReason: ok
+                    ? undefined
+                    : data.extractionError ?? "解析失败：文件可能损坏或格式不支持",
                 }
               : f
           )

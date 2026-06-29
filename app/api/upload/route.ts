@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser, requireFullUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { extractLegacyDocText } from "@/lib/legacy-doc-extract";
 import { withRequestLog } from "@/lib/request-logger";
 
 // 支持的文件类型
@@ -125,6 +126,7 @@ export const POST = withRequestLog(async (req: NextRequest) => {
 
     // 提取文本
     let extractedText = "";
+    let extractionError = "";
     if (fileType === "txt" || fileType === "csv" || fileType === "md") {
       // 编码检测：BOM → UTF-8 试解 → 回退 GBK
       let textContent: string;
@@ -183,7 +185,17 @@ export const POST = withRequestLog(async (req: NextRequest) => {
         extractedText = `[Word 文件: ${file.name}，文本提取失败]`;
       }
     } else if (fileType === "doc") {
-      extractedText = `[旧版 Word(.doc) 文件: ${file.name}，请另存为 .docx 格式后重新上传]`;
+      try {
+        const text = await extractLegacyDocText(buffer, file.name);
+        if (text) {
+          extractedText = text.slice(0, 50000);
+        } else {
+          extractionError = "旧版 Word(.doc) 文本提取失败，请确认文件未损坏或在服务端安装 LibreOffice 作为兜底解析器";
+        }
+      } catch (e) {
+        console.error(`[upload] 旧版 Word(.doc) 提取失败 file=${file.name}:`, e instanceof Error ? e.message : e);
+        extractionError = "旧版 Word(.doc) 文本提取失败";
+      }
     } else if (fileType === "xlsx") {
       try {
         const XLSX = await import("xlsx");
@@ -272,6 +284,7 @@ export const POST = withRequestLog(async (req: NextRequest) => {
       kind: isImage ? "image" : "file",
       url: publicUrl.publicUrl,
       extractedText,
+      extractionError,
     });
   } catch (e) {
     console.error("[upload]", e);

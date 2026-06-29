@@ -466,7 +466,7 @@ export default function KnowledgeBaseDetailPage() {
                 <div className="flex-1 min-w-0">
                   <p className="text-[18px] font-semibold text-gray-900 leading-tight">文档</p>
                   <p className="text-[13px] text-gray-500 mt-1">
-                    共 {docs.length} 个 · 支持 pdf / docx / txt / md / csv / xlsx / pptx，单文件 ≤ 20MB
+                    共 {docs.length} 个 · 支持 pdf / doc / docx / txt / md / csv / xls / xlsx / pptx，单文件 ≤ 20MB
                   </p>
                 </div>
                 <input
