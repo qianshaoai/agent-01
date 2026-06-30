@@ -1421,6 +1421,7 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (streaming) return;
       handleSend();
     }
   }
@@ -2160,7 +2161,6 @@ export default function AgentChatPage({ params }: { params: Promise<{ id: string
                   onChange={(e) => { setInput(e.target.value); autoResize(); }}
                   onKeyDown={handleKeyDown}
                   onPaste={onPaste}
-                  disabled={streaming}
                 />
                 <div className="flex items-center justify-between px-3 pb-2.5">
                   <div className="flex items-center gap-1">

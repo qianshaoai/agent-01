@@ -107,6 +107,7 @@ export default function UserAgentChatPage({ params }: { params: Promise<{ id: st
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (streaming) return;
       sendMessage();
     }
   }
@@ -204,7 +205,6 @@ export default function UserAgentChatPage({ params }: { params: Promise<{ id: st
             }}
             onKeyDown={handleKeyDown}
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-            disabled={streaming}
             className="flex-1 resize-none border border-gray-200 rounded-[12px] px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all min-h-[42px] max-h-[120px] overflow-y-auto disabled:opacity-60"
           />
           <button

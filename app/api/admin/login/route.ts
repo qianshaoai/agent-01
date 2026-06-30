@@ -25,11 +25,18 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 方式 1：admins 表（系统内置管理员，例如默认 admin 账号）──────
-  const { data: admin } = await db
+  const dbUnavailable = (where: string, error: { message?: string; code?: string } | null) => {
+    console.error("[admin login db error]", where, error?.code, error?.message);
+    return apiError("无法连接数据库，请检查网络或稍后重试", "SERVICE_UNAVAILABLE");
+  };
+
+  const { data: admin, error: adminError } = await db
     .from("admins")
     .select("*")
     .eq("username", identifier)
-    .single();
+    .maybeSingle();
+
+  if (adminError) return dbUnavailable("admins", adminError);
 
   if (admin) {
     const ok = await bcrypt.compare(password, admin.pwd_hash);
@@ -55,10 +62,12 @@ export async function POST(req: NextRequest) {
 
   // ── 方式 2：users 表（普通用户中被赋予了管理员角色的）────────────
   //   支持手机号 / 用户名登录，角色必须 ≠ 'user' 才能进后台
-  const { data: userMatches } = await db
+  const { data: userMatches, error: usersError } = await db
     .from("users")
     .select("*")
     .or(`phone.eq.${identifier},username.eq.${identifier}`);
+
+  if (usersError) return dbUnavailable("users", usersError);
 
   if (!userMatches || userMatches.length === 0) {
     recordLoginFail(rateKey);
@@ -100,11 +109,12 @@ export async function POST(req: NextRequest) {
       // R2 Fix 4 · 与 builtin org_admin 同口径：所属组织必须 enabled 且未过期才放行
       //   PERSONAL / 空 tenant_code 跳过（个人用户也可能配 custom role）
       if (matchedUser.tenant_code && matchedUser.tenant_code !== "PERSONAL") {
-        const { data: tenant } = await db
+        const { data: tenant, error: tenantError } = await db
           .from("tenants")
           .select("enabled, expires_at")
           .eq("code", matchedUser.tenant_code)
           .single();
+        if (tenantError) return dbUnavailable("tenants/custom-admin", tenantError);
         if (!tenant || !tenant.enabled) {
           return apiError("所属组织已被禁用，无法登录", "FORBIDDEN");
         }
@@ -129,11 +139,12 @@ export async function POST(req: NextRequest) {
 
   // org_admin 需要校验租户是否启用/过期
   if (role === "org_admin" && matchedUser.tenant_code) {
-    const { data: tenant } = await db
+    const { data: tenant, error: tenantError } = await db
       .from("tenants")
       .select("enabled, expires_at")
       .eq("code", matchedUser.tenant_code)
       .single();
+    if (tenantError) return dbUnavailable("tenants/org-admin", tenantError);
     if (!tenant || !tenant.enabled) {
       return apiError("所属组织已被禁用，无法登录", "FORBIDDEN");
     }

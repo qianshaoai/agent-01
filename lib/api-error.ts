@@ -9,6 +9,7 @@ type ErrorCode =
   | "CONFLICT"
   | "PRECONDITION_FAILED"  // 6.4up v2 Phase B B.3 · 并发护栏 412
   | "RATE_LIMITED"
+  | "SERVICE_UNAVAILABLE"
   | "INTERNAL_ERROR";
 
 const STATUS_MAP: Record<ErrorCode, number> = {
@@ -19,6 +20,7 @@ const STATUS_MAP: Record<ErrorCode, number> = {
   CONFLICT: 409,
   PRECONDITION_FAILED: 412,
   RATE_LIMITED: 429,
+  SERVICE_UNAVAILABLE: 503,
   INTERNAL_ERROR: 500,
 };
 

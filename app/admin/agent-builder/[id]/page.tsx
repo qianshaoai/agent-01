@@ -1185,6 +1185,7 @@ export default function AgentBuilderEditPage({
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
+                      if (testStreaming) return;
                       sendTestChat();
                     }
                   }}
@@ -1194,7 +1195,7 @@ export default function AgentBuilderEditPage({
                       ? "先保存草稿再测试…"
                       : "Enter 发送，Shift+Enter 换行"
                   }
-                  disabled={testStreaming || dirty}
+                  disabled={dirty}
                   className="w-full px-3 py-2 border border-gray-200 rounded-[8px] text-sm resize-none focus:outline-none focus:border-[#002FA7] disabled:bg-gray-50 disabled:text-gray-400"
                 />
                 <div className="flex items-center justify-between mt-2">
