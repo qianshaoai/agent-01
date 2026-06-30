@@ -6,9 +6,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Ban,
   Bot,
-  Boxes,
   Copy,
   Edit2,
+  ExternalLink,
   GitBranch,
   Library,
   Loader2,
@@ -16,6 +16,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Tag,
   Trash2,
   X,
 } from "lucide-react";
@@ -145,16 +146,6 @@ function editHref(item: AgentCenterItem) {
   if (item.draftId) return `/admin/agent-builder/${item.draftId}`;
   if (item.agentId) return `/admin/agents?focus=${item.agentId}`;
   return "/admin/agents";
-}
-
-function statCards(data: AgentCenterResponse["stats"]) {
-  return [
-    { label: "总数", value: data.total, icon: Bot, className: "bg-slate-50 text-slate-700 border-slate-100" },
-    { label: "已发布", value: data.published, icon: MessageSquare, className: "bg-emerald-50 text-emerald-700 border-emerald-100" },
-    { label: "草稿", value: data.draft, icon: Edit2, className: "bg-amber-50 text-amber-700 border-amber-100" },
-    { label: "已停用", value: data.disabled, icon: Ban, className: "bg-rose-50 text-rose-700 border-rose-100" },
-    { label: "被工作流引用", value: data.workflowReferenced, icon: GitBranch, className: "bg-violet-50 text-violet-700 border-violet-100" },
-  ];
 }
 
 export function AgentCenterWorkbench() {
@@ -311,11 +302,11 @@ export function AgentCenterWorkbench() {
   }
 
   return (
-    <div className="max-w-[1500px] space-y-5">
+    <div className="max-w-6xl space-y-6">
       <PageHeader
         icon={<Bot size={20} />}
         title="智能体中心"
-        subtitle={`统一查看、筛选和维护智能体。共 ${result.stats.total} 个智能体`}
+        badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {result.pagination.total} 个</span>}
         actions={
           <Button onClick={createDraft} loading={createGuard.loading} className="gap-1.5">
             <Plus size={16} /> 新增智能体
@@ -323,232 +314,245 @@ export function AgentCenterWorkbench() {
         }
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-        {statCards(result.stats).map((card) => {
-          const Icon = card.icon;
-          return (
-            <Card key={card.label} padding="sm" className="border border-gray-100 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs text-gray-500">{card.label}</p>
-                  <p className="mt-1 text-2xl font-semibold text-gray-950">{card.value}</p>
-                </div>
-                <div className={`w-10 h-10 rounded-[8px] border flex items-center justify-center ${card.className}`}>
-                  <Icon size={18} />
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_270px] gap-4 items-start">
-        <Card padding="none" className="overflow-hidden border border-gray-100 shadow-sm">
-          <div className="p-4 border-b border-gray-100 space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-[minmax(220px,1fr)_150px_150px_150px_150px_auto] gap-2">
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索智能体名称、编号或标签"
-                icon={<Search size={16} />}
-              />
-              <select
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                className="h-10 rounded-[10px] border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
-              >
-                <option value="">全部类型</option>
-                <option value="builtin">本平台</option>
-                <option value="external_api">外部接入</option>
-                <option value="external_link">外链跳转</option>
-              </select>
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value)}
-                className="h-10 rounded-[10px] border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
-              >
-                <option value="">全部状态</option>
-                <option value="published">已发布</option>
-                <option value="draft">草稿</option>
-                <option value="disabled">已停用</option>
-              </select>
-              <select
-                value={platform}
-                onChange={(e) => setPlatform(e.target.value)}
-                className="h-10 rounded-[10px] border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
-              >
-                <option value="">全部平台</option>
-                {platformOptions.map((p) => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
-                ))}
-              </select>
-              <select
-                value={pageSize}
-                onChange={(e) => setPageSize(Number(e.target.value))}
-                className="h-10 rounded-[10px] border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
-              >
-                <option value={10}>10 条/页</option>
-                <option value={20}>20 条/页</option>
-                <option value={50}>50 条/页</option>
-              </select>
-              {hasFilters ? (
-                <button
-                  onClick={clearFilters}
-                  className="h-10 px-3 rounded-[10px] text-sm text-gray-500 hover:bg-gray-100 inline-flex items-center justify-center gap-1.5"
-                >
-                  <X size={15} /> 清除
-                </button>
-              ) : (
-                <div className="hidden md:block" />
-              )}
-            </div>
+      <Card padding="md" className="space-y-3">
+        <div className="flex flex-wrap gap-3 items-center">
+          <div className="w-full sm:w-[280px]">
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索智能体名称、编号或标签"
+              icon={<Search size={16} />}
+            />
           </div>
+          <select
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+            className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+          >
+            <option value="">全部类型</option>
+            <option value="builtin">本平台</option>
+            <option value="external_api">外部接入</option>
+            <option value="external_link">外链跳转</option>
+          </select>
+          <select
+            value={categoryId}
+            onChange={(e) => setCategoryId(e.target.value)}
+            className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+          >
+            <option value="">全部标签</option>
+            {result.categories.map((cat) => (
+              <option key={cat.id} value={cat.id}>{cat.name}</option>
+            ))}
+          </select>
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+          >
+            <option value="">全部状态</option>
+            <option value="published">已发布</option>
+            <option value="draft">草稿</option>
+            <option value="disabled">已停用</option>
+          </select>
+          <select
+            value={platform}
+            onChange={(e) => setPlatform(e.target.value)}
+            className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+          >
+            <option value="">全部平台</option>
+            {platformOptions.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+          {hasFilters && (
+            <button onClick={clearFilters} className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2">
+              <X size={13} /> 清除
+            </button>
+          )}
+          <span className="ml-auto text-[12px] text-gray-500">
+            {result.pagination.total} / {result.stats.total} 个
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-gray-500">
+          <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-600">已发布 {result.stats.published}</span>
+          <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-600">草稿 {result.stats.draft}</span>
+          <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-600">已停用 {result.stats.disabled}</span>
+          <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-600">工作流引用 {result.stats.workflowReferenced}</span>
+        </div>
+      </Card>
+
+      <Card padding="none" className="overflow-hidden">
 
           {loading ? (
-            <div className="h-[420px] flex items-center justify-center text-gray-400">
-              <Loader2 size={20} className="animate-spin mr-2" /> 加载中
+            <div className="p-6 space-y-3">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />
+              ))}
             </div>
           ) : error ? (
-            <div className="h-[420px] flex flex-col items-center justify-center gap-3 text-gray-500">
-              <p>{error}</p>
+            <div className="py-16 text-center text-gray-400">
+              <Bot size={32} className="mx-auto mb-3 text-gray-200" />
+              <p className="text-sm mb-3">{error}</p>
               <Button variant="outline" onClick={load}>
                 <RotateCcw size={15} /> 重试
               </Button>
             </div>
           ) : result.data.length === 0 ? (
-            <div className="h-[420px] flex items-center justify-center text-gray-400">
-              暂无智能体
+            <div className="py-16 text-center text-gray-400">
+              <Bot size={32} className="mx-auto mb-3 text-gray-200" />
+              <p className="text-sm">暂无符合条件的智能体</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1050px] table-fixed text-sm">
+              <table className="w-full text-sm table-sticky-head table-fixed">
                 <colgroup>
-                  <col className="w-[27%]" />
-                  <col className="w-[15%]" />
-                  <col className="w-[11%]" />
-                  <col className="w-[11%]" />
-                  <col className="w-[11%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[30%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[17%]" />
+                  <col className="w-[20%]" />
                   <col className="w-[15%]" />
                 </colgroup>
-                <thead className="bg-gray-50 text-gray-500">
+                <thead>
                   <tr>
-                    <th className="px-4 py-3 text-left font-medium">智能体名称</th>
-                    <th className="px-4 py-3 text-left font-medium">标签</th>
-                    <th className="px-4 py-3 text-left font-medium">状态</th>
-                    <th className="px-4 py-3 text-left font-medium">形态 / 平台</th>
-                    <th className="px-4 py-3 text-center font-medium">数据</th>
-                    <th className="px-4 py-3 text-left font-medium">更新时间</th>
-                    <th className="px-4 py-3 text-right font-medium">操作</th>
+                    {(["编号/名称", "标签", "类型/状态", "数据", "操作"] as const).map((h) => (
+                      <th
+                        key={h}
+                        className={`px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider ${
+                          h === "编号/名称" ? "text-left" : "text-center"
+                        }`}
+                      >
+                        {h}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-50">
                   {result.data.map((item) => {
                     const sourceMeta = SOURCE_META[item.source];
                     const statusMeta = STATUS_META[item.status];
                     const busy = busyId === item.id;
                     return (
-                      <tr key={item.id} className="hover:bg-gray-50/70">
-                        <td className="px-4 py-3 align-top">
-                          <Link href={editHref(item)} className="font-medium text-gray-950 hover:text-[#002FA7]">
-                            {item.name}
-                          </Link>
-                          <div className="mt-1 flex items-center gap-2 text-xs text-gray-400">
-                            <span>{item.agentCode ?? (item.draftStatus ? DRAFT_STATUS_LABEL[item.draftStatus] : "草稿")}</span>
-                            {item.description && (
-                              <>
-                                <span className="text-gray-300">/</span>
-                                <span className="truncate" title={item.description}>{item.description}</span>
-                              </>
-                            )}
+                      <tr key={item.id} className="hover:bg-gray-50/50 transition-colors">
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${
+                              item.source === "external_link" ? "bg-orange-50" : "bg-[#002FA7]/8"
+                            }`}>
+                              {item.source === "external_link"
+                                ? <ExternalLink size={16} className="text-orange-500" />
+                                : <Bot size={18} className="text-[#002FA7]" />}
+                            </div>
+                            <div className="min-w-0">
+                              <Link href={editHref(item)} className="font-medium text-gray-800 hover:text-[#002FA7] truncate block">
+                                {item.name}
+                              </Link>
+                              <div className="mt-0.5 flex items-center gap-2 text-[10px] text-gray-400 font-mono">
+                                <span>{item.agentCode ?? (item.draftStatus ? DRAFT_STATUS_LABEL[item.draftStatus] : "DRAFT")}</span>
+                                {item.description && (
+                                  <span className="truncate font-sans text-[11px]" title={item.description}>
+                                    {item.description}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3 align-top">
-                          {item.categories.length === 0 ? (
-                            <span className="text-xs text-gray-300">未设置</span>
-                          ) : (
-                            <div className="flex flex-wrap gap-1.5">
-                              {item.categories.slice(0, 2).map((c) => (
-                                <span key={c.id} className="inline-flex items-center max-w-[110px] rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600">
+                        <td className="px-5 py-4">
+                          {item.categories.length > 0 ? (
+                            <div className="flex flex-wrap items-center justify-center gap-1">
+                              {item.categories.map((c) => (
+                                <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 max-w-[120px]">
+                                  <Tag size={10} className="shrink-0" />
                                   <span className="truncate">{c.name}</span>
                                 </span>
                               ))}
-                              {item.categories.length > 2 && (
-                                <span className="text-[11px] text-gray-400">+{item.categories.length - 2}</span>
-                              )}
+                            </div>
+                          ) : (
+                            <div className="flex justify-center">
+                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 border border-gray-200">未设置标签</span>
                             </div>
                           )}
                         </td>
-                        <td className="px-4 py-3 align-top">
-                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${statusMeta.className}`}>
-                            {statusMeta.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 align-top">
-                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${sourceMeta.className}`}>
-                            {sourceMeta.label}
-                          </span>
-                          <p className="mt-1 text-xs text-gray-400">{platformLabel(item.platform)}</p>
-                        </td>
-                        <td className="px-4 py-3 align-top">
-                          <div className="flex items-center justify-center gap-2 text-xs text-gray-500">
-                            <span className="inline-flex items-center gap-1" title="关联知识库">
-                              <Library size={13} /> {item.knowledgeBaseCount}
+                        <td className="px-5 py-4">
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${sourceMeta.className}`}>
+                              {sourceMeta.label}
                             </span>
-                            <span className="inline-flex items-center gap-1" title="工作流引用">
-                              <GitBranch size={13} /> {item.workflowRefCount}
+                            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">
+                              {platformLabel(item.platform)}
                             </span>
-                            <span className="inline-flex items-center gap-1" title="会话次数">
-                              <MessageSquare size={13} /> {item.conversationCount}
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${statusMeta.className}`}>
+                              {statusMeta.label}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-center text-[11px] text-gray-400">
+                            {formatDate(item.updatedAt)}
+                          </p>
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-gray-500">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200" title="关联知识库">
+                              <Library size={11} /> 知识库 {item.knowledgeBaseCount}
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200" title="工作流引用">
+                              <GitBranch size={11} /> 工作流 {item.workflowRefCount}
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200" title="会话次数">
+                              <MessageSquare size={11} /> 会话 {item.conversationCount}
                             </span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 align-top text-xs text-gray-500">
-                          {formatDate(item.updatedAt)}
-                        </td>
-                        <td className="px-4 py-3 align-top">
-                          <div className="flex items-center justify-end gap-1.5">
+                        <td className="px-5 py-4">
+                          <div className="flex items-center justify-center gap-1">
                             {item.canEdit && (
                               <Link
                                 href={editHref(item)}
-                                className="h-8 w-8 inline-flex items-center justify-center rounded-[8px] text-gray-500 hover:bg-gray-100 hover:text-[#002FA7]"
+                                className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
                                 title="编辑"
+                                aria-label="编辑"
                               >
-                                <Edit2 size={15} />
+                                <Edit2 size={14} />
                               </Link>
                             )}
                             {item.canDuplicate && (
                               <button
                                 onClick={() => duplicateDraft(item)}
                                 disabled={busy}
-                                className="h-8 w-8 inline-flex items-center justify-center rounded-[8px] text-gray-500 hover:bg-gray-100 hover:text-[#002FA7] disabled:opacity-50"
+                                className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-[#002FA7] transition-colors disabled:opacity-50"
                                 title="复制"
+                                aria-label="复制"
                               >
-                                {busy ? <Loader2 size={15} className="animate-spin" /> : <Copy size={15} />}
+                                {busy ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
                               </button>
                             )}
                             {item.rowKind === "agent" && item.canEnable && (
                               <button
                                 onClick={() => toggleAgent(item)}
                                 disabled={busy}
-                                className="h-8 w-8 inline-flex items-center justify-center rounded-[8px] text-gray-500 hover:bg-gray-100 hover:text-[#002FA7] disabled:opacity-50"
+                                className={`p-1.5 rounded-[8px] transition-colors disabled:opacity-50 ${
+                                  item.status === "disabled"
+                                    ? "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                                    : "text-green-600 hover:bg-green-50"
+                                }`}
                                 title={item.status === "disabled" ? "启用" : "停用"}
+                                aria-label={item.status === "disabled" ? "启用" : "停用"}
                               >
-                                {busy ? <Loader2 size={15} className="animate-spin" /> : <Ban size={15} />}
+                                {busy ? <Loader2 size={14} className="animate-spin" /> : <Ban size={14} />}
                               </button>
                             )}
                             {item.canDelete && (
                               <button
                                 onClick={() => removeItem(item)}
                                 disabled={busy}
-                                className="h-8 w-8 inline-flex items-center justify-center rounded-[8px] text-gray-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-50"
+                                className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50"
                                 title="删除"
+                                aria-label="删除"
                               >
-                                {busy ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                                {busy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                               </button>
                             )}
                             {!item.canEdit && !item.canDuplicate && !item.canEnable && !item.canDelete && (
-                              <span className="text-xs text-gray-300">仅查看</span>
+                              <span className="text-xs text-gray-300">仅可查看</span>
                             )}
                           </div>
                         </td>
@@ -560,8 +564,19 @@ export function AgentCenterWorkbench() {
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-3 border-t border-gray-100 px-4 py-3 text-sm text-gray-500">
-            <span>共 {result.pagination.total} 条</span>
+          <div className="flex items-center justify-between gap-3 border-t border-gray-100 px-5 py-3 text-sm text-gray-500">
+            <div className="flex items-center gap-3">
+              <span>共 {result.pagination.total} 条</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="h-8 rounded-[8px] border border-gray-200 bg-white px-2 text-xs text-gray-600 focus:outline-none focus:border-[#002FA7]"
+              >
+                <option value={10}>10 条/页</option>
+                <option value={20}>20 条/页</option>
+                <option value={50}>50 条/页</option>
+              </select>
+            </div>
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" disabled={page <= 1 || loading} onClick={() => setPage((p) => Math.max(1, p - 1))}>
                 上一页
@@ -572,41 +587,7 @@ export function AgentCenterWorkbench() {
               </Button>
             </div>
           </div>
-        </Card>
-
-        <Card padding="none" className="border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-            <Boxes size={17} className="text-gray-500" />
-            <h2 className="text-sm font-semibold text-gray-900">分组</h2>
-          </div>
-          <div className="p-3 space-y-1 max-h-[620px] overflow-y-auto">
-            <button
-              onClick={() => setCategoryId("")}
-              className={`w-full h-9 rounded-[8px] px-3 text-sm flex items-center justify-between ${
-                categoryId === "" ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
-              }`}
-            >
-              <span>全部智能体</span>
-              <span>{result.stats.total}</span>
-            </button>
-            {result.categories.map((cat) => (
-              <button
-                key={cat.id}
-                onClick={() => setCategoryId(cat.id)}
-                className={`w-full min-h-9 rounded-[8px] px-3 py-2 text-sm flex items-center justify-between gap-2 ${
-                  categoryId === cat.id ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
-                }`}
-              >
-                <span className="truncate text-left">{cat.name}</span>
-                <span className="shrink-0">{cat.count}</span>
-              </button>
-            ))}
-            {result.categories.length === 0 && (
-              <p className="py-8 text-center text-sm text-gray-400">暂无分组</p>
-            )}
-          </div>
-        </Card>
-      </div>
+      </Card>
     </div>
   );
 }
