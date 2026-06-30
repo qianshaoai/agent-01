@@ -72,6 +72,7 @@ const navGroups: NavGroup[] = [
     label: "内容",
     items: [
       { href: "/admin/model-providers", label: "API 管理",   icon: Plug,      allowedRoles: RBAC_SCOPED_ROLES, requiredAnyPermissions: ["provider.read.org", "provider.read.all"] },
+      { href: "/admin/agent-center",    label: "智能体中心", icon: Bot,       allowedRoles: ALL_ROLES, requiredAnyPermissions: ["agent.read.org", "agent.read.all", "agent_draft.read.org", "agent_draft.read.all"] },
       { href: "/admin/agent-builder",   label: "智能体搭建", icon: Hammer,    allowedRoles: ALL_ROLES, requiredAnyPermissions: ["agent_draft.read.org", "agent_draft.read.all", "agent_draft.create.org", "agent_draft.create.all"] },
       { href: "/admin/knowledge-bases", label: "知识库管理", icon: BookOpen,  allowedRoles: RBAC_SCOPED_ROLES, requiredAnyPermissions: ["kb.read.org", "kb.read.all"] },
       { href: "/admin/agents",          label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES, requiredAnyPermissions: ["agent.read.org", "agent.read.all"] },
