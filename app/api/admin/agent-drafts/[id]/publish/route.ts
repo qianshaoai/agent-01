@@ -8,6 +8,7 @@ import { canReadRow } from "@/lib/scoped-access";
 import { requireAccess } from "@/lib/access-facade";
 import { hasPermission } from "@/lib/permission-actor";
 import { actorHierarchyRole } from "@/lib/creator-hierarchy";
+import { canAdminUseKnowledgeBase } from "@/lib/kb/visibility";
 
 // 5.14up PR-C · 把草稿发布到正式 agents 表
 //
@@ -53,6 +54,9 @@ async function canReadTenantOwned(
   resourceKind: "model_provider" | "knowledge_base",
   row: TenantOwnedRow,
 ) {
+  if (resourceKind === "knowledge_base") {
+    return canAdminUseKnowledgeBase(ctx, row);
+  }
   if (ctx.isCustomAdmin) {
     return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
   }

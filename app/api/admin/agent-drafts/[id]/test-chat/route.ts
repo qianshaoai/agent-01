@@ -11,6 +11,7 @@ import { buildKbStrictAnswerPrompt, buildKbUnavailablePrompt } from "@/lib/kb/pr
 import { isMetaOrChitchatMessage } from "@/lib/kb/intent";
 import { canReadRow } from "@/lib/scoped-access";
 import { requireAccess } from "@/lib/access-facade";
+import { canAdminUseKnowledgeBase } from "@/lib/kb/visibility";
 
 // 5.14up PR-C · 草稿测试聊天（SSE 流式，不入 messages 表，不扣额度）
 // 权限：super_admin + system_admin 可（system_admin 看不到 key 明文，调用通过后端代理）
@@ -50,6 +51,9 @@ async function canReadTenantOwned(
   resourceKind: "model_provider" | "knowledge_base",
   row: TenantOwnedRow,
 ) {
+  if (resourceKind === "knowledge_base") {
+    return canAdminUseKnowledgeBase(ctx, row);
+  }
   if (ctx.isCustomAdmin) {
     return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
   }

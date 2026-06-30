@@ -8,6 +8,7 @@ import { canReadRow } from "@/lib/scoped-access";
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import { hasPermission, type ResourceScope } from "@/lib/permission-actor";
 import type { PermissionKey } from "@/lib/permission-keys";
+import { canAdminUseKnowledgeBase } from "@/lib/kb/visibility";
 
 // 5.14up PR-B · 复制草稿
 // 复制所有字段，但：
@@ -45,6 +46,9 @@ async function canReadTenantOwned(
   resourceKind: "model_provider" | "knowledge_base",
   row: TenantOwnedRow,
 ) {
+  if (resourceKind === "knowledge_base") {
+    return canAdminUseKnowledgeBase(ctx, row);
+  }
   if (ctx.isCustomAdmin) {
     return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
   }

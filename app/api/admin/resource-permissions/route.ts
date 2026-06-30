@@ -12,6 +12,7 @@ function mapResourcePermissionTarget(
 ): { kind: string; writeAction: string } | null {
   if (resourceType === "agent") return { kind: "agent", writeAction: "basic.update" };
   if (resourceType === "workflow") return { kind: "workflow", writeAction: "update" };
+  if (resourceType === "knowledge_base") return { kind: "knowledge_base", writeAction: "update" };
   return null;
 }
 
@@ -39,6 +40,16 @@ async function requireTargetCreatorHierarchy(
     if (error) return dbError(error);
     if (!data) return apiError("工作流不存在", "NOT_FOUND");
     return requireCreatorHierarchy(ctx, "workflow", data.created_by_role);
+  }
+  if (resourceType === "knowledge_base") {
+    const { data, error } = await db
+      .from("knowledge_bases")
+      .select("created_by_role")
+      .eq("id", resourceId)
+      .maybeSingle();
+    if (error) return dbError(error);
+    if (!data) return apiError("知识库不存在", "NOT_FOUND");
+    return requireCreatorHierarchy(ctx, "knowledge_base", data.created_by_role);
   }
   return null;
 }

@@ -47,6 +47,9 @@ next-env.d.ts
 # Claude Code local config & memory
 .claude/
 
+# Codex local scripts & logs
+.codex/
+
 # Supabase temp files
 supabase/.temp/
 

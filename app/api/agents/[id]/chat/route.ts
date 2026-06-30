@@ -9,6 +9,7 @@ import { isMetaOrChitchatMessage } from "@/lib/kb/intent";
 // 6.4up · 2-B+ KB 会话级记忆池 · 大池 + 小注入窗口
 import { injectKbForTurn, pickInjectK } from "@/lib/kb/inject";
 import type { KbSearchResult } from "@/lib/kb/types";
+import { filterKbIdsForUserVisibility } from "@/lib/kb/visibility";
 
 import { CHAT } from "@/lib/config";
 import { humanizeChatError } from "@/lib/chat-error";
@@ -430,9 +431,10 @@ export const POST = withRequestLog(async (
           .select("kb_id")
           .eq("agent_id", agent.id);
         if (kbErr) throw new Error(kbErr.message);
-        const kbIds = (kbRows ?? [])
+        const rawKbIds = (kbRows ?? [])
           .map((r: { kb_id: string }) => r.kb_id)
           .filter(Boolean);
+        const kbIds = await filterKbIdsForUserVisibility(user, rawKbIds);
         if (kbIds.length > 0) {
           const modelName = (resolvedModelParams.model as string | undefined) ?? "";
           const result = await injectKbForTurn({

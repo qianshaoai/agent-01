@@ -16,6 +16,7 @@ import {
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import { hasPermission } from "@/lib/permission-actor";
 import { actorHierarchyRole } from "@/lib/creator-hierarchy";
+import { canAdminUseKnowledgeBase } from "@/lib/kb/visibility";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库列表 + 新建
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -44,6 +45,7 @@ export async function GET(req: NextRequest) {
 
   // 5.30up · B 半：所有 admin 角色都能读（含 org_admin），按 ownership 过滤
   const statusParam = req.nextUrl.searchParams.get("status");
+  const purpose = req.nextUrl.searchParams.get("purpose");
   let query = db
     .from("knowledge_bases")
     .select("*")
@@ -70,7 +72,14 @@ export async function GET(req: NextRequest) {
     return apiError("获取知识库列表失败", "INTERNAL_ERROR");
   }
 
-  const kbs = (data ?? []) as { id: string }[];
+  let kbs = (data ?? []) as Array<{ id: string; tenant_code: string | null }>;
+  if (purpose === "bind") {
+    const visible: typeof kbs = [];
+    for (const kb of kbs) {
+      if (await canAdminUseKnowledgeBase(ctx, kb)) visible.push(kb);
+    }
+    kbs = visible;
+  }
   // 附每个库的文档数
   const counts: Record<string, number> = {};
   const ids = kbs.map((k) => k.id);

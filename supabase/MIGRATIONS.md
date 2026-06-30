@@ -70,6 +70,7 @@
 | `migration_v53_permission_66_full_backend.sql` | **6.6up · 权限后端全量补齐增量 seed**【已跑 v52 的环境补跑】仅向 `builtin_role_permissions` 增补 `user_group.*` 默认包（system_admin 8 条 / org_admin 4 条），幂等；新库若直接跑已刷新后的 v52，此条重复跑无副作用。 | ☐ |
 | `migration_v54_creator_role_hierarchy.sql` | **6.6up · 资源创建者层级快照**【🔑 agent / KB 层级写闸必跑】`agents` / `knowledge_bases` 加 `created_by_role` + CHECK + 索引；agents 存量保守回填 `system_admin`，KB 优先按 `created_by` 反查 admins/users 角色，反查不到回填 `system_admin`。⚠ 不跑此条 → agent / KB 写接口引用 `created_by_role` 时 500。 | ✅ dev 2026-06-08（独立 dev 库 ysgdmdqygbvfthzylhqn；prod 待 6.6up 上线随包跑） |
 | `migration_v55_fix_role_rpc_audit.sql` | **6.6up · 角色晋升 RPC 审计修复**【🔑 必跑】覆盖 `change_user_role_clear_custom`，修复普通用户晋升 builtin admin 时 RPC 写 `audit_logs` 缺 `admin_username` 导致 PATCH `/api/admin/users/[id]` 返回 400「缺少必填字段」；同时按 actor 来源回填 `admin_username/admin_role/admin_tenant_code`，保留清理 `user_custom_roles` 的事务语义。 | ☐ |
+| `migration_v56_kb_visibility_permissions.sql` | **6.30up · 知识库可见范围**【🔑 必跑】扩展 `resource_permissions.resource_type` CHECK，允许 `'knowledge_base'`，并新增 KB 可见范围索引。⚠ 不跑此条 → 编辑知识库保存“可见范围”时数据库会拒绝写入，搭建器/聊天侧只能维持旧的 ownership 兼容行为。 | ☐ |
 
 > v20 / v23 跳号无对应文件（v23 编号被已搁置的"组织码可改"草案占用）。
 > v45 跳号无对应文件；v46~v49 占号在 `feature/6.3up` 分支（工作流分层级配置：scope_order 表 / RPC / perms→order 触发器 / drop workflows.created_by FK）。

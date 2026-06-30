@@ -3,6 +3,7 @@ import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import type { AdminPayload } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
 import { db } from "@/lib/db";
+import { canAdminUseKnowledgeBase } from "@/lib/kb/visibility";
 import { requireAdminActor, type AdminActorContext } from "@/lib/session";
 import { canReadRow } from "@/lib/scoped-access";
 import { hasPermission, type ResourceScope } from "@/lib/permission-actor";
@@ -36,6 +37,9 @@ async function canReadTenantOwned(
   resourceKind: "model_provider" | "knowledge_base",
   row: TenantOwnedRow,
 ) {
+  if (resourceKind === "knowledge_base") {
+    return canAdminUseKnowledgeBase(ctx, row);
+  }
   if (ctx.isCustomAdmin) {
     return !(await requireAccess(ctx.actor, resourceKind, "read", { row }));
   }

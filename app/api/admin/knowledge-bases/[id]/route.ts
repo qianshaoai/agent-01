@@ -15,6 +15,11 @@ import {
 // 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import { requireCreatorHierarchy } from "@/lib/creator-hierarchy";
+import {
+  loadEffectiveKbVisibilityScopes,
+  normalizeKbVisibilityInputForAdmin,
+  replaceKbVisibilityScopes,
+} from "@/lib/kb/visibility";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库详情 / 更新 / 删除
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -96,6 +101,10 @@ export async function GET(
       knowledgeBase: kb,
       documents: documents ?? [],
       referencedByAgentCount: agentIds.length,
+      visibilityScopes: await loadEffectiveKbVisibilityScopes(
+        id,
+        (kb as { tenant_code: string | null }).tenant_code,
+      ),
     });
   }
 
@@ -113,6 +122,10 @@ export async function GET(
     knowledgeBase: kb,
     documents: documents ?? [],
     referencedByAgents,
+    visibilityScopes: await loadEffectiveKbVisibilityScopes(
+      id,
+      (kb as { tenant_code: string | null }).tenant_code,
+    ),
   });
 }
 
@@ -165,6 +178,18 @@ export async function PATCH(
 
   const body = await req.json();
   const rawPatch: Record<string, unknown> = {};
+  const visibilityInput = "visibilityScopes" in body
+    ? body.visibilityScopes
+    : "visibility_scopes" in body
+      ? body.visibility_scopes
+      : undefined;
+  const hasVisibilityInput = visibilityInput !== undefined;
+  const normalizedVisibility = hasVisibilityInput
+    ? await normalizeKbVisibilityInputForAdmin(ctx, visibilityInput)
+    : null;
+  if (normalizedVisibility && !normalizedVisibility.ok) {
+    return apiError(normalizedVisibility.error, "VALIDATION_ERROR");
+  }
 
   if (typeof body.name === "string") {
     const name = body.name.trim();
@@ -203,7 +228,7 @@ export async function PATCH(
       })()
     : sanitizeUpdatePatch(ctx.access as AdminPayload, rawPatch);
 
-  if (Object.keys(patch).length === 0) {
+  if (Object.keys(patch).length === 0 && !hasVisibilityInput) {
     return apiError("没有可更新的字段", "VALIDATION_ERROR");
   }
 
@@ -234,17 +259,43 @@ export async function PATCH(
     }
   }
 
-  patch.updated_at = new Date().toISOString();
+  if (hasVisibilityInput) {
+    try {
+      await replaceKbVisibilityScopes(
+        id,
+        normalizedVisibility && normalizedVisibility.ok ? normalizedVisibility.scopes : [],
+      );
+    } catch (e) {
+      console.error("[knowledge-bases update visibility]", e);
+      return apiError(e instanceof Error ? e.message : "保存可见范围失败", "INTERNAL_ERROR");
+    }
+  }
 
-  const { data, error } = await db
-    .from("knowledge_bases")
-    .update(patch)
-    .eq("id", id)
-    .select("*")
-    .single();
-  if (error) {
-    console.error("[knowledge-bases update]", error);
-    return apiError("更新知识库失败", "INTERNAL_ERROR");
+  let data: unknown;
+  if (Object.keys(patch).length > 0) {
+    patch.updated_at = new Date().toISOString();
+    const updated = await db
+      .from("knowledge_bases")
+      .update(patch)
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (updated.error) {
+      console.error("[knowledge-bases update]", updated.error);
+      return apiError("更新知识库失败", "INTERNAL_ERROR");
+    }
+    data = updated.data;
+  } else {
+    const fresh = await db
+      .from("knowledge_bases")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (fresh.error) {
+      console.error("[knowledge-bases update reload]", fresh.error);
+      return apiError("更新知识库失败", "INTERNAL_ERROR");
+    }
+    data = fresh.data;
   }
 
   // 5.30up · R2 §5 · 补审计（原 KB PATCH 路由无审计）
@@ -258,10 +309,21 @@ export async function PATCH(
     resourceType: "knowledge_base",
     resourceId: id,
     resourceName: (data as { name: string }).name,
-    detail: { fields: Object.keys(patch).filter((k) => k !== "updated_at") },
+    detail: {
+      fields: [
+        ...Object.keys(patch).filter((k) => k !== "updated_at"),
+        ...(hasVisibilityInput ? ["visibilityScopes"] : []),
+      ],
+    },
   });
 
-  return NextResponse.json(data);
+  return NextResponse.json({
+    ...(data as Record<string, unknown>),
+    visibilityScopes: await loadEffectiveKbVisibilityScopes(
+      id,
+      (data as { tenant_code: string | null }).tenant_code,
+    ),
+  });
 }
 
 /** DELETE：删除知识库。被智能体引用时阻止（避免静默解绑）。文档 / 切片由 FK 级联删除。 */

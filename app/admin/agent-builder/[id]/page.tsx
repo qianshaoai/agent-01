@@ -381,7 +381,7 @@ export default function AgentBuilderEditPage({
         // 5.19up · 当前管理员角色（决定可见范围选项）
         fetch(`/api/admin/me`, { cache: "no-store" }),
         // 5.19up 知识库B · 知识库列表（方案A 交付的接口；A 未上线时静默降级为空列表）
-        fetch(`/api/admin/knowledge-bases`, { cache: "no-store" }).catch(() => null),
+        fetch(`/api/admin/knowledge-bases?purpose=bind`, { cache: "no-store" }).catch(() => null),
       ]);
       const draftData = await draftRes.json();
       const meData = await meRes.json().catch(() => ({}));
