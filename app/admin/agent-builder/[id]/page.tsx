@@ -1,16 +1,25 @@
 "use client";
-import { useState, useEffect, useCallback, useRef, use } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, use } from "react";
 import Link from "next/link";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, CheckCircle2, Save, Send, MessageSquare,
   Settings2, Bot, Sparkles, ChevronRight, ChevronDown, Loader2, X, Eraser, Rocket, ExternalLink, HelpCircle,
+  Plus,
   Library, Check,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 import { getPresetsByCategory, type ProviderPreset } from "@/lib/model-providers/presets";
+import {
+  DEFAULT_KB_VISIBILITY,
+  KbVisibilityScopeEditor,
+  kbVisibilityScopeKey,
+  type KbVisibilityScope,
+  type VisibilityTenant,
+} from "@/components/admin/kb-visibility-scope-editor";
+import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
 
 type TestMsg = { role: "user" | "assistant"; content: string };
 
@@ -29,6 +38,13 @@ type Provider = {
   default_model: string;
   enabled: boolean;
   has_api_key: boolean;
+};
+
+type KnowledgeBaseOption = {
+  id: string;
+  name: string;
+  status: "active" | "disabled";
+  document_count?: number;
 };
 
 type BuilderConfig = {
@@ -324,6 +340,7 @@ export default function AgentBuilderEditPage({
   const { id } = use(params);
 
   const { toast } = useToast();
+  const adminPerms = useAdminPermissions();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   // 6.6up Fix · 供应商列表是否因加载失败 / 无 provider.read 权限而拿不到
@@ -333,9 +350,17 @@ export default function AgentBuilderEditPage({
   const [tenants, setTenants] = useState<{ code: string; name: string }[]>([]);
   // 5.19up 知识库B · 知识库列表（「知识库」分区多选用；方案A 的接口未上线时为空）
   // status 用于：disabled 库可见但禁选（避免静默丢配置），已绑 disabled 时显示告警「不参与检索」
-  const [knowledgeBases, setKnowledgeBases] = useState<
-    { id: string; name: string; status: "active" | "disabled" }[]
-  >([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseOption[]>([]);
+  const [showKbCreateModal, setShowKbCreateModal] = useState(false);
+  const [kbCreateBusy, setKbCreateBusy] = useState(false);
+  const [kbReferenceBusy, setKbReferenceBusy] = useState(false);
+  const [newKbName, setNewKbName] = useState("");
+  const [newKbDesc, setNewKbDesc] = useState("");
+  const [newKbVisibilityScopes, setNewKbVisibilityScopes] = useState<KbVisibilityScope[]>(DEFAULT_KB_VISIBILITY);
+  const [kbVisibilityTree, setKbVisibilityTree] = useState<VisibilityTenant[]>([]);
+  const [kbCanUseAllVisibility, setKbCanUseAllVisibility] = useState(false);
+  const [kbVisibilityOptionsLoading, setKbVisibilityOptionsLoading] = useState(false);
+  const [createdKb, setCreatedKb] = useState<KnowledgeBaseOption | null>(null);
   // 5.19up · 当前管理员角色（org_admin 只能发"本组织可见"）
   const [adminRole, setAdminRole] = useState<string | null>(null);
   const isOrgAdmin = adminRole === "org_admin";
@@ -396,20 +421,21 @@ export default function AgentBuilderEditPage({
 
       // 5.19up 知识库B · 解析知识库列表：A 未交付 / 接口异常 → kbList 空、kbFetchOk=false
       // 5.19up 二轮收口 · 保留每个 KB 的 status（A 接口默认返回 active + disabled）
-      let kbList: { id: string; name: string; status: "active" | "disabled" }[] = [];
+      let kbList: KnowledgeBaseOption[] = [];
       let kbFetchOk = false;
       if (kbRes && kbRes.ok) {
         try {
           const kbData = await kbRes.json();
           const arr: unknown[] = Array.isArray(kbData) ? kbData : (kbData?.data ?? []);
           kbList = arr
-            .map((x) => x as { id?: unknown; name?: unknown; status?: unknown })
+            .map((x) => x as { id?: unknown; name?: unknown; status?: unknown; document_count?: unknown })
             .filter((x) => typeof x.id === "string")
             .map((x) => ({
               id: x.id as string,
               name: typeof x.name === "string" && x.name ? x.name : (x.id as string),
               // disabled 兜底：未传 status 或其他值都按 active 处理（防误标停用）
               status: x.status === "disabled" ? "disabled" : "active",
+              document_count: typeof x.document_count === "number" ? x.document_count : undefined,
             }));
           kbFetchOk = true;
         } catch { /* 解析失败 → 降级为空列表 */ }
@@ -474,37 +500,38 @@ export default function AgentBuilderEditPage({
     setSaveError(false); // 编辑即清除上次保存失败态，放行自动保存重试
   }
 
-  async function save(opts?: { auto?: boolean }) {
-    if (!draft) return;
+  async function save(opts?: { auto?: boolean; draftOverride?: Draft }): Promise<boolean | void> {
+    const targetDraft = opts?.draftOverride ?? draft;
+    if (!targetDraft) return false;
     // 5.29up Phase 2.3 · 手动保存 / 发布前的空值校验（auto-save 跳过，让 admin 安心
     //   迭代不丢字）。custom 模式下 model 必填——否则上线后 chat 兜底 gpt-4o-mini，
     //   非 OpenAI 兼容厂商会 404，体感像智能体坏了。
     if (!opts?.auto) {
-      const err = validateModelBeforeSave(draft, providers);
+      const err = validateModelBeforeSave(targetDraft, providers);
       if (err) {
         toast(err, "error");
-        return;
+        return false;
       }
     }
     setSaving(true);
     try {
       // suggested_questions 文本框 → 数组
-      const sq = (draft.suggested_questions_string ?? "")
+      const sq = (targetDraft.suggested_questions_string ?? "")
         .split("\n")
         .map((s: string) => s.trim())
         .filter(Boolean);
       const payload = {
-        name: draft.name,
-        description: draft.description,
-        provider_id: draft.provider_id,
-        agent_type: draft.agent_type,
-        external_url: draft.external_url,
+        name: targetDraft.name,
+        description: targetDraft.description,
+        provider_id: targetDraft.provider_id,
+        agent_type: targetDraft.agent_type,
+        external_url: targetDraft.external_url,
         builder_config: {
-          ...draft.builder_config,
+          ...targetDraft.builder_config,
           suggested_questions: sq,
         },
-        model_params: draft.model_params,
-        visibility_config: draft.visibility_config,
+        model_params: targetDraft.model_params,
+        visibility_config: targetDraft.visibility_config,
       };
       const res = await fetch(`/api/admin/agent-drafts/${id}`, {
         method: "PATCH",
@@ -515,6 +542,7 @@ export default function AgentBuilderEditPage({
       if (!res.ok) throw new Error(data.error ?? "保存失败");
       setDirty(false);
       setSaveError(false);
+      if (opts?.auto) return true;
       if (!opts?.auto) toast("草稿已保存", "success");
     } catch (e: unknown) {
       setSaveError(true);
@@ -525,6 +553,155 @@ export default function AgentBuilderEditPage({
   }
 
   // 离开页面前提醒未保存
+  const canCreateKb = adminPerms.canAction("kb", "create");
+  const newKbScopeKeys = useMemo(
+    () => new Set(newKbVisibilityScopes.map(kbVisibilityScopeKey)),
+    [newKbVisibilityScopes],
+  );
+  const newKbVisibilityMode =
+    newKbVisibilityScopes.length === 1 && newKbVisibilityScopes[0]?.scope_type === "all"
+      ? "all"
+      : "custom";
+
+  const loadKbVisibilityOptions = useCallback(async () => {
+    if (kbVisibilityTree.length > 0) return;
+    setKbVisibilityOptionsLoading(true);
+    try {
+      const res = await fetch("/api/admin/knowledge-bases/visibility-options?purpose=create", {
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "加载可见范围失败");
+      setKbCanUseAllVisibility(Boolean(json.canUseAll));
+      setKbVisibilityTree((json.tree ?? []) as VisibilityTenant[]);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "加载可见范围失败", "error");
+    } finally {
+      setKbVisibilityOptionsLoading(false);
+    }
+  }, [kbVisibilityTree.length, toast]);
+
+  function setNewKbVisibilityMode(mode: "all" | "custom") {
+    if (mode === "all") {
+      setNewKbVisibilityScopes(DEFAULT_KB_VISIBILITY);
+      return;
+    }
+    setNewKbVisibilityScopes((prev) =>
+      prev.some((scope) => scope.scope_type !== "all")
+        ? prev.filter((scope) => scope.scope_type !== "all")
+        : [],
+    );
+  }
+
+  function toggleNewKbVisibilityScope(scope: KbVisibilityScope) {
+    setNewKbVisibilityScopes((prev) => {
+      const withoutAll = prev.filter((item) => item.scope_type !== "all");
+      const key = kbVisibilityScopeKey(scope);
+      if (withoutAll.some((item) => kbVisibilityScopeKey(item) === key)) {
+        return withoutAll.filter((item) => kbVisibilityScopeKey(item) !== key);
+      }
+      return [...withoutAll, scope];
+    });
+  }
+
+  function openKbCreateModal() {
+    if (!canCreateKb) {
+      toast("当前账号没有创建知识库权限", "error");
+      return;
+    }
+    setNewKbName("");
+    setNewKbDesc("");
+    setNewKbVisibilityScopes(DEFAULT_KB_VISIBILITY);
+    setShowKbCreateModal(true);
+    void loadKbVisibilityOptions();
+  }
+
+  function upsertKnowledgeBaseOption(kb: KnowledgeBaseOption) {
+    setKnowledgeBases((prev) => {
+      const without = prev.filter((item) => item.id !== kb.id);
+      return [kb, ...without];
+    });
+  }
+
+  async function bindKnowledgeBaseToDraft(kb: KnowledgeBaseOption, opts?: { goUpload?: boolean }) {
+    if (!draft) return false;
+    setKbReferenceBusy(true);
+    const currentIds = draft.builder_config.knowledge_base_ids ?? [];
+    const nextIds = currentIds.includes(kb.id) ? currentIds : [...currentIds, kb.id];
+    const nextDraft: Draft = {
+      ...draft,
+      builder_config: {
+        ...draft.builder_config,
+        knowledge_base_ids: nextIds,
+      },
+    };
+    setDraft(nextDraft);
+    setDirty(true);
+    setSaveError(false);
+    try {
+      const saved = await save({ auto: true, draftOverride: nextDraft });
+      if (saved !== true) {
+        setDirty(true);
+        toast("知识库已创建，但未能引用到当前智能体，请重试", "error");
+        return false;
+      }
+      setCreatedKb(null);
+      toast("已创建并引用到当前智能体", "success");
+      if (opts?.goUpload) {
+        window.location.href = `/admin/knowledge-bases/${encodeURIComponent(kb.id)}?from=agent-builder&draftId=${encodeURIComponent(id)}`;
+      }
+      return true;
+    } finally {
+      setKbReferenceBusy(false);
+    }
+  }
+
+  async function handleCreateKnowledgeBase() {
+    if (!newKbName.trim()) {
+      toast("请填写知识库名称", "error");
+      return;
+    }
+    if (newKbVisibilityMode === "custom" && newKbVisibilityScopes.length === 0) {
+      toast("请至少选择一个可见组织、部门或小组", "error");
+      return;
+    }
+    setKbCreateBusy(true);
+    try {
+      const res = await fetch("/api/admin/knowledge-bases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newKbName.trim(),
+          description: newKbDesc.trim(),
+          visibilityScopes: newKbVisibilityScopes,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "创建知识库失败");
+      if (!json?.id) throw new Error("创建知识库失败：接口未返回知识库 ID");
+      const kb: KnowledgeBaseOption = {
+        id: json.id,
+        name: typeof json.name === "string" && json.name ? json.name : newKbName.trim(),
+        status: json.status === "disabled" ? "disabled" : "active",
+        document_count: typeof json.document_count === "number" ? json.document_count : 0,
+      };
+      upsertKnowledgeBaseOption(kb);
+      setCreatedKb(kb);
+      setShowKbCreateModal(false);
+      setNewKbName("");
+      setNewKbDesc("");
+      setNewKbVisibilityScopes(DEFAULT_KB_VISIBILITY);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "创建知识库失败", "error");
+    } finally {
+      setKbCreateBusy(false);
+    }
+  }
+
+  async function goUploadKnowledgeBase(kb: KnowledgeBaseOption) {
+    await bindKnowledgeBaseToDraft(kb, { goUpload: true });
+  }
+
   useEffect(() => {
     function beforeUnload(e: BeforeUnloadEvent) {
       if (dirty) {
@@ -551,7 +728,10 @@ export default function AgentBuilderEditPage({
     const text = testInput.trim();
     if (!text || testStreaming) return;
     // 5.16up · 自动保存：测试前把未落库的改动刷一遍，确保测的是最新配置
-    if (dirty) await save({ auto: true });
+    if (dirty) {
+      const saved = await save({ auto: true });
+      if (saved !== true) return;
+    }
     if (draft.agent_type !== "chat") {
       toast("外链型智能体不支持测试聊天", "error");
       return;
@@ -661,7 +841,10 @@ export default function AgentBuilderEditPage({
       return;
     }
     // 5.16up · 自动保存：发布前刷盘（publish 接口读 DB 里的草稿）
-    if (dirty) await save({ auto: true });
+    if (dirty) {
+      const saved = await save({ auto: true });
+      if (saved !== true) return;
+    }
     await publishGuard.submit(async (idempotencyKey) => {
       try {
         const res = await fetch(`/api/admin/agent-drafts/${id}/publish`, {
@@ -994,6 +1177,21 @@ export default function AgentBuilderEditPage({
                 <SectionTitle icon={<Library size={16} />} title="5. 知识库" desc="给智能体挂知识库；对话时按用户问题自动检索相关资料、注入回答。" />
                 <div className="space-y-3 mt-3">
                   <Field label="绑定知识库" hint="勾选的知识库，对话时会按用户问题检索相关片段供智能体参考；可多选。已停用的知识库不参与检索（v39 RPC 兜底过滤），但仍展示在列表里避免静默丢配置。">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs text-gray-400">
+                        已绑定 {draft.builder_config.knowledge_base_ids?.length ?? 0} 个知识库
+                      </span>
+                      {canCreateKb && (
+                        <button
+                          type="button"
+                          onClick={openKbCreateModal}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-[#002FA7]/20 bg-[#002FA7]/5 px-3 text-xs font-medium text-[#002FA7] transition hover:bg-[#002FA7]/10"
+                        >
+                          <Plus size={13} />
+                          新建知识库
+                        </button>
+                      )}
+                    </div>
                     {knowledgeBases.length === 0 ? (
                       <p className="text-xs text-gray-400">
                         {isOrgAdmin
@@ -1044,6 +1242,17 @@ export default function AgentBuilderEditPage({
                               />
                               <div className="flex-1 min-w-0">
                                 <span className={isDisabledKb ? "text-gray-500" : "text-gray-700"}>{kb.name}</span>
+                                <span className="ml-2 text-[11px] text-gray-400">
+                                  {typeof kb.document_count === "number" ? `${kb.document_count} 个文档` : "文档数未知"}
+                                </span>
+                                {kb.document_count === 0 && (
+                                  <a
+                                    href={`/admin/knowledge-bases/${encodeURIComponent(kb.id)}?from=agent-builder&draftId=${encodeURIComponent(id)}`}
+                                    className="ml-2 text-[11px] text-[#002FA7] hover:underline"
+                                  >
+                                    去上传
+                                  </a>
+                                )}
                                 {isDisabledKb && (
                                   <span className="ml-2 text-[11px] text-amber-600">
                                     {checked
@@ -1228,6 +1437,108 @@ export default function AgentBuilderEditPage({
       </div>
 
       {/* 发布弹窗 */}
+      {showKbCreateModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => !kbCreateBusy && setShowKbCreateModal(false)}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-[18px] bg-white p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">新建知识库</h2>
+                <p className="mt-1 text-sm text-gray-500">在搭建智能体时直接创建知识库，创建后可立即引用到当前智能体。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !kbCreateBusy && setShowKbCreateModal(false)}
+                className="rounded-[10px] p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                aria-label="关闭"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <Field label="名称">
+                <input
+                  value={newKbName}
+                  onChange={(e) => setNewKbName(e.target.value)}
+                  className="h-10 w-full rounded-[10px] border border-gray-200 px-3 text-sm outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
+                  placeholder="例如：产品手册库"
+                  autoFocus
+                />
+              </Field>
+              <Field label="描述（可选）">
+                <textarea
+                  value={newKbDesc}
+                  onChange={(e) => setNewKbDesc(e.target.value)}
+                  rows={3}
+                  className="w-full resize-none rounded-[10px] border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
+                  placeholder="一句话说明这个知识库装的是什么资料"
+                />
+              </Field>
+              <Field label="可见范围">
+                <KbVisibilityScopeEditor
+                  mode={newKbVisibilityMode}
+                  scopes={newKbVisibilityScopes}
+                  scopeKeys={newKbScopeKeys}
+                  tree={kbVisibilityTree}
+                  canUseAll={kbCanUseAllVisibility}
+                  loading={kbVisibilityOptionsLoading}
+                  onModeChange={setNewKbVisibilityMode}
+                  onToggleScope={toggleNewKbVisibilityScope}
+                />
+              </Field>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="ghost" onClick={() => setShowKbCreateModal(false)} disabled={kbCreateBusy}>
+                  取消
+                </Button>
+                <Button onClick={handleCreateKnowledgeBase} loading={kbCreateBusy} disabled={!newKbName.trim()}>
+                  创建
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {createdKb && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-[18px] bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">知识库已创建</h2>
+                <p className="mt-1 text-sm text-gray-500">是否将「{createdKb.name}」引用到当前智能体？</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !kbReferenceBusy && setCreatedKb(null)}
+                className="rounded-[10px] p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                aria-label="关闭"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="rounded-[12px] border border-gray-100 bg-gray-50 px-3 py-3 text-sm text-gray-600">
+              引用后，对话时会按用户问题检索该知识库。若还没有上传文档，可以先引用并前往上传。
+            </div>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button variant="ghost" onClick={() => setCreatedKb(null)} disabled={kbReferenceBusy}>
+                仅创建
+              </Button>
+              <Button variant="outline" onClick={() => goUploadKnowledgeBase(createdKb)} loading={kbReferenceBusy}>
+                <ExternalLink size={14} /> 去上传文档
+              </Button>
+              <Button onClick={() => bindKnowledgeBaseToDraft(createdKb)} loading={kbReferenceBusy}>
+                引用到当前智能体
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {publishOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"

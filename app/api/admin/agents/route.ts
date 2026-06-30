@@ -20,6 +20,7 @@ const createAgentSchema = z.object({
   externalUrl: z.string().optional().default(""),
   apiEndpoint: z.string().optional().default(""),
   apiKey: z.string().optional().default(""),
+  providerId: z.string().optional().default(""),
   modelParams: z.record(z.string(), z.unknown()).optional().default({}),
   categoryIds: z.array(z.string()).optional().default([]),
   categoryId: z.string().optional(),
@@ -164,9 +165,29 @@ export async function POST(req: NextRequest) {
   const body = await parseBody(req, createAgentSchema);
   if (body instanceof Response) return body;
 
-  const { agentCode, name, description, platform, agentType, externalUrl, apiEndpoint, apiKey, modelParams } = body;
+  const { agentCode, name, description, platform, agentType, externalUrl, apiEndpoint, apiKey, providerId, modelParams } = body;
   const catIds = body.categoryIds.length > 0 ? body.categoryIds : (body.categoryId ? [body.categoryId] : []);
   const primaryCat = catIds[0] ?? null;
+  let providerIdToSave: string | null = null;
+
+  if (providerId) {
+    const wantCategory = ["coze", "dify", "yuanqi", "qingyan"].includes(platform) ? "agent" : "model";
+    const { data: provider, error: providerErr } = await db
+      .from("model_providers")
+      .select("enabled, category")
+      .eq("id", providerId)
+      .maybeSingle();
+    if (providerErr) return dbError(providerErr);
+    if (!provider) return apiError("选择的命名 API 不存在", "VALIDATION_ERROR");
+    if (!provider.enabled) return apiError("选择的命名 API 已禁用，请先在 API 管理里启用", "VALIDATION_ERROR");
+    if (provider.category !== wantCategory) {
+      return apiError(
+        `该智能体应绑定${wantCategory === "agent" ? "智能体 API" : "大模型 API"}`,
+        "VALIDATION_ERROR"
+      );
+    }
+    providerIdToSave = providerId;
+  }
 
   const { data, error } = await db
     .from("agents")
@@ -180,6 +201,7 @@ export async function POST(req: NextRequest) {
       external_url: externalUrl ?? "",
       api_endpoint: apiEndpoint ?? "",
       api_key_enc: apiKey ? encrypt(apiKey) : "",
+      provider_id: providerIdToSave,
       model_params: modelParams ?? {},
       created_by_role: actorHierarchyRole(ctx.actor, "agent"),
     })

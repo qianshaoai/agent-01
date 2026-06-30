@@ -123,16 +123,17 @@ async function actorHasAnyKbPermission(
 async function canActorSetVisibilityScope(
   ctx: AdminActorContext,
   scope: KbVisibilityScope,
+  action: "create" | "update" = "update",
 ): Promise<boolean> {
   if (ctx.role === "super_admin") return true;
 
   if (scope.scope_type === "all") {
     if (ctx.role === "system_admin" && !ctx.isCustomAdmin) return true;
-    return hasPermission(ctx.actor, "kb.update.all");
+    return hasPermission(ctx.actor, `kb.${action}.all` as PermissionKey);
   }
 
-  if (await hasPermission(ctx.actor, "kb.update.all", [scope])) return true;
-  if (await hasPermission(ctx.actor, "kb.update.org", [scope])) return true;
+  if (await hasPermission(ctx.actor, `kb.${action}.all` as PermissionKey, [scope])) return true;
+  if (await hasPermission(ctx.actor, `kb.${action}.org` as PermissionKey, [scope])) return true;
 
   // 兼容旧内置 org_admin 写路径：v2 未启用时 hasPermission 对 kb.* 不会放行。
   if (ctx.role === "org_admin" && !ctx.isCustomAdmin && ctx.tenantCode) {
@@ -173,6 +174,7 @@ async function assertScopeExists(scope: KbVisibilityScope): Promise<string | nul
 export async function normalizeKbVisibilityInputForAdmin(
   ctx: AdminActorContext,
   input: unknown,
+  action: "create" | "update" = "update",
 ): Promise<{ ok: true; scopes: KbVisibilityScope[] } | { ok: false; error: string }> {
   if (!Array.isArray(input)) {
     return { ok: false, error: "可见范围格式错误" };
@@ -219,7 +221,7 @@ export async function normalizeKbVisibilityInputForAdmin(
   for (const scope of scopes) {
     const existErr = await assertScopeExists(scope);
     if (existErr) return { ok: false, error: existErr };
-    if (!(await canActorSetVisibilityScope(ctx, scope))) {
+    if (!(await canActorSetVisibilityScope(ctx, scope, action))) {
       return { ok: false, error: "无权设置超出当前账号范围的可见范围" };
     }
   }

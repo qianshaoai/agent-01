@@ -8,6 +8,41 @@ import { requireCreatorHierarchy } from "@/lib/creator-hierarchy";
 
 export const dynamic = "force-dynamic";
 
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const ctx = await requireAdminActor();
+  if (ctx instanceof Response) return ctx;
+
+  const { id } = await params;
+  if (ctx.role !== "super_admin") {
+    const err = await requireAccess(ctx.actor, "agent", "read", { id });
+    if (err) return err;
+  }
+
+  const { data: agent, error } = await db
+    .from("agents")
+    .select(
+      "id, agent_code, name, description, platform, agent_type, external_url, enabled, category_id, provider_id, model_params, published_from_draft_id, created_by_role"
+    )
+    .eq("id", id)
+    .maybeSingle();
+  if (error) return dbError(error);
+  if (!agent) return apiError("智能体不存在", "NOT_FOUND");
+
+  const { data: categoryRows, error: categoryErr } = await db
+    .from("agent_categories")
+    .select("category_id")
+    .eq("agent_id", id);
+  if (categoryErr) return dbError(categoryErr);
+
+  return NextResponse.json({
+    ...agent,
+    categoryIds: (categoryRows ?? []).map((row: { category_id: string }) => row.category_id),
+  });
+}
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }

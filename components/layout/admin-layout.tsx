@@ -325,8 +325,8 @@ export function AdminLayout({
         <main
           className={
             fullBleed
-              ? "flex-1 page-enter w-full"
-              : "flex-1 p-5 sm:p-7 page-enter max-w-[1600px] w-full mx-auto"
+              ? "flex-1 w-full"
+              : "flex-1 p-5 sm:p-7 max-w-[1600px] w-full mx-auto"
           }
         >
           {showCustomFallback ? (

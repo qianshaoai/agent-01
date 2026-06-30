@@ -2,7 +2,7 @@ import { apiError, dbError } from "@/lib/api-error";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/permission-actor";
 import { requireAdminActor } from "@/lib/session";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 type Team = { id: string; name: string; dept_id: string; sort_order: number | null };
 type Dept = {
@@ -14,17 +14,18 @@ type Dept = {
 };
 type Tenant = { code: string; name: string; enabled: boolean; departments: Dept[] };
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const ctx = await requireAdminActor();
   if (ctx instanceof Response) return ctx;
 
+  const action = req.nextUrl.searchParams.get("purpose") === "create" ? "create" : "update";
   const canUseAll =
     ctx.role === "super_admin" ||
     (ctx.role === "system_admin" && !ctx.isCustomAdmin) ||
-    (await hasPermission(ctx.actor, "kb.update.all"));
+    (await hasPermission(ctx.actor, `kb.${action}.all`));
   const canUseScoped =
     canUseAll ||
-    (await hasPermission(ctx.actor, "kb.update.org")) ||
+    (await hasPermission(ctx.actor, `kb.${action}.org`)) ||
     (ctx.role === "org_admin" && !ctx.isCustomAdmin);
 
   if (!canUseScoped) return apiError("权限不足", "FORBIDDEN");
