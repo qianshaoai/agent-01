@@ -12,7 +12,6 @@ import {
   GitBranch,
   Library,
   Loader2,
-  MessageSquare,
   Plus,
   RotateCcw,
   Search,
@@ -79,31 +78,9 @@ const SOURCE_META: Record<CenterSource, { label: string; className: string }> = 
     className: "bg-violet-50 text-violet-700 border-violet-100",
   },
   external_link: {
-    label: "外链跳转",
+    label: "外链",
     className: "bg-orange-50 text-orange-700 border-orange-100",
   },
-};
-
-const STATUS_META: Record<CenterStatus, { label: string; className: string }> = {
-  published: {
-    label: "已发布",
-    className: "bg-emerald-50 text-emerald-700 border-emerald-100",
-  },
-  draft: {
-    label: "草稿",
-    className: "bg-amber-50 text-amber-700 border-amber-100",
-  },
-  disabled: {
-    label: "已停用",
-    className: "bg-rose-50 text-rose-700 border-rose-100",
-  },
-};
-
-const DRAFT_STATUS_LABEL: Record<NonNullable<AgentCenterItem["draftStatus"]>, string> = {
-  draft: "草稿",
-  testing: "测试中",
-  published: "已发布",
-  archived: "已归档",
 };
 
 const EMPTY_RESPONSE: AgentCenterResponse = {
@@ -113,19 +90,6 @@ const EMPTY_RESPONSE: AgentCenterResponse = {
   categories: [],
   platforms: [],
 };
-
-function formatDate(value: string) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
 
 function platformLabel(value: string) {
   const map: Record<string, string> = {
@@ -146,6 +110,12 @@ function editHref(item: AgentCenterItem) {
   if (item.draftId) return `/admin/agent-builder/${item.draftId}`;
   if (item.agentId) return `/admin/agents?focus=${item.agentId}`;
   return "/admin/agents";
+}
+
+function displayCode(item: AgentCenterItem) {
+  if (item.agentCode) return item.agentCode;
+  if (item.draftId) return `DRAFT-${item.draftId.slice(0, 8).toUpperCase()}`;
+  return "DRAFT";
 }
 
 export function AgentCenterWorkbench() {
@@ -302,7 +272,7 @@ export function AgentCenterWorkbench() {
   }
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <div className="max-w-[1500px] space-y-6">
       <PageHeader
         icon={<Bot size={20} />}
         title="智能体中心"
@@ -333,16 +303,6 @@ export function AgentCenterWorkbench() {
             <option value="builtin">本平台</option>
             <option value="external_api">外部接入</option>
             <option value="external_link">外链跳转</option>
-          </select>
-          <select
-            value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
-            className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
-          >
-            <option value="">全部标签</option>
-            {result.categories.map((cat) => (
-              <option key={cat.id} value={cat.id}>{cat.name}</option>
-            ))}
           </select>
           <select
             value={status}
@@ -381,7 +341,8 @@ export function AgentCenterWorkbench() {
         </div>
       </Card>
 
-      <Card padding="none" className="overflow-hidden">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_260px] gap-4 items-start">
+        <Card padding="none" className="overflow-hidden">
 
           {loading ? (
             <div className="p-6 space-y-3">
@@ -407,14 +368,14 @@ export function AgentCenterWorkbench() {
               <table className="w-full text-sm table-sticky-head table-fixed">
                 <colgroup>
                   <col className="w-[30%]" />
-                  <col className="w-[18%]" />
-                  <col className="w-[17%]" />
                   <col className="w-[20%]" />
-                  <col className="w-[15%]" />
+                  <col className="w-[16%]" />
+                  <col className="w-[20%]" />
+                  <col className="w-[14%]" />
                 </colgroup>
                 <thead>
                   <tr>
-                    {(["编号/名称", "标签", "类型/状态", "数据", "操作"] as const).map((h) => (
+                    {(["编号/名称", "标签", "类型/平台", "数据", "操作"] as const).map((h) => (
                       <th
                         key={h}
                         className={`px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider ${
@@ -429,7 +390,6 @@ export function AgentCenterWorkbench() {
                 <tbody className="divide-y divide-gray-50">
                   {result.data.map((item) => {
                     const sourceMeta = SOURCE_META[item.source];
-                    const statusMeta = STATUS_META[item.status];
                     const busy = busyId === item.id;
                     return (
                       <tr key={item.id} className="hover:bg-gray-50/50 transition-colors">
@@ -446,14 +406,7 @@ export function AgentCenterWorkbench() {
                               <Link href={editHref(item)} className="font-medium text-gray-800 hover:text-[#002FA7] truncate block">
                                 {item.name}
                               </Link>
-                              <div className="mt-0.5 flex items-center gap-2 text-[10px] text-gray-400 font-mono">
-                                <span>{item.agentCode ?? (item.draftStatus ? DRAFT_STATUS_LABEL[item.draftStatus] : "DRAFT")}</span>
-                                {item.description && (
-                                  <span className="truncate font-sans text-[11px]" title={item.description}>
-                                    {item.description}
-                                  </span>
-                                )}
-                              </div>
+                              <code className="mt-0.5 block text-[10px] text-gray-400 font-mono">{displayCode(item)}</code>
                             </div>
                           </div>
                         </td>
@@ -478,16 +431,7 @@ export function AgentCenterWorkbench() {
                             <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${sourceMeta.className}`}>
                               {sourceMeta.label}
                             </span>
-                            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600">
-                              {platformLabel(item.platform)}
-                            </span>
-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${statusMeta.className}`}>
-                              {statusMeta.label}
-                            </span>
                           </div>
-                          <p className="mt-1 text-center text-[11px] text-gray-400">
-                            {formatDate(item.updatedAt)}
-                          </p>
                         </td>
                         <td className="px-5 py-4">
                           <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-gray-500">
@@ -496,9 +440,6 @@ export function AgentCenterWorkbench() {
                             </span>
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200" title="工作流引用">
                               <GitBranch size={11} /> 工作流 {item.workflowRefCount}
-                            </span>
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200" title="会话次数">
-                              <MessageSquare size={11} /> 会话 {item.conversationCount}
                             </span>
                           </div>
                         </td>
@@ -587,7 +528,41 @@ export function AgentCenterWorkbench() {
               </Button>
             </div>
           </div>
-      </Card>
+        </Card>
+
+        <Card padding="none" className="overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+            <Tag size={16} className="text-gray-500" />
+            <h2 className="text-sm font-semibold text-gray-900">标签分组</h2>
+          </div>
+          <div className="p-3 space-y-1 max-h-[620px] overflow-y-auto">
+            <button
+              onClick={() => setCategoryId("")}
+              className={`w-full h-9 rounded-[8px] px-3 text-sm flex items-center justify-between ${
+                categoryId === "" ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              <span>全部智能体</span>
+              <span>{result.stats.total}</span>
+            </button>
+            {result.categories.map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setCategoryId(cat.id)}
+                className={`w-full min-h-9 rounded-[8px] px-3 py-2 text-sm flex items-center justify-between gap-2 ${
+                  categoryId === cat.id ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
+                }`}
+              >
+                <span className="truncate text-left">{cat.name}</span>
+                <span className="shrink-0">{cat.count}</span>
+              </button>
+            ))}
+            {result.categories.length === 0 && (
+              <p className="py-8 text-center text-sm text-gray-400">暂无标签</p>
+            )}
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }
