@@ -37,6 +37,7 @@ import {
   Home,
   Lock,
   Layers,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
@@ -1078,7 +1079,7 @@ export default function WorkflowsAdminPage() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                router.push(`/admin/agents?focus=${boundAgent.id}&pageSize=100`);
+                                router.push(`/admin/agent-center?focus=${boundAgent.id}`);
                               }}
                               className="mt-1 flex items-center gap-1 text-xs text-[#002FA7] hover:underline"
                               title="跳转到智能体管理"
@@ -1316,8 +1317,13 @@ export default function WorkflowsAdminPage() {
                   >
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
-                        <button onClick={() => setExpandedId(wf.id)} className="p-1 rounded-[8px] hover:bg-gray-100 text-gray-400" title="查看详情" aria-label="查看详情">
-                          <ChevronRight size={16} />
+                        <button
+                          onClick={() => setExpandedId(wf.id)}
+                          className="p-1.5 rounded-[8px] text-[#002FA7] transition-colors hover:bg-[#002FA7]/10"
+                          title="配置工作流"
+                          aria-label="配置工作流"
+                        >
+                          <SlidersHorizontal size={15} />
                         </button>
                         <div className="w-9 h-9 rounded-[10px] bg-[#002FA7]/8 text-[#002FA7] flex items-center justify-center shrink-0">
                           <GitBranch size={17} />
@@ -1326,6 +1332,7 @@ export default function WorkflowsAdminPage() {
                           <button
                             type="button"
                             onClick={() => setExpandedId(wf.id)}
+                            title="配置工作流"
                             className="block truncate text-left font-medium text-gray-900 hover:text-[#002FA7]"
                           >
                             {wf.name}
@@ -1572,7 +1579,7 @@ export default function WorkflowsAdminPage() {
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        router.push(`/admin/agents?focus=${boundAgent.id}&pageSize=100`);
+                                        router.push(`/admin/agent-center?focus=${boundAgent.id}`);
                                       }}
                                       className="text-xs text-[#002FA7] hover:underline mt-1 flex items-center gap-1"
                                       title="跳转到智能体管理"
@@ -2307,7 +2314,7 @@ function WorkflowFlowView(props: {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              flowRouter.push(`/admin/agents?focus=${agent.id}&pageSize=100`);
+                              flowRouter.push(`/admin/agent-center?focus=${agent.id}`);
                             }}
                             className="text-xs text-[#002FA7] hover:underline flex items-center gap-1 truncate text-left"
                             title={`跳转到智能体：${agent.name}`}

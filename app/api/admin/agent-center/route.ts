@@ -86,6 +86,7 @@ function includesQuery(item: CenterItem, q: string) {
   if (!q) return true;
   const haystack = [
     item.name,
+    item.agentId,
     item.agentCode ?? "",
     item.description,
     item.platform,

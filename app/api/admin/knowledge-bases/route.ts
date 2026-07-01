@@ -6,6 +6,7 @@ import { writeAuditLog } from "@/lib/audit";
 import type { AdminPayload } from "@/lib/auth";
 import {
   listScopeFilter,
+  canWriteRow,
   resolveCreateOwnership,
   requireWriteAccess,
   validateTenantCode,
@@ -15,7 +16,7 @@ import {
 // 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用时生效；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import { hasPermission } from "@/lib/permission-actor";
-import { actorHierarchyRole } from "@/lib/creator-hierarchy";
+import { actorHierarchyRole, requireCreatorHierarchy } from "@/lib/creator-hierarchy";
 import {
   canAdminUseKnowledgeBase,
   loadEffectiveKbVisibilityScopes,
@@ -31,6 +32,24 @@ import {
 //   - 写白名单含 system_admin（KB 与 API 管理不同，沿用 KB 现状全写）
 
 const KB_WRITE_ROLES = ["super_admin", "system_admin", "org_admin"] as const;
+
+type KnowledgeBaseListRow = {
+  id: string;
+  tenant_code: string | null;
+  created_by_role?: string | null;
+};
+
+async function canUpdateKnowledgeBase(
+  ctx: Exclude<Awaited<ReturnType<typeof requireAdminActor>>, Response>,
+  kb: KnowledgeBaseListRow,
+) {
+  if (!ctx.isCustomAdmin && !canWriteRow(ctx.access as AdminPayload, kb)) return false;
+  if (ctx.role !== "super_admin") {
+    const accessErr = await requireAccess(ctx.actor, "knowledge_base", "update", { row: kb });
+    if (accessErr) return false;
+  }
+  return !requireCreatorHierarchy(ctx, "knowledge_base", kb.created_by_role);
+}
 
 export async function GET(req: NextRequest) {
   const ctx = await requireAdminActor();
@@ -77,7 +96,7 @@ export async function GET(req: NextRequest) {
     return apiError("获取知识库列表失败", "INTERNAL_ERROR");
   }
 
-  let kbs = (data ?? []) as Array<{ id: string; tenant_code: string | null }>;
+  let kbs = (data ?? []) as KnowledgeBaseListRow[];
   if (purpose === "bind") {
     const visible: typeof kbs = [];
     for (const kb of kbs) {
@@ -103,7 +122,13 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    data: kbs.map((k) => ({ ...k, document_count: counts[k.id] ?? 0 })),
+    data: await Promise.all(
+      kbs.map(async (k) => ({
+        ...k,
+        document_count: counts[k.id] ?? 0,
+        can_update: await canUpdateKnowledgeBase(ctx, k),
+      })),
+    ),
   });
 }
 

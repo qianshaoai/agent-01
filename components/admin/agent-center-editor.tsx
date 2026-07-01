@@ -313,7 +313,7 @@ export function AgentCenterEditor({ agentId }: { agentId?: string } = {}) {
   if (agentLoading) {
     return (
       <div className="max-w-[1100px] space-y-6">
-        <PageHeader icon={headerIcon} title="加载智能体" subtitle="智能体中心" />
+        <PageHeader icon={headerIcon} title="加载智能体" subtitle="智能体管理" />
         <Card padding="lg" className="space-y-4">
           {[...Array(5)].map((_, i) => (
             <div key={i} className="h-11 animate-pulse rounded-[10px] bg-gray-50" />
@@ -328,7 +328,7 @@ export function AgentCenterEditor({ agentId }: { agentId?: string } = {}) {
       <PageHeader
         icon={headerIcon}
         title={title}
-        subtitle="智能体中心"
+        subtitle="智能体管理"
         actions={
           <Link
             href="/admin/agent-center"

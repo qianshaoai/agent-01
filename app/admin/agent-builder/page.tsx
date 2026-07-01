@@ -158,7 +158,7 @@ export default function AgentBuilderListPage() {
             <>
               <Link href="/admin/agent-center">
                 <Button variant="outline" className="flex items-center gap-1.5">
-                  <ArrowLeft size={16} /> 返回智能体中心
+                  <ArrowLeft size={16} /> 返回智能体管理
                 </Button>
               </Link>
               {canCreateDraft ? (

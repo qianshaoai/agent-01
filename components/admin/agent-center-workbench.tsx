@@ -104,7 +104,7 @@ const SCOPE_TYPE_LABELS: Record<string, string> = {
 
 const SOURCE_META: Record<CenterSource, { label: string; className: string }> = {
   builtin: {
-    label: "本平台",
+    label: "平台搭建",
     className: "bg-sky-50 text-sky-700 border-sky-100",
   },
   external_api: {
@@ -127,7 +127,7 @@ const EMPTY_RESPONSE: AgentCenterResponse = {
 
 function platformLabel(value: string) {
   const map: Record<string, string> = {
-    builder: "本平台",
+    builder: "平台搭建",
     external: "外链",
     coze: "Coze",
     dify: "Dify",
@@ -153,6 +153,7 @@ function displayCode(item: AgentCenterItem) {
 export function AgentCenterWorkbench() {
   const router = useRouter();
   const { toast } = useToast();
+  const [focusAgentId, setFocusAgentId] = useState("");
   const [result, setResult] = useState<AgentCenterResponse>(EMPTY_RESPONSE);
   const [loading, setLoading] = useState(true);
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -182,6 +183,22 @@ export function AgentCenterWorkbench() {
   const [displayConfig, setDisplayConfig] = useState<CategoryDisplayConfig[]>([]);
   const [displayLoading, setDisplayLoading] = useState(false);
   const [dataModal, setDataModal] = useState<AgentCenterItem | null>(null);
+
+  useEffect(() => {
+    const focus = new URLSearchParams(window.location.search).get("focus")?.trim() ?? "";
+    setFocusAgentId(focus);
+    if (!focus) return;
+    setQuery(focus);
+    setDebouncedQuery(focus);
+    setPage(1);
+  }, []);
+
+  useEffect(() => {
+    if (!focusAgentId) return;
+    setQuery(focusAgentId);
+    setDebouncedQuery(focusAgentId);
+    setPage(1);
+  }, [focusAgentId]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -412,7 +429,7 @@ export function AgentCenterWorkbench() {
     <div className="max-w-[1500px] space-y-6">
       <PageHeader
         icon={<Bot size={20} />}
-        title="智能体中心"
+        title="智能体管理"
         actions={
           <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
             <Plus size={16} /> 新增智能体
@@ -493,7 +510,7 @@ export function AgentCenterWorkbench() {
                 className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
               >
                 <option value="">全部类型</option>
-                <option value="builtin">本平台</option>
+                <option value="builtin">平台搭建</option>
                 <option value="external_api">外部接入</option>
                 <option value="external_link">外链跳转</option>
               </select>
@@ -590,7 +607,12 @@ export function AgentCenterWorkbench() {
                       const sourceMeta = SOURCE_META[item.source];
                       const busy = busyId === item.id;
                       return (
-                        <tr key={item.id} className="hover:bg-gray-50/50 transition-colors">
+                        <tr
+                          key={item.id}
+                          className={`hover:bg-gray-50/50 transition-colors ${
+                            focusAgentId && item.agentId === focusAgentId ? "bg-[#002FA7]/5 ring-2 ring-[#002FA7] ring-inset" : ""
+                          }`}
+                        >
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3">
                               <div className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${
@@ -814,35 +836,35 @@ export function AgentCenterWorkbench() {
               <button
                 type="button"
                 onClick={openBuilderDrafts}
-                className="group flex min-h-[142px] flex-col items-start rounded-[16px] border border-gray-200 bg-white p-4 text-left transition-all hover:border-[#002FA7]/40 hover:bg-[#002FA7]/5"
+                className="group flex min-h-[156px] flex-col items-start rounded-[16px] border border-gray-200 bg-white p-4 text-left transition-all hover:border-[#002FA7]/40 hover:bg-[#002FA7]/5"
               >
                 <span className="mb-4 flex h-10 w-10 items-center justify-center rounded-[12px] bg-[#002FA7]/8 text-[#002FA7]">
                   <Bot size={18} />
                 </span>
-                <span className="font-semibold text-gray-900">本平台搭建</span>
-                <span className="mt-1 text-xs leading-5 text-gray-500">进入草稿页后再开始搭建</span>
+                <span className="font-semibold text-gray-900">平台搭建</span>
+                <span className="mt-1 text-xs leading-5 text-gray-500">在本平台完成智能体创建、配置与发布</span>
               </button>
               <button
                 type="button"
                 onClick={() => openAgentEditor("external_link")}
-                className="group flex min-h-[142px] flex-col items-start rounded-[16px] border border-gray-200 bg-white p-4 text-left transition-all hover:border-orange-200 hover:bg-orange-50/50"
+                className="group flex min-h-[156px] flex-col items-start rounded-[16px] border border-gray-200 bg-white p-4 text-left transition-all hover:border-orange-200 hover:bg-orange-50/50"
               >
                 <span className="mb-4 flex h-10 w-10 items-center justify-center rounded-[12px] bg-orange-50 text-orange-500">
                   <ExternalLink size={18} />
                 </span>
                 <span className="font-semibold text-gray-900">外链跳转</span>
-                <span className="mt-1 text-xs leading-5 text-gray-500">配置跳转链接</span>
+                <span className="mt-1 text-xs leading-5 text-gray-500">适用于无法获取 API 的智能体，仅配置访问链接</span>
               </button>
               <button
                 type="button"
                 onClick={() => openAgentEditor("external_api")}
-                className="group flex min-h-[142px] flex-col items-start rounded-[16px] border border-gray-200 bg-white p-4 text-left transition-all hover:border-violet-200 hover:bg-violet-50/50"
+                className="group flex min-h-[156px] flex-col items-start rounded-[16px] border border-gray-200 bg-white p-4 text-left transition-all hover:border-violet-200 hover:bg-violet-50/50"
               >
                 <span className="mb-4 flex h-10 w-10 items-center justify-center rounded-[12px] bg-violet-50 text-violet-600">
                   <Plug size={18} />
                 </span>
                 <span className="font-semibold text-gray-900">外部接入</span>
-                <span className="mt-1 text-xs leading-5 text-gray-500">配置 API 与 Bot ID</span>
+                <span className="mt-1 text-xs leading-5 text-gray-500">将 Coze 等外部平台搭建的智能体通过 API 接入本平台</span>
               </button>
             </div>
             <div className="mt-6 flex justify-end">

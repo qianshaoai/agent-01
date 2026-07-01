@@ -45,6 +45,7 @@ type KnowledgeBaseOption = {
   name: string;
   status: "active" | "disabled";
   document_count?: number;
+  can_update?: boolean;
 };
 
 type BuilderConfig = {
@@ -372,6 +373,7 @@ export default function AgentBuilderEditPage({
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saveError, setSaveError] = useState(false); // 5.16up · 上次自动保存是否失败
+  const suppressBeforeUnloadRef = useRef(false);
   const [showHelp, setShowHelp] = useState(false);
 
   // PR-C · 测试聊天 state
@@ -391,6 +393,7 @@ export default function AgentBuilderEditPage({
     agent_code: string | null;
     republish: boolean;
   } | null>(null);
+  const [pendingKbUpload, setPendingKbUpload] = useState<KnowledgeBaseOption | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -428,7 +431,7 @@ export default function AgentBuilderEditPage({
           const kbData = await kbRes.json();
           const arr: unknown[] = Array.isArray(kbData) ? kbData : (kbData?.data ?? []);
           kbList = arr
-            .map((x) => x as { id?: unknown; name?: unknown; status?: unknown; document_count?: unknown })
+            .map((x) => x as { id?: unknown; name?: unknown; status?: unknown; document_count?: unknown; can_update?: unknown })
             .filter((x) => typeof x.id === "string")
             .map((x) => ({
               id: x.id as string,
@@ -436,6 +439,7 @@ export default function AgentBuilderEditPage({
               // disabled 兜底：未传 status 或其他值都按 active 处理（防误标停用）
               status: x.status === "disabled" ? "disabled" : "active",
               document_count: typeof x.document_count === "number" ? x.document_count : undefined,
+              can_update: x.can_update === true,
             }));
           kbFetchOk = true;
         } catch { /* 解析失败 → 降级为空列表 */ }
@@ -623,7 +627,18 @@ export default function AgentBuilderEditPage({
     });
   }
 
-  async function bindKnowledgeBaseToDraft(kb: KnowledgeBaseOption, opts?: { goUpload?: boolean }) {
+  function navigateToKnowledgeBaseUpload(kb: KnowledgeBaseOption) {
+    suppressBeforeUnloadRef.current = true;
+    setDirty(false);
+    window.location.assign(
+      `/admin/knowledge-bases/${encodeURIComponent(kb.id)}?from=agent-builder&draftId=${encodeURIComponent(id)}`,
+    );
+  }
+
+  async function bindKnowledgeBaseToDraft(
+    kb: KnowledgeBaseOption,
+    opts?: { goUpload?: boolean; successMessage?: string; failureMessage?: string },
+  ) {
     if (!draft) return false;
     setKbReferenceBusy(true);
     const currentIds = draft.builder_config.knowledge_base_ids ?? [];
@@ -642,13 +657,13 @@ export default function AgentBuilderEditPage({
       const saved = await save({ auto: true, draftOverride: nextDraft });
       if (saved !== true) {
         setDirty(true);
-        toast("知识库已创建，但未能引用到当前智能体，请重试", "error");
+        toast(opts?.failureMessage ?? "未能引用到当前智能体，请重试", "error");
         return false;
       }
       setCreatedKb(null);
-      toast("已创建并引用到当前智能体", "success");
+      toast(opts?.successMessage ?? "已引用到当前智能体", "success");
       if (opts?.goUpload) {
-        window.location.href = `/admin/knowledge-bases/${encodeURIComponent(kb.id)}?from=agent-builder&draftId=${encodeURIComponent(id)}`;
+        navigateToKnowledgeBaseUpload(kb);
       }
       return true;
     } finally {
@@ -684,6 +699,7 @@ export default function AgentBuilderEditPage({
         name: typeof json.name === "string" && json.name ? json.name : newKbName.trim(),
         status: json.status === "disabled" ? "disabled" : "active",
         document_count: typeof json.document_count === "number" ? json.document_count : 0,
+        can_update: true,
       };
       upsertKnowledgeBaseOption(kb);
       setCreatedKb(kb);
@@ -699,12 +715,15 @@ export default function AgentBuilderEditPage({
   }
 
   async function goUploadKnowledgeBase(kb: KnowledgeBaseOption) {
-    await bindKnowledgeBaseToDraft(kb, { goUpload: true });
+    await bindKnowledgeBaseToDraft(kb, {
+      goUpload: true,
+      successMessage: "已引用到当前智能体，正在打开上传页",
+    });
   }
 
   useEffect(() => {
     function beforeUnload(e: BeforeUnloadEvent) {
-      if (dirty) {
+      if (!suppressBeforeUnloadRef.current && dirty) {
         e.preventDefault();
         e.returnValue = "";
       }
@@ -1064,7 +1083,7 @@ export default function AgentBuilderEditPage({
                   </Field>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <Field label="温度（0.0 - 2.0）" hint="越低越稳定准确，越高越发散有创意，日常对话建议 0.7">
+                    <Field label="生成随机性（0.0 - 2.0）" hint="越低越稳定准确，越高越发散有创意，日常对话建议 0.7">
                       <input
                         type="number"
                         step="0.1"
@@ -1205,11 +1224,26 @@ export default function AgentBuilderEditPage({
                           const isDisabledKb = kb.status === "disabled";
                           // disabled 已勾：允许取消（用户清理用），不允许新加（点已不勾的 disabled 项要被拦下）
                           const canToggle = !isDisabledKb || checked;
+                          const toggleKnowledgeBase = () => {
+                            if (!canToggle) return;
+                            patchDraft((d) => {
+                              const cur = d.builder_config.knowledge_base_ids ?? [];
+                              return {
+                                ...d,
+                                builder_config: {
+                                  ...d.builder_config,
+                                  knowledge_base_ids: checked
+                                    ? cur.filter((x) => x !== kb.id)
+                                    : [...cur, kb.id],
+                                },
+                              };
+                            });
+                          };
                           return (
-                            <label
+                            <div
                               key={kb.id}
-                              className={`flex items-start gap-2 text-sm px-1 py-0.5 rounded ${
-                                canToggle ? "cursor-pointer hover:bg-gray-50" : "cursor-not-allowed opacity-60"
+                              className={`flex items-start gap-2 rounded px-1 py-0.5 text-sm ${
+                                canToggle ? "hover:bg-gray-50" : "opacity-60"
                               }`}
                               title={
                                 isDisabledKb
@@ -1224,34 +1258,39 @@ export default function AgentBuilderEditPage({
                                 className="accent-[#002FA7] mt-0.5"
                                 checked={checked}
                                 disabled={!canToggle}
-                                onChange={() => {
-                                  if (!canToggle) return;
-                                  patchDraft((d) => {
-                                    const cur = d.builder_config.knowledge_base_ids ?? [];
-                                    return {
-                                      ...d,
-                                      builder_config: {
-                                        ...d.builder_config,
-                                        knowledge_base_ids: checked
-                                          ? cur.filter((x) => x !== kb.id)
-                                          : [...cur, kb.id],
-                                      },
-                                    };
-                                  });
-                                }}
+                                onChange={toggleKnowledgeBase}
                               />
                               <div className="flex-1 min-w-0">
-                                <span className={isDisabledKb ? "text-gray-500" : "text-gray-700"}>{kb.name}</span>
+                                <button
+                                  type="button"
+                                  disabled={!canToggle}
+                                  onClick={toggleKnowledgeBase}
+                                  className={`text-left ${canToggle ? "cursor-pointer" : "cursor-not-allowed"} ${
+                                    isDisabledKb ? "text-gray-500" : "text-gray-700"
+                                  }`}
+                                >
+                                  {kb.name}
+                                </button>
                                 <span className="ml-2 text-[11px] text-gray-400">
                                   {typeof kb.document_count === "number" ? `${kb.document_count} 个文档` : "文档数未知"}
                                 </span>
-                                {kb.document_count === 0 && (
-                                  <a
-                                    href={`/admin/knowledge-bases/${encodeURIComponent(kb.id)}?from=agent-builder&draftId=${encodeURIComponent(id)}`}
-                                    className="ml-2 text-[11px] text-[#002FA7] hover:underline"
+                                {kb.can_update && !isDisabledKb && (
+                                  <button
+                                    type="button"
+                                    disabled={kbReferenceBusy}
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      setPendingKbUpload(kb);
+                                    }}
+                                    className="ml-2 text-[11px] font-medium text-[#002FA7] hover:underline disabled:cursor-not-allowed disabled:text-gray-300"
+                                    title={checked ? "上传新文档到该知识库" : "会先引用到当前智能体，再打开上传页"}
                                   >
-                                    去上传
-                                  </a>
+                                    上传文档
+                                  </button>
+                                )}
+                                {!kb.can_update && kb.document_count === 0 && (
+                                  <span className="ml-2 text-[11px] text-gray-300">暂无文档</span>
                                 )}
                                 {isDisabledKb && (
                                   <span className="ml-2 text-[11px] text-amber-600">
@@ -1261,7 +1300,7 @@ export default function AgentBuilderEditPage({
                                   </span>
                                 )}
                               </div>
-                            </label>
+                            </div>
                           );
                         })}
                       </div>
@@ -1528,11 +1567,65 @@ export default function AgentBuilderEditPage({
               <Button variant="ghost" onClick={() => setCreatedKb(null)} disabled={kbReferenceBusy}>
                 仅创建
               </Button>
-              <Button variant="outline" onClick={() => goUploadKnowledgeBase(createdKb)} loading={kbReferenceBusy}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPendingKbUpload(createdKb);
+                  setCreatedKb(null);
+                }}
+                disabled={kbReferenceBusy}
+              >
                 <ExternalLink size={14} /> 去上传文档
               </Button>
               <Button onClick={() => bindKnowledgeBaseToDraft(createdKb)} loading={kbReferenceBusy}>
                 引用到当前智能体
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingKbUpload && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => !kbReferenceBusy && setPendingKbUpload(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-[18px] bg-white p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">是否进入知识库管理界面？</h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  将打开「{pendingKbUpload.name}」的知识库管理页，你可以在里面上传新文档。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !kbReferenceBusy && setPendingKbUpload(null)}
+                className="rounded-[10px] p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                aria-label="关闭"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="rounded-[12px] border border-gray-100 bg-gray-50 px-3 py-3 text-sm text-gray-600">
+              进入前会先保存当前草稿，并确保该知识库已引用到当前智能体。
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setPendingKbUpload(null)} disabled={kbReferenceBusy}>
+                取消
+              </Button>
+              <Button
+                onClick={() => {
+                  const kb = pendingKbUpload;
+                  setPendingKbUpload(null);
+                  void goUploadKnowledgeBase(kb);
+                }}
+                loading={kbReferenceBusy}
+              >
+                进入知识库管理
               </Button>
             </div>
           </div>
@@ -1601,7 +1694,7 @@ export default function AgentBuilderEditPage({
                 </div>
                 <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
                   <Link
-                    href={`/admin/agents`}
+                    href={`/admin/agent-center`}
                     className="px-4 h-9 rounded-[8px] text-sm text-[#002FA7] border border-[#002FA7] hover:bg-[#002FA7]/5 inline-flex items-center gap-1.5"
                   >
                     <ExternalLink size={14} /> 去智能体管理
