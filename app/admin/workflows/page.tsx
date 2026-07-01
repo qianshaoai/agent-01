@@ -109,6 +109,12 @@ type WorkflowPagination = {
   focusPage?: number | null;
 };
 
+type WorkflowStats = {
+  total: number;
+  ungrouped: number;
+  categoryCounts: Record<string, number>;
+};
+
 type PermScope = "org" | "dept" | "team";
 
 // R1.8 · 不再手动设 sortOrder（6.3up「分层级配置」+ 全局自动接末尾接管），
@@ -268,6 +274,7 @@ export default function WorkflowsAdminPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [pagination, setPagination] = useState<WorkflowPagination>({ page: 1, pageSize: 10, total: 0 });
+  const [workflowStats, setWorkflowStats] = useState<WorkflowStats>({ total: 0, ungrouped: 0, categoryCounts: {} });
 
   // Workflow modal
   const [showWfModal, setShowWfModal] = useState(false);
@@ -362,6 +369,13 @@ export default function WorkflowsAdminPage() {
           setPage(wr.pagination.page);
         }
       }
+      setWorkflowStats({
+        total: typeof wr?.stats?.total === "number" ? wr.stats.total : (wr?.pagination?.total ?? 0),
+        ungrouped: typeof wr?.stats?.ungrouped === "number" ? wr.stats.ungrouped : 0,
+        categoryCounts: wr?.stats?.categoryCounts && typeof wr.stats.categoryCounts === "object"
+          ? wr.stats.categoryCounts
+          : {},
+      });
       setAgents(ar.list);
       setAgentsCapped(ar.capped);
       setAgentsTotalCount(ar.totalCount);
@@ -371,6 +385,7 @@ export default function WorkflowsAdminPage() {
       setAllTeams(Array.isArray(teamsR) ? teamsR : []);
     } catch {
       setWorkflows([]);
+      setWorkflowStats({ total: 0, ungrouped: 0, categoryCounts: {} });
     } finally {
       setHasLoaded(true);
       setLoading(false);
@@ -859,13 +874,6 @@ export default function WorkflowsAdminPage() {
 
   const totalPages = Math.max(1, Math.ceil((pagination.total || 0) / pagination.pageSize));
   const hasWorkflowFilters = wfSearch || wfCatFilter || wfVisibleFilter || wfStatusFilter;
-  const ungroupedPageCount = workflows.filter((wf) => (wf.categoryIds ?? []).length === 0).length;
-  const categoryPageCounts = new Map<string, number>();
-  for (const wf of workflows) {
-    for (const cid of wf.categoryIds ?? []) {
-      categoryPageCounts.set(cid, (categoryPageCounts.get(cid) ?? 0) + 1);
-    }
-  }
 
   function selectWfCategory(next: string) {
     setWfCatFilter(next);
@@ -1171,7 +1179,7 @@ export default function WorkflowsAdminPage() {
                 }`}
               >
                 <span>全部工作流</span>
-                <span>{pagination.total}</span>
+                <span>{workflowStats.total}</span>
               </button>
               <button
                 type="button"
@@ -1181,7 +1189,7 @@ export default function WorkflowsAdminPage() {
                 }`}
               >
                 <span>未分组工作流</span>
-                <span>{ungroupedPageCount}</span>
+                <span>{workflowStats.ungrouped}</span>
               </button>
               {categories.map((cat) => (
                 <button
@@ -1193,7 +1201,7 @@ export default function WorkflowsAdminPage() {
                   }`}
                 >
                   <span className="truncate text-left">{cat.name}</span>
-                  <span className="shrink-0">{categoryPageCounts.get(cat.id) ?? 0}</span>
+                  <span className="shrink-0">{workflowStats.categoryCounts[cat.id] ?? 0}</span>
                 </button>
               ))}
               {categories.length === 0 && (

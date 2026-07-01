@@ -34,6 +34,7 @@ type WorkflowActionFlags = {
 };
 
 const UNGROUPED_CATEGORY_ID = "__uncategorized__";
+const WORKFLOW_COUNT_SCAN_LIMIT = 5000;
 
 function sanitizeSearch(input: string) {
   return input.replace(/[(),]/g, " ").replace(/\s+/g, " ").trim();
@@ -313,18 +314,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  if (categoryId) {
-    if (categoryId === UNGROUPED_CATEGORY_ID) {
-      const { data: categorizedRows } = await db
-        .from("workflow_categories")
-        .select("workflow_id");
-      excludeIds = Array.from(new Set((categorizedRows ?? []).map((row: { workflow_id: string }) => row.workflow_id)));
-    } else {
-      const { data: categoryRows } = await db
-        .from("workflow_categories")
-        .select("workflow_id")
-        .eq("category_id", categoryId);
-      idFilter = intersectIds(idFilter, (categoryRows ?? []).map((row: { workflow_id: string }) => row.workflow_id));
+  const searchOrParts: string[] = [];
+  if (q) {
+    searchOrParts.push(`name.ilike.%${q}%`);
+    searchOrParts.push(`description.ilike.%${q}%`);
+    if (searchWorkflowIds.size > 0) {
+      searchOrParts.push(`id.in.(${Array.from(searchWorkflowIds).join(",")})`);
     }
   }
 
@@ -342,16 +337,68 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       data: [],
       pagination: { page: 1, pageSize, total: 0, focusFound: false, focusPage: null },
+      stats: { total: 0, ungrouped: 0, categoryCounts: {} },
     });
   }
 
-  const searchOrParts: string[] = [];
-  if (q) {
-    searchOrParts.push(`name.ilike.%${q}%`);
-    searchOrParts.push(`description.ilike.%${q}%`);
-    if (searchWorkflowIds.size > 0) {
-      searchOrParts.push(`id.in.(${Array.from(searchWorkflowIds).join(",")})`);
+  let statsQuery = db.from("workflows")
+    .select("id", { count: "exact" })
+    .order("sort_order", { ascending: true })
+    .range(0, WORKFLOW_COUNT_SCAN_LIMIT - 1);
+  if (idFilter) statsQuery = statsQuery.in("id", Array.from(idFilter));
+  if (searchOrParts.length > 0) statsQuery = statsQuery.or(searchOrParts.join(","));
+  if (status === "enabled") statsQuery = statsQuery.eq("enabled", true);
+  if (status === "disabled") statsQuery = statsQuery.eq("enabled", false);
+  if (visible === "all" || visible === "org_only" || visible === "personal_only" || visible === "custom") {
+    statsQuery = statsQuery.eq("visible_to", visible);
+  } else if (visible.startsWith("custom:")) {
+    statsQuery = statsQuery.eq("visible_to", "custom");
+  }
+
+  const statsRes = await statsQuery;
+  if (statsRes.error) return dbError(statsRes.error);
+
+  const statsWorkflowIds = ((statsRes.data ?? []) as { id: string }[]).map((row) => row.id);
+  const categoryCounts = new Map<string, number>();
+  const categorizedWorkflowIds = new Set<string>();
+  if (statsWorkflowIds.length > 0) {
+    const { data: statCatRows, error: statCatErr } = await db
+      .from("workflow_categories")
+      .select("workflow_id, category_id")
+      .in("workflow_id", statsWorkflowIds);
+    if (statCatErr) return dbError(statCatErr);
+    for (const row of (statCatRows ?? []) as { workflow_id: string; category_id: string }[]) {
+      categorizedWorkflowIds.add(row.workflow_id);
+      categoryCounts.set(row.category_id, (categoryCounts.get(row.category_id) ?? 0) + 1);
     }
+  }
+  const workflowStats = {
+    total: statsRes.count ?? statsWorkflowIds.length,
+    ungrouped: Math.max(0, statsWorkflowIds.length - categorizedWorkflowIds.size),
+    categoryCounts: Object.fromEntries(categoryCounts),
+  };
+
+  if (categoryId) {
+    if (categoryId === UNGROUPED_CATEGORY_ID) {
+      const { data: categorizedRows } = await db
+        .from("workflow_categories")
+        .select("workflow_id");
+      excludeIds = Array.from(new Set((categorizedRows ?? []).map((row: { workflow_id: string }) => row.workflow_id)));
+    } else {
+      const { data: categoryRows } = await db
+        .from("workflow_categories")
+        .select("workflow_id")
+        .eq("category_id", categoryId);
+      idFilter = intersectIds(idFilter, (categoryRows ?? []).map((row: { workflow_id: string }) => row.workflow_id));
+    }
+  }
+
+  if (idFilter && idFilter.size === 0) {
+    return NextResponse.json({
+      data: [],
+      pagination: { page: 1, pageSize, total: 0, focusFound: false, focusPage: null },
+      stats: workflowStats,
+    });
   }
 
   let effectivePage = page;
@@ -477,6 +524,7 @@ export async function GET(req: NextRequest) {
       focusFound,
       focusPage,
     },
+    stats: workflowStats,
   });
 }
 

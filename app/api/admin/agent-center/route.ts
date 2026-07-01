@@ -269,9 +269,10 @@ export async function GET(req: NextRequest) {
   if (source) filtered = filtered.filter((item) => item.source === source);
   if (platform) filtered = filtered.filter((item) => item.platform === platform);
 
+  const statsBase = filtered;
   const categoryCounts = new Map<string, number>();
   let ungroupedCount = 0;
-  for (const item of filtered) {
+  for (const item of statsBase) {
     if (item.categoryIds.length === 0) ungroupedCount += 1;
     for (const cid of item.categoryIds) inc(categoryCounts, cid);
   }
@@ -282,7 +283,6 @@ export async function GET(req: NextRequest) {
     filtered = filtered.filter((item) => item.categoryIds.includes(categoryId));
   }
 
-  const statsBase = filtered;
   const stats = {
     total: statsBase.length,
     published: statsBase.filter((item) => item.status === "published").length,
