@@ -311,6 +311,8 @@ export default function WorkflowsAdminPage() {
   // 4.29up：从智能体跳过来时，把使用该 agent 的步骤一并高亮
   const [highlightedStepAgentId, setHighlightedStepAgentId] = useState<string | null>(null);
   const focusFiredRef = useRef(false);
+  const referenceDataLoadedRef = useRef(false);
+  const referenceDataPromiseRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -335,6 +337,41 @@ export default function WorkflowsAdminPage() {
     return () => window.clearTimeout(t);
   }, [wfSearch]);
 
+  async function loadReferenceData(force = false) {
+    if (referenceDataLoadedRef.current && !force) return;
+    if (referenceDataPromiseRef.current && !force) return referenceDataPromiseRef.current;
+
+    referenceDataPromiseRef.current = Promise.all([
+      // 6.5up R1 · 走 picker 专用接口（极简字段 + 全量拉 hard cap 2000），
+      //   替代 4.27up 阶段一的 ?pageSize=100 兜底；同时拿 capped/totalCount 用于
+      //   popover 截断提示。超过 2000 的场景需要做服务端搜索（方案 C），目前留作下一轮。
+      fetch("/api/admin/agents/picker").then((r) => r.json()).then(d => ({
+        list: Array.isArray(d?.data) ? d.data : [],
+        capped: !!d?.capped,
+        totalCount: typeof d?.totalCount === "number" ? d.totalCount : 0,
+      })),
+      fetch("/api/admin/wf-categories").then((r) => r.json()).then(d => d.data ?? d),
+      fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
+      fetch("/api/admin/departments").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
+      fetch("/api/admin/teams").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
+    ]).then(([ar, cr, tr, dr, teamsR]) => {
+      setAgents(ar.list);
+      setAgentsCapped(ar.capped);
+      setAgentsTotalCount(ar.totalCount);
+      setCategories(Array.isArray(cr) ? cr : []);
+      setTenants(Array.isArray(tr) ? tr : []);
+      setAllDepts(Array.isArray(dr) ? dr : []);
+      setAllTeams(Array.isArray(teamsR) ? teamsR : []);
+      referenceDataLoadedRef.current = true;
+    }).catch(() => {
+      referenceDataLoadedRef.current = false;
+    }).finally(() => {
+      referenceDataPromiseRef.current = null;
+    });
+
+    return referenceDataPromiseRef.current;
+  }
+
   async function load() {
     setLoading(true);
     try {
@@ -347,21 +384,8 @@ export default function WorkflowsAdminPage() {
       if (wfVisibleFilter) params.set("visible", wfVisibleFilter);
       if (wfStatusFilter) params.set("status", wfStatusFilter);
       if (focusWfId && !focusFiredRef.current) params.set("focusId", focusWfId);
-      const [wr, ar, cr, tr, dr, teamsR] = await Promise.all([
-        fetch(`/api/admin/workflows?${params.toString()}`, { cache: "no-store" }).then((r) => r.json()),
-        // 6.5up R1 · 走 picker 专用接口（极简字段 + 全量拉 hard cap 2000），
-        //   替代 4.27up 阶段一的 ?pageSize=100 兜底；同时拿 capped/totalCount 用于
-        //   popover 截断提示。超过 2000 的场景需要做服务端搜索（方案 C），目前留作下一轮。
-        fetch("/api/admin/agents/picker").then((r) => r.json()).then(d => ({
-          list: Array.isArray(d?.data) ? d.data : [],
-          capped: !!d?.capped,
-          totalCount: typeof d?.totalCount === "number" ? d.totalCount : 0,
-        })),
-        fetch("/api/admin/wf-categories").then((r) => r.json()).then(d => d.data ?? d),
-        fetch("/api/admin/tenants").then((r) => r.json()).then(d => d.data ?? d),
-        fetch("/api/admin/departments").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
-        fetch("/api/admin/teams").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
-      ]);
+      const referenceDataPromise = loadReferenceData();
+      const wr = await fetch(`/api/admin/workflows?${params.toString()}`, { cache: "no-store" }).then((r) => r.json());
       setWorkflows(Array.isArray(wr?.data) ? wr.data : []);
       if (wr?.pagination) {
         setPagination(wr.pagination);
@@ -376,13 +400,7 @@ export default function WorkflowsAdminPage() {
           ? wr.stats.categoryCounts
           : {},
       });
-      setAgents(ar.list);
-      setAgentsCapped(ar.capped);
-      setAgentsTotalCount(ar.totalCount);
-      setCategories(Array.isArray(cr) ? cr : []);
-      setTenants(Array.isArray(tr) ? tr : []);
-      setAllDepts(Array.isArray(dr) ? dr : []);
-      setAllTeams(Array.isArray(teamsR) ? teamsR : []);
+      if (!referenceDataLoadedRef.current) await referenceDataPromise;
     } catch {
       setWorkflows([]);
       setWorkflowStats({ total: 0, ungrouped: 0, categoryCounts: {} });
@@ -876,11 +894,13 @@ export default function WorkflowsAdminPage() {
   const hasWorkflowFilters = wfSearch || wfCatFilter || wfVisibleFilter || wfStatusFilter;
 
   function selectWfCategory(next: string) {
+    if (next !== wfCatFilter) setLoading(true);
     setWfCatFilter(next);
     setPage(1);
   }
 
   function clearWorkflowFilters() {
+    setLoading(true);
     setWfSearch("");
     setDebouncedWfSearch("");
     setWfCatFilter("");
@@ -1226,6 +1246,7 @@ export default function WorkflowsAdminPage() {
                   className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
                   value={wfVisibleFilter}
                   onChange={(e) => {
+                    setLoading(true);
                     setWfVisibleFilter(e.target.value);
                     setPage(1);
                   }}
@@ -1242,6 +1263,7 @@ export default function WorkflowsAdminPage() {
                   className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
                   value={wfStatusFilter}
                   onChange={(e) => {
+                    setLoading(true);
                     setWfStatusFilter(e.target.value);
                     setPage(1);
                   }}
@@ -1272,7 +1294,15 @@ export default function WorkflowsAdminPage() {
                   <p className="text-sm">{pagination.total === 0 && !hasWorkflowFilters ? "暂无工作流，点击右上角新增" : "没有符合筛选条件的工作流"}</p>
                 </div>
               ) : (
-                <div className="overflow-x-auto xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
+                <div className="relative overflow-x-auto xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
+                  {loading && hasLoaded && (
+                    <div className="absolute inset-0 z-20 flex items-start justify-center bg-white/60 pt-16 backdrop-blur-[1px]">
+                      <div className="inline-flex items-center gap-2 rounded-full border border-gray-100 bg-white px-3 py-1.5 text-xs text-gray-500 shadow-sm">
+                        <Loader2 size={13} className="animate-spin" />
+                        更新中
+                      </div>
+                    </div>
+                  )}
                   <table className="w-full shrink-0 table-fixed text-sm">
                     <colgroup>
                       <col className="w-[32%]" />
