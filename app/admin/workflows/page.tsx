@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { Fragment, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { useToast } from "@/components/ui/toast";
@@ -13,6 +13,7 @@ import {
   Edit2,
   Trash2,
   GitBranch,
+  ChevronLeft,
   ChevronDown,
   ChevronRight,
   Bot,
@@ -36,6 +37,7 @@ import {
   Home,
   Lock,
   Layers,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 
@@ -84,6 +86,27 @@ type Workflow = {
   created_by?: string | null;
   created_by_role?: "super_admin" | "system_admin" | "org_admin" | null;
   created_by_username?: string | null;
+  actions?: {
+    canUpdate: boolean;
+    canEnable: boolean;
+    canDuplicate: boolean;
+    canDelete: boolean;
+    noUpdateReason?: string;
+    noEnableReason?: string;
+    noDuplicateReason?: string;
+    noDeleteReason?: string;
+  };
+  stepCount?: number;
+  enabledStepCount?: number;
+  boundAgentCount?: number;
+};
+
+type WorkflowPagination = {
+  page: number;
+  pageSize: number;
+  total: number;
+  focusFound?: boolean;
+  focusPage?: number | null;
 };
 
 type PermScope = "org" | "dept" | "team";
@@ -129,6 +152,7 @@ const SOURCE_META: Record<AgentSource, {
 };
 
 const SOURCE_ORDER: AgentSource[] = ["builtin", "external_api", "external_link"];
+const UNGROUPED_CATEGORY_ID = "__uncategorized__";
 
 export default function WorkflowsAdminPage() {
   const { toast } = useToast();
@@ -186,6 +210,12 @@ export default function WorkflowsAdminPage() {
     ) ? "system_admin" : "org_admin";
   }
   function canActOnWf(wf: Workflow, action: "update" | "enable" | "duplicate" | "delete"): boolean {
+    if (wf.actions) {
+      if (action === "update") return wf.actions.canUpdate;
+      if (action === "enable") return wf.actions.canEnable;
+      if (action === "duplicate") return wf.actions.canDuplicate;
+      return wf.actions.canDelete;
+    }
     if (!canWorkflowAction(action)) return false;
     const actorRole = actorHierarchyRoleForWf();
     if (!actorRole) return false;
@@ -196,6 +226,12 @@ export default function WorkflowsAdminPage() {
     return canActOnWf(wf, "update");
   }
   function noTouchReason(wf: Workflow, action: "update" | "enable" | "duplicate" | "delete" = "update"): string {
+    if (wf.actions) {
+      if (action === "update" && wf.actions.noUpdateReason) return wf.actions.noUpdateReason;
+      if (action === "enable" && wf.actions.noEnableReason) return wf.actions.noEnableReason;
+      if (action === "duplicate" && wf.actions.noDuplicateReason) return wf.actions.noDuplicateReason;
+      if (action === "delete" && wf.actions.noDeleteReason) return wf.actions.noDeleteReason;
+    }
     if (!canWorkflowAction(action)) {
       return "你的角色未授予对应 workflow 权限";
     }
@@ -214,18 +250,9 @@ export default function WorkflowsAdminPage() {
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [tenantSearch, setTenantSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
   // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留工作流列表（无 Tab 切换）
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  // R1.7 · 分类 section 折叠（与智能体管理风格一致）· 默认全折叠
-  const [expandedWfSections, setExpandedWfSections] = useState<Set<string>>(new Set());
-  function toggleWfSection(id: string) {
-    setExpandedWfSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
   // 4.27up 阶段一：流程图 / 列表 视图切换，按 workflow.id 维度记忆
   // 4.29up：默认视图改为 list（列表为主，流程图为辅）
   const [viewModeMap, setViewModeMap] = useState<Record<string, "flow" | "list">>({});
@@ -234,9 +261,13 @@ export default function WorkflowsAdminPage() {
     setViewModeMap((prev) => ({ ...prev, [wfId]: mode }));
   }
   const [wfSearch, setWfSearch] = useState("");
+  const [debouncedWfSearch, setDebouncedWfSearch] = useState("");
   const [wfCatFilter, setWfCatFilter] = useState("");
   const [wfVisibleFilter, setWfVisibleFilter] = useState("");
   const [wfStatusFilter, setWfStatusFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [pagination, setPagination] = useState<WorkflowPagination>({ page: 1, pageSize: 10, total: 0 });
 
   // Workflow modal
   const [showWfModal, setShowWfModal] = useState(false);
@@ -268,7 +299,6 @@ export default function WorkflowsAdminPage() {
   const router = useRouter();
   const [focusWfId, setFocusWfId] = useState<string | null>(null);
   const [focusFromAgentId, setFocusFromAgentId] = useState<string | null>(null);
-  const [urlPageSize, setUrlPageSize] = useState<number | null>(null);
   const [urlReady, setUrlReady] = useState(false);
   const [highlightedWfId, setHighlightedWfId] = useState<string | null>(null);
   // 4.29up：从智能体跳过来时，把使用该 agent 的步骤一并高亮
@@ -285,17 +315,33 @@ export default function WorkflowsAdminPage() {
     setFocusFromAgentId(fa);
     if (ps) {
       const n = parseInt(ps);
-      if (Number.isFinite(n) && n > 0) setUrlPageSize(n);
+      if (Number.isFinite(n) && n > 0) setPageSize(n);
     }
     setUrlReady(true);
   }, []);
 
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setDebouncedWfSearch(wfSearch.trim());
+      setPage(1);
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [wfSearch]);
+
   async function load() {
     setLoading(true);
     try {
-      const wfPs = urlPageSize && urlPageSize > 0 ? `?pageSize=${urlPageSize}` : "";
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (debouncedWfSearch) params.set("q", debouncedWfSearch);
+      if (wfCatFilter) params.set("categoryId", wfCatFilter);
+      if (wfVisibleFilter) params.set("visible", wfVisibleFilter);
+      if (wfStatusFilter) params.set("status", wfStatusFilter);
+      if (focusWfId && !focusFiredRef.current) params.set("focusId", focusWfId);
       const [wr, ar, cr, tr, dr, teamsR] = await Promise.all([
-        fetch(`/api/admin/workflows${wfPs}`).then((r) => r.json()).then(d => d.data ?? d),
+        fetch(`/api/admin/workflows?${params.toString()}`, { cache: "no-store" }).then((r) => r.json()),
         // 6.5up R1 · 走 picker 专用接口（极简字段 + 全量拉 hard cap 2000），
         //   替代 4.27up 阶段一的 ?pageSize=100 兜底；同时拿 capped/totalCount 用于
         //   popover 截断提示。超过 2000 的场景需要做服务端搜索（方案 C），目前留作下一轮。
@@ -309,7 +355,13 @@ export default function WorkflowsAdminPage() {
         fetch("/api/admin/departments").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
         fetch("/api/admin/teams").then((r) => r.json()).then(d => d.data ?? d).catch(() => []),
       ]);
-      setWorkflows(Array.isArray(wr) ? wr : []);
+      setWorkflows(Array.isArray(wr?.data) ? wr.data : []);
+      if (wr?.pagination) {
+        setPagination(wr.pagination);
+        if (typeof wr.pagination.page === "number" && wr.pagination.page !== page) {
+          setPage(wr.pagination.page);
+        }
+      }
       setAgents(ar.list);
       setAgentsCapped(ar.capped);
       setAgentsTotalCount(ar.totalCount);
@@ -320,6 +372,7 @@ export default function WorkflowsAdminPage() {
     } catch {
       setWorkflows([]);
     } finally {
+      setHasLoaded(true);
       setLoading(false);
     }
   }
@@ -329,17 +382,22 @@ export default function WorkflowsAdminPage() {
     if (!urlReady) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlReady]);
+  }, [urlReady, page, pageSize, debouncedWfSearch, wfCatFilter, wfVisibleFilter, wfStatusFilter, focusWfId]);
 
   // focus 高亮：数据加载完成后清掉筛选 + 展开 + 滚动 + ring 1.5s
   useEffect(() => {
     if (!focusWfId || loading || focusFiredRef.current) return;
-    if (workflows.length === 0) return;
+    if (workflows.length === 0) {
+      if (hasLoaded && pagination.focusFound === false) {
+        focusFiredRef.current = true;
+        toast("目标工作流不存在、已删除或当前账号无权访问");
+      }
+      return;
+    }
     const target = workflows.find((w) => w.id === focusWfId);
     if (!target) {
-      // 找不到再下结论才"消耗"focus（数据已经加载完成、但目标不在当前 pageSize 范围内）
       focusFiredRef.current = true;
-      toast("目标工作流不在当前页，请翻页查找");
+      toast("目标工作流不存在、已删除或当前账号无权访问");
       return;
     }
     focusFiredRef.current = true;
@@ -368,24 +426,7 @@ export default function WorkflowsAdminPage() {
       setHighlightedWfId(null);
       setHighlightedStepAgentId(null);
     }, 1500);
-  }, [focusWfId, focusFromAgentId, loading, workflows, toast]);
-
-  // 6.5up · focus 跳转时自动展开 target 所在分类 section（避免目标卡片在折叠的
-  //   分类 tbody 里看不到 / 滚到错位置）。仿 app/admin/agents/page.tsx 6.3up 同款
-  //   语义：只 add target 所在 section，不收其它 section，让用户保留浏览上下文。
-  useEffect(() => {
-    if (!focusWfId) return;
-    const target = workflows.find((w) => w.id === focusWfId);
-    if (!target) return;
-    const sectionIds: string[] = (target.categoryIds ?? []).length > 0
-      ? target.categoryIds!
-      : ["__uncategorized__"];
-    setExpandedWfSections((prev) => {
-      const next = new Set(prev);
-      for (const sid of sectionIds) next.add(sid);
-      return next;
-    });
-  }, [focusWfId, workflows]);
+  }, [focusWfId, focusFromAgentId, loading, hasLoaded, pagination.focusFound, workflows, toast]);
 
   // ── Workflow CRUD ──────────────────────────────────────────────
   function openAddWf() { setEditingWf(null); setWfForm(EMPTY_WF); setWfError(""); setShowWfModal(true); }
@@ -816,16 +857,284 @@ export default function WorkflowsAdminPage() {
     return agents.find((a) => a.id === agentId) ?? null;
   };
 
+  const totalPages = Math.max(1, Math.ceil((pagination.total || 0) / pagination.pageSize));
+  const hasWorkflowFilters = wfSearch || wfCatFilter || wfVisibleFilter || wfStatusFilter;
+  const ungroupedPageCount = workflows.filter((wf) => (wf.categoryIds ?? []).length === 0).length;
+  const categoryPageCounts = new Map<string, number>();
+  for (const wf of workflows) {
+    for (const cid of wf.categoryIds ?? []) {
+      categoryPageCounts.set(cid, (categoryPageCounts.get(cid) ?? 0) + 1);
+    }
+  }
+
+  function selectWfCategory(next: string) {
+    setWfCatFilter(next);
+    setPage(1);
+  }
+
+  function clearWorkflowFilters() {
+    setWfSearch("");
+    setDebouncedWfSearch("");
+    setWfCatFilter("");
+    setWfVisibleFilter("");
+    setWfStatusFilter("");
+    setPage(1);
+  }
+
+  function workflowCategoryNames(wf: Workflow) {
+    return (wf.categoryIds ?? [])
+      .map((cid) => categories.find((c) => c.id === cid)?.name)
+      .filter((name): name is string => !!name);
+  }
+
+  function visibilityLabel(wf: Workflow) {
+    if (wf.visible_to === "all") return "全部用户";
+    if (wf.visible_to === "org_only") return "仅组织用户";
+    if (wf.visible_to === "personal_only") return "仅个人用户";
+    if (wf.visible_to === "custom") {
+      const type = wf.permissions?.[0]?.scope_type;
+      if (type === "dept") return "指定部门";
+      if (type === "team") return "指定小组";
+      return "指定组织";
+    }
+    return wf.visible_to || "未设置";
+  }
+
+  function renderWorkflowDetailContent(wf: Workflow) {
+    const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
+    const canEdit = canTouchWf(wf);
+
+    return (
+      <>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="flex w-fit shrink-0 items-center gap-1 rounded-[8px] bg-gray-100 p-0.5">
+            {(["list", "flow"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(wf.id, mode)}
+                className={`rounded-[6px] px-3 py-1 text-xs transition-colors ${
+                  getViewMode(wf.id) === mode
+                    ? "bg-white text-[#002FA7] shadow-sm font-medium"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {mode === "flow" ? "流程图" : "列表"}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <ChipPopover
+              label="标签"
+              theme="green"
+              triggerIcon={<Tag size={12} />}
+              items={(wf.categoryIds ?? [])
+                .map((cid) => {
+                  const cat = categories.find((c) => c.id === cid);
+                  if (!cat) return null;
+                  return { name: cat.name, iconUrl: cat.icon_url };
+                })
+                .filter(Boolean) as ChipItem[]}
+            />
+            {wf.visible_to === "org_only" && (() => {
+              const orgRules = (wf.permissions ?? []).filter((r) => r.scope_type === "org");
+              if (orgRules.length === 0) {
+                return <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600">仅组织用户</span>;
+              }
+              const items: ChipItem[] = orgRules
+                .map((r) => tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id ?? "")
+                .filter((n): n is string => !!n)
+                .map((name) => ({ name }));
+              return <ChipPopover label="指定组织" theme="amber" triggerIcon={<Home size={12} />} items={items} />;
+            })()}
+            {wf.visible_to === "personal_only" && (
+              <span className="rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-600">仅个人用户</span>
+            )}
+            {wf.visible_to === "custom" && (() => {
+              const rules = wf.permissions ?? [];
+              const firstType = rules[0]?.scope_type;
+              const typeLabel = firstType === "dept" ? "指定部门"
+                : firstType === "team" ? "指定小组"
+                : "指定组织";
+              const items: ChipItem[] = rules.map((r): ChipItem => {
+                if (r.scope_type === "org") {
+                  return { name: tenants.find((t) => t.code === r.scope_id)?.name ?? r.scope_id ?? "" };
+                }
+                if (r.scope_type === "dept") {
+                  const d = allDepts.find((x) => x.id === r.scope_id);
+                  if (!d) return { name: r.scope_id ?? "" };
+                  const tenant = tenants.find((t) => t.code === d.tenant_code)?.name;
+                  return { name: tenant ? `${tenant} / ${d.name}` : d.name };
+                }
+                if (r.scope_type === "team") {
+                  const tm = allTeams.find((x) => x.id === r.scope_id);
+                  if (!tm) return { name: r.scope_id ?? "" };
+                  const d = allDepts.find((x) => x.id === tm.dept_id);
+                  const tenant = d ? tenants.find((t) => t.code === d.tenant_code)?.name : null;
+                  if (tenant && d) return { name: `${tenant} / ${d.name} / ${tm.name}` };
+                  if (d) return { name: `${d.name} / ${tm.name}` };
+                  return { name: tm.name };
+                }
+                return { name: r.scope_id ?? "" };
+              }).filter((it) => !!it.name);
+              return <ChipPopover label={typeLabel} theme="amber" triggerIcon={<Home size={12} />} items={items} />;
+            })()}
+            {wf.visible_to && wf.visible_to !== "all" && wf.visible_to !== "org_only" && wf.visible_to !== "personal_only" && wf.visible_to !== "custom" && (
+              <ChipPopover label="指定组织可见" theme="amber" triggerIcon={<Home size={12} />} items={[{ name: wf.visible_to }]} />
+            )}
+            {wf.created_by_role && (() => {
+              const creatorLevel = ROLE_LEVEL_MAP[wf.created_by_role] ?? 0;
+              const allowedRoles = (["super_admin", "system_admin", "org_admin"] as const)
+                .filter((role) => (ROLE_LEVEL_MAP[role] ?? 0) >= creatorLevel);
+              const items: ChipItem[] = allowedRoles.map((role) => ({
+                name: ROLE_LABEL_MAP[role] ?? role,
+              }));
+              return <ChipPopover label="可修改本工作流的管理员" theme="gray" triggerIcon={<Lock size={12} />} items={items} />;
+            })()}
+          </div>
+        </div>
+
+        {wf.description && (
+          <p className="mb-4 whitespace-pre-wrap text-sm leading-relaxed text-gray-500">{wf.description}</p>
+        )}
+
+        {getViewMode(wf.id) === "flow" ? (
+          <WorkflowFlowView
+            wfId={wf.id}
+            steps={steps}
+            agents={agents}
+            getAgent={getAgent}
+            openInsertStep={openInsertStep}
+            openEditStep={openEditStep}
+            deleteStep={deleteStep}
+            toggleStepEnabled={toggleStepEnabled}
+            bindAgentToStep={bindAgentToStep}
+            moveStep={moveStep}
+            moving={moving}
+            openAddStep={openAddStep}
+            highlightedStepAgentId={highlightedStepAgentId}
+            agentsCapped={agentsCapped}
+            agentsTotalCount={agentsTotalCount}
+            canEditSteps={canEdit}
+            isCustomAdmin={isCustomAdmin}
+          />
+        ) : (
+          <>
+            <div className="space-y-2">
+              {steps.length === 0 ? (
+                <p className="py-8 text-center text-sm text-gray-400">暂无步骤</p>
+              ) : (
+                steps.map((step, idx) => (
+                  <div key={step.id}>
+                    {idx === 0 && (
+                      <button onClick={() => canEdit && openInsertStep(wf.id, 0)} disabled={!canEdit} className={`mb-1 flex w-full items-center gap-1 py-0.5 text-xs transition-colors group ${!canEdit ? "text-gray-200 cursor-not-allowed" : "text-gray-300 hover:text-[#002FA7]"}`} title={canEdit ? "插入步骤" : noTouchReason(wf)}>
+                        <div className="h-px flex-1 bg-gray-100 group-hover:bg-[#002FA7]/20" />
+                        <PlusCircle size={12} />
+                        <span>插入</span>
+                        <div className="h-px flex-1 bg-gray-100 group-hover:bg-[#002FA7]/20" />
+                      </button>
+                    )}
+                    <div
+                      onDragOver={(e) => { if (dragStepId && dragStepId !== step.id) { e.preventDefault(); setDragOverStepId(step.id); } }}
+                      onDragLeave={() => setDragOverStepId((cur) => (cur === step.id ? null : cur))}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const dragged = dragStepId;
+                        setDragStepId(null); setDragOverStepId(null);
+                        if (dragged) reorderStepsByDrag(wf, dragged, step.id);
+                      }}
+                      className={`flex items-start gap-3 rounded-[12px] p-3 transition-all ${step.enabled ? "bg-gray-50" : "bg-gray-50/50 opacity-60"} ${highlightedStepAgentId && step.agent_id === highlightedStepAgentId ? "ring-2 ring-[#002FA7] bg-[#002FA7]/5" : ""} ${dragStepId === step.id ? "opacity-40" : ""} ${dragOverStepId === step.id && dragStepId !== step.id ? "ring-2 ring-dashed ring-[#002FA7]/50" : ""}`}
+                    >
+                      <span
+                        draggable={canEdit}
+                        onDragStart={(e) => { setDragStepId(step.id); e.dataTransfer.effectAllowed = "move"; }}
+                        onDragEnd={() => { setDragStepId(null); setDragOverStepId(null); }}
+                        className={`mt-0.5 shrink-0 ${canEdit ? "cursor-grab active:cursor-grabbing text-gray-400 hover:text-[#002FA7]" : "cursor-not-allowed text-gray-200"}`}
+                        title={canEdit ? "拖动调整步骤顺序" : noTouchReason(wf)}
+                      >
+                        <GripVertical size={14} />
+                      </span>
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#002FA7]/10 text-xs font-bold text-[#002FA7]">{idx + 1}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium text-gray-800">{step.title}</p>
+                          <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                            step.exec_type === "agent" ? "bg-blue-50 text-blue-600" :
+                            step.exec_type === "manual" ? "bg-amber-50 text-amber-600" :
+                            step.exec_type === "review" ? "bg-purple-50 text-purple-600" :
+                            "bg-gray-50 text-gray-600"
+                          }`}>
+                            {step.exec_type === "agent" && <><Bot size={11} />智能体</>}
+                            {step.exec_type === "manual" && <><User size={11} />人工执行</>}
+                            {step.exec_type === "review" && <><Eye size={11} />人工审核</>}
+                            {step.exec_type === "external" && <><Wrench size={11} />外部工具</>}
+                          </span>
+                        </div>
+                        {step.description && <p className="mt-0.5 text-xs text-gray-400">{step.description}</p>}
+                        {step.exec_type === "agent" && step.agent_id && (() => {
+                          const boundAgent = getAgent(step.agent_id);
+                          if (!boundAgent) {
+                            return <p className="mt-1 text-xs text-gray-400">绑定：{step.agent_id}</p>;
+                          }
+                          return (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/admin/agent-center?focus=${boundAgent.id}`);
+                              }}
+                              className="mt-1 flex items-center gap-1 text-xs text-[#002FA7] hover:underline"
+                              title="跳转到智能体管理"
+                            >
+                              {(() => {
+                                const meta = SOURCE_META[getAgentSource(boundAgent)];
+                                return <meta.Icon size={10} className={meta.iconColor} />;
+                              })()}
+                              <span className="max-w-[320px] truncate">绑定：{boundAgent.name}</span>
+                            </button>
+                          );
+                        })()}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button onClick={() => canEdit && moveStep(step, "up")} disabled={!canEdit || moving !== null || idx === 0} className={`rounded-[6px] p-1 transition-colors ${(!canEdit || idx === 0) ? "text-gray-200 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={canEdit ? "上移" : noTouchReason(wf)} aria-label="上移"><ArrowUp size={12} /></button>
+                        <button onClick={() => canEdit && moveStep(step, "down")} disabled={!canEdit || moving !== null || idx === steps.length - 1} className={`rounded-[6px] p-1 transition-colors ${(!canEdit || idx === steps.length - 1) ? "text-gray-200 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={canEdit ? "下移" : noTouchReason(wf)} aria-label="下移"><ArrowDown size={12} /></button>
+                        {!isCustomAdmin && (
+                          <button onClick={() => canEdit && toggleStepEnabled(step)} disabled={!canEdit} className={`rounded-[6px] p-1 text-xs transition-colors ${!canEdit ? "text-gray-300 cursor-not-allowed" : step.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={canEdit ? (step.enabled ? "停用" : "启用") : noTouchReason(wf)}>
+                            {step.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                          </button>
+                        )}
+                        <button onClick={() => canEdit && openEditStep(wf.id, step)} disabled={!canEdit} className={`rounded-[6px] p-1 transition-colors ${!canEdit ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-200 text-gray-400 hover:text-gray-600"}`} title={canEdit ? "编辑步骤" : noTouchReason(wf)}><Edit2 size={12} /></button>
+                        <button onClick={() => canEdit && deleteStep(step)} disabled={!canEdit} className={`rounded-[6px] p-1 transition-colors ${!canEdit ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-400"}`} title={canEdit ? "删除步骤" : noTouchReason(wf)}><Trash2 size={12} /></button>
+                      </div>
+                    </div>
+                    <button onClick={() => canEdit && openInsertStep(wf.id, idx + 1)} disabled={!canEdit} className={`mt-1 flex w-full items-center gap-1 py-0.5 text-xs transition-colors group ${!canEdit ? "text-gray-200 cursor-not-allowed" : "text-gray-300 hover:text-[#002FA7]"}`} title={canEdit ? "插入步骤" : noTouchReason(wf)}>
+                      <div className="h-px flex-1 bg-gray-100 group-hover:bg-[#002FA7]/20" />
+                      <PlusCircle size={12} />
+                      <span>插入</span>
+                      <div className="h-px flex-1 bg-gray-100 group-hover:bg-[#002FA7]/20" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            <button onClick={() => canEdit && openAddStep(wf.id, steps.length)} disabled={!canEdit} className={`mt-3 flex w-full items-center justify-center gap-1 rounded-[10px] border border-dashed py-2 text-sm transition-colors ${!canEdit ? "border-gray-100 text-gray-300 cursor-not-allowed" : "border-gray-200 text-gray-400 hover:text-[#002FA7] hover:border-[#002FA7]/40"}`} title={canEdit ? "添加步骤" : noTouchReason(wf)}>
+              <Plus size={14} /> 添加步骤
+            </button>
+          </>
+        )}
+      </>
+    );
+  }
+
   // 6.5up · addWfCategory / saveEditWfCat / deleteWfCat / handleWfCatIcon / removeWfCatIcon
   //        已抽到 /admin/tags 页面（不动后端 API，仅前端搬迁）
 
+  const detailWf = expandedId ? workflows.find((wf) => wf.id === expandedId) ?? null : null;
+
   return (
     <AdminLayout>
-      <div className="space-y-6">
+      <div className="max-w-[1500px] space-y-6">
         <PageHeader
           icon={<GitBranch size={20} />}
           title="工作流管理"
-          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {workflows.length} 个</span>}
           actions={
             <>
               {/* 6.3up R1.1 · 工作流配置入口（仅 super/system_admin 可见，与服务端 isWorkflowConfigAdmin 一致） */}
@@ -847,174 +1156,240 @@ export default function WorkflowsAdminPage() {
           }
         />
 
-        {/* 6.5up · 工作流列表主体（旧分类管理 Tab 已抽到 /admin/tags） */}
-        <>
-
-        {/* 筛选栏 */}
-        <Card padding="md" className="flex flex-wrap gap-3 items-center">
-          <div className="relative flex-1 min-w-[220px]">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input className="w-full h-10 border border-gray-200 rounded-[10px] pl-9 pr-3 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" placeholder="搜索工作流名称…" value={wfSearch} onChange={e => setWfSearch(e.target.value)} />
-          </div>
-          <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfCatFilter} onChange={e => setWfCatFilter(e.target.value)}>
-            <option value="">全部标签</option>
-            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfVisibleFilter} onChange={e => setWfVisibleFilter(e.target.value)}>
-            <option value="">全部可见范围</option>
-            <option value="all">全部用户</option>
-            <option value="org_only">仅组织用户</option>
-            <option value="personal_only">仅个人用户</option>
-            <option value="custom:org">指定组织可见</option>
-            <option value="custom:dept">指定部门可见</option>
-            <option value="custom:team">指定小组可见</option>
-          </select>
-          <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={wfStatusFilter} onChange={e => setWfStatusFilter(e.target.value)}>
-            <option value="">全部状态</option>
-            <option value="enabled">已启用</option>
-            <option value="disabled">已停用</option>
-          </select>
-          {(wfSearch || wfCatFilter || wfVisibleFilter || wfStatusFilter) && (
-            <button onClick={() => { setWfSearch(""); setWfCatFilter(""); setWfVisibleFilter(""); setWfStatusFilter(""); }} className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2">
-              <X size={13} /> 清除
-            </button>
-          )}
-        </Card>
-
-        {loading ? (
-          <div className="space-y-3">{[...Array(3)].map((_, i) => <div key={i} className="h-20 bg-white rounded-[16px] animate-pulse" />)}</div>
-        ) : (() => {
-          const filteredWorkflows = workflows.filter(wf => {
-            if (wfSearch && !wf.name.toLowerCase().includes(wfSearch.toLowerCase())) return false;
-            if (wfCatFilter && !(wf.categoryIds ?? []).includes(wfCatFilter)) return false;
-            if (wfStatusFilter === "enabled" && !wf.enabled) return false;
-            if (wfStatusFilter === "disabled" && wf.enabled) return false;
-            if (wfVisibleFilter === "all" && wf.visible_to !== "all") return false;
-            if (wfVisibleFilter === "org_only" && wf.visible_to !== "org_only") return false;
-            if (wfVisibleFilter === "personal_only" && wf.visible_to !== "personal_only") return false;
-            if (wfVisibleFilter.startsWith("custom:")) {
-              if (wf.visible_to !== "custom") return false;
-              const targetScope = wfVisibleFilter.split(":")[1];
-              const firstType = wf.permissions?.[0]?.scope_type;
-              if (firstType !== targetScope) return false;
-            }
-            return true;
-          });
-          // 5.16up R6 方案乙 · 按工作流分类分区分组（多分类工作流在每个所属分类各出现一次，
-          // 与 R4 后台分组口径一致；空分类归"未分类"兜底区；不改 DB、区内仍用全局 sort_order）
-          const groupedWfSections = (() => {
-            const cats = wfCatFilter ? categories.filter((c) => c.id === wfCatFilter) : categories;
-            const sections = cats.map((c) => ({
-              id: c.id,
-              name: c.name,
-              icon_url: c.icon_url ?? null,
-              workflows: filteredWorkflows.filter((wf) => (wf.categoryIds ?? []).includes(c.id)),
-            }));
-            if (!wfCatFilter) {
-              // 验收修复 · 兜底：归不进任一已加载标签区的工作流（无标签 / 标签未加载 / 标签已删）
-              //   一律进"未设置标签"，不再静默丢弃（曾因 custom admin 读不到 wf-categories 导致带标签工作流整批消失）
-              const shownIds = new Set(sections.flatMap((s) => s.workflows.map((w) => w.id)));
-              const uncat = filteredWorkflows.filter((wf) => !shownIds.has(wf.id));
-              if (uncat.length > 0) {
-                sections.push({ id: "__uncategorized__", name: "未设置标签", icon_url: null, workflows: uncat });
-              }
-            }
-            return sections.filter((s) => s.workflows.length > 0);
-          })();
-          return filteredWorkflows.length === 0 ? (
-          <Card padding="lg" className="py-16 text-center text-gray-400">
-            <GitBranch size={36} className="mx-auto mb-3 text-gray-200" />
-            <p className="text-sm">{workflows.length === 0 ? "暂无工作流，点击右上角新增" : "没有符合筛选条件的工作流"}</p>
-          </Card>
-        ) : (
-          <div className="space-y-6">
-            {/* 5.16up R6 方案乙 · 按工作流分类分区展示（不改 DB，非真隔离） */}
-            <p className="text-[12px] text-gray-400 px-1">
-              按标签分区展示；区内仍按全局顺序排列 —— 分区视图，非各标签独立排序。
-            </p>
-            {groupedWfSections.map((section) => {
-            const sectionExpanded = expandedWfSections.has(section.id);
-            return (
-            <div key={section.id}>
-              {/* R1.7 · 分类 header · 卡片化（与下面工作流卡片视觉一致）+ chevron 折叠 */}
+        <div className="grid grid-cols-1 gap-4 items-start xl:h-[calc(100vh-188px)] xl:min-h-0 xl:grid-cols-[260px_minmax(0,1fr)]">
+          <Card padding="none" className="overflow-hidden xl:flex xl:h-full xl:min-h-0 xl:flex-col">
+            <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+              <Tag size={16} className="text-gray-500" />
+              <h2 className="text-sm font-semibold text-gray-900">标签分组</h2>
+            </div>
+            <div className="p-3 space-y-1 overflow-y-auto xl:min-h-0 xl:flex-1">
               <button
                 type="button"
-                onClick={() => toggleWfSection(section.id)}
-                className="card card-hover w-full flex items-center gap-3 px-5 py-4 mb-3 text-left"
+                onClick={() => selectWfCategory("")}
+                className={`w-full h-9 rounded-[8px] px-3 text-sm flex items-center justify-between ${
+                  wfCatFilter === "" ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
+                }`}
               >
-                {sectionExpanded
-                  ? <ChevronDown size={18} className="text-gray-500 shrink-0" />
-                  : <ChevronRight size={18} className="text-gray-500 shrink-0" />}
-                {section.icon_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={section.icon_url} alt={section.name} className="w-7 h-7 rounded-[8px] object-contain shrink-0" />
-                ) : (
-                  <div className="w-7 h-7 rounded-[8px] bg-[#002FA7]/10 flex items-center justify-center shrink-0">
-                    <Tag size={15} className="text-[#002FA7]" />
-                  </div>
-                )}
-                <span className="text-[16px] font-semibold text-gray-800">{section.name}</span>
-                <span className="text-[12px] text-gray-400 font-medium ml-auto">{section.workflows.length} 个工作流</span>
+                <span>全部工作流</span>
+                <span>{pagination.total}</span>
               </button>
-              {sectionExpanded && (
-              // R1.14 · 仅靠左缩进表达从属关系（去掉竖线，更简洁）
-              <div className="space-y-3 ml-5 mb-3">
-            {section.workflows.map((wf) => {
-              const isExpanded = expandedId === wf.id;
-              const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
-              return (
-                <div
-                  key={wf.id}
-                  data-wf-card={wf.id}
-                  className={`card overflow-hidden transition-all ${
-                    highlightedWfId === wf.id ? "ring-2 ring-[#002FA7] ring-offset-2" : ""
+              <button
+                type="button"
+                onClick={() => selectWfCategory(UNGROUPED_CATEGORY_ID)}
+                className={`w-full h-9 rounded-[8px] px-3 text-sm flex items-center justify-between ${
+                  wfCatFilter === UNGROUPED_CATEGORY_ID ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
+                }`}
+              >
+                <span>未分组工作流</span>
+                <span>{ungroupedPageCount}</span>
+              </button>
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => selectWfCategory(cat.id)}
+                  className={`w-full min-h-9 rounded-[8px] px-3 py-2 text-sm flex items-center justify-between gap-2 ${
+                    wfCatFilter === cat.id ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
                   }`}
                 >
-                  {/* Workflow header */}
-                  <div className="flex items-center gap-3 px-5 py-4">
-                    <button onClick={() => setExpandedId(isExpanded ? null : wf.id)} className="p-1 rounded-[8px] hover:bg-gray-100 text-gray-400">
-                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-medium text-gray-900">{wf.name}</p>
-                        {/* 6.3up · 分类标签 chip + 简介 + 可见范围 chip 下沉到展开区，折叠态保留停用 + 创建者 */}
-                        {!wf.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
-                        {/* 6.3up · 创建者徽章已下沉到展开区 chip 行 */}
-                      </div>
-                      {/* 6.3up · 简介下沉到展开区（不再 truncate）*/}
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span className="text-xs text-gray-400 mr-2">{steps.length} 个步骤</span>
-                      {/* 5.11up · 决策 5=A：无权时按钮置灰 + tooltip 说明原因，不直接隐藏 */}
-                      {/* 6.4up · custom admin 直接隐藏 启停 / 复制 / 删除 三类按钮（v1 不开放） */}
-                      {(() => {
-                        const canUpdateRow = canActOnWf(wf, "update");
-                        const canEnableRow = canActOnWf(wf, "enable");
-                        const canDuplicateRow = canActOnWf(wf, "duplicate");
-                        const canDeleteRow = canActOnWf(wf, "delete");
-                        const updateReason = canUpdateRow ? "" : noTouchReason(wf, "update");
-                        return <>
-                          {canToggleWfEnabled && (
-                            <button onClick={() => canEnableRow && toggleWfEnabled(wf)} disabled={!canEnableRow} className={`p-1.5 rounded-[8px] transition-colors ${!canEnableRow ? "text-gray-300 cursor-not-allowed" : wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={canEnableRow ? (wf.enabled ? "停用" : "启用") : noTouchReason(wf, "enable")}>
-                              {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-                            </button>
-                          )}
-                          {canCopyWf && (
-                            <button onClick={() => canDuplicateRow && duplicateWf(wf)} disabled={!canDuplicateRow} className={`p-1.5 rounded-[8px] transition-colors ${!canDuplicateRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={canDuplicateRow ? "复制工作流" : noTouchReason(wf, "duplicate")} aria-label="复制工作流"><Copy size={14} /></button>
-                          )}
-                          <button onClick={() => canUpdateRow && openEditWf(wf)} disabled={!canUpdateRow} className={`p-1.5 rounded-[8px] transition-colors ${!canUpdateRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={canUpdateRow ? "编辑" : updateReason} aria-label="编辑"><Edit2 size={14} /></button>
-                          {canDeleteWf && (
-                            <button onClick={() => canDeleteRow && deleteWf(wf)} disabled={!canDeleteRow} className={`p-1.5 rounded-[8px] transition-colors ${!canDeleteRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-500"}`} title={canDeleteRow ? "删除" : noTouchReason(wf, "delete")} aria-label="删除"><Trash2 size={14} /></button>
-                          )}
-                        </>;
-                      })()}
-                    </div>
-                  </div>
+                  <span className="truncate text-left">{cat.name}</span>
+                  <span className="shrink-0">{categoryPageCounts.get(cat.id) ?? 0}</span>
+                </button>
+              ))}
+              {categories.length === 0 && (
+                <p className="py-8 text-center text-sm text-gray-400">暂无标签</p>
+              )}
+            </div>
+          </Card>
 
-                  {/* Steps */}
+          <div className="min-w-0 space-y-6 xl:grid xl:h-full xl:min-h-0 xl:grid-rows-[auto_minmax(0,1fr)] xl:gap-6 xl:space-y-0">
+            <Card padding="md">
+              <div className="flex flex-wrap gap-3 items-center">
+                <div className="relative w-full sm:w-[300px]">
+                  <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                  <input
+                    className="w-full h-10 border border-gray-300 rounded-[10px] bg-gray-50/80 pl-9 pr-3 text-sm shadow-sm placeholder:text-gray-500 transition-all hover:border-gray-400 focus:bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
+                    placeholder="搜索工作流名称、描述或标签"
+                    value={wfSearch}
+                    onChange={(e) => setWfSearch(e.target.value)}
+                  />
+                </div>
+                <select
+                  className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+                  value={wfVisibleFilter}
+                  onChange={(e) => {
+                    setWfVisibleFilter(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">全部可见范围</option>
+                  <option value="all">全部用户</option>
+                  <option value="org_only">仅组织用户</option>
+                  <option value="personal_only">仅个人用户</option>
+                  <option value="custom:org">指定组织可见</option>
+                  <option value="custom:dept">指定部门可见</option>
+                  <option value="custom:team">指定小组可见</option>
+                </select>
+                <select
+                  className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
+                  value={wfStatusFilter}
+                  onChange={(e) => {
+                    setWfStatusFilter(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="">全部状态</option>
+                  <option value="enabled">已启用</option>
+                  <option value="disabled">已停用</option>
+                </select>
+                {loading && hasLoaded && <span className="text-xs text-gray-400">更新中...</span>}
+                {hasWorkflowFilters && (
+                  <button onClick={clearWorkflowFilters} className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2">
+                    <X size={13} /> 清除
+                  </button>
+                )}
+              </div>
+            </Card>
+
+            <Card padding="none" className="overflow-hidden xl:flex xl:min-h-0 xl:flex-col">
+              {loading && !hasLoaded ? (
+                <div className="p-6 space-y-3 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />
+                  ))}
+                </div>
+              ) : workflows.length === 0 ? (
+                <div className="py-16 text-center text-gray-400 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:items-center xl:justify-center">
+                  <GitBranch size={36} className="mx-auto mb-3 text-gray-200" />
+                  <p className="text-sm">{pagination.total === 0 && !hasWorkflowFilters ? "暂无工作流，点击右上角新增" : "没有符合筛选条件的工作流"}</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
+                  <table className="w-full shrink-0 table-fixed text-sm">
+                    <colgroup>
+                      <col className="w-[32%]" />
+                      <col className="w-[18%]" />
+                      <col className="w-[18%]" />
+                      <col className="w-[18%]" />
+                      <col className="w-[14%]" />
+                    </colgroup>
+                    <thead className="border-b border-gray-200 bg-[#fafbfc]">
+                      <tr>
+                        {(["工作流", "标签", "可见范围", "步骤", "操作"] as const).map((h) => (
+                          <th
+                            key={h}
+                            className={`px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider ${
+                              h === "工作流" ? "text-left" : "text-center"
+                            }`}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                  </table>
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <table className="w-full table-fixed text-sm">
+                      <colgroup>
+                        <col className="w-[32%]" />
+                        <col className="w-[18%]" />
+                        <col className="w-[18%]" />
+                        <col className="w-[18%]" />
+                        <col className="w-[14%]" />
+                      </colgroup>
+                      <tbody className="divide-y divide-gray-50">
+                        {workflows.map((wf) => {
+              const isDetailOpen = expandedId === wf.id;
+              const isExpanded = false;
+              const steps = [...(wf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
+              const categoryNames = workflowCategoryNames(wf);
+              const canUpdateRow = canActOnWf(wf, "update");
+              const canEnableRow = canActOnWf(wf, "enable");
+              const canDuplicateRow = canActOnWf(wf, "duplicate");
+              const canDeleteRow = canActOnWf(wf, "delete");
+              return (
+                <Fragment key={wf.id}>
+                  <tr
+                    data-wf-card={wf.id}
+                    className={`hover:bg-gray-50/50 transition-colors ${
+                      highlightedWfId === wf.id || isDetailOpen ? "bg-[#002FA7]/5 ring-2 ring-[#002FA7] ring-inset" : ""
+                    }`}
+                  >
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => setExpandedId(wf.id)}
+                          className="p-1.5 rounded-[8px] text-[#002FA7] transition-colors hover:bg-[#002FA7]/10"
+                          title="配置工作流"
+                          aria-label="配置工作流"
+                        >
+                          <SlidersHorizontal size={15} />
+                        </button>
+                        <div className="w-9 h-9 rounded-[10px] bg-[#002FA7]/8 text-[#002FA7] flex items-center justify-center shrink-0">
+                          <GitBranch size={17} />
+                        </div>
+                        <div className="min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedId(wf.id)}
+                            title="配置工作流"
+                            className="block truncate text-left font-medium text-gray-900 hover:text-[#002FA7]"
+                          >
+                            {wf.name}
+                          </button>
+                          <p className="mt-0.5 truncate text-xs text-gray-400">{wf.description || "暂无简介"}</p>
+                        </div>
+                        {!wf.enabled && <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">已停用</span>}
+                      </div>
+                    </td>
+                    <td className="px-5 py-4 text-center">
+                      {categoryNames.length > 0 ? (
+                        <div className="flex flex-wrap items-center justify-center gap-1">
+                          {categoryNames.slice(0, 2).map((name) => (
+                            <span key={name} className="inline-flex max-w-[110px] items-center gap-1 rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">
+                              <Tag size={10} className="shrink-0" />
+                              <span className="truncate">{name}</span>
+                            </span>
+                          ))}
+                          {categoryNames.length > 2 && <span className="text-[11px] text-gray-400">+{categoryNames.length - 2}</span>}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 border border-gray-200">未设置标签</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-4 text-center">
+                      <span className="inline-flex rounded-full border border-amber-100 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+                        {visibilityLabel(wf)}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-gray-500">
+                        <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5">步骤 {wf.stepCount ?? steps.length}</span>
+                        <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5">智能体 {wf.boundAgentCount ?? steps.filter((step) => !!step.agent_id).length}</span>
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => setExpandedId(wf.id)} className="p-1.5 rounded-[8px] transition-colors hover:bg-[#002FA7]/10 text-[#002FA7]" title="查看详情" aria-label="查看详情"><Eye size={14} /></button>
+                        <button onClick={() => canUpdateRow && openEditWf(wf)} disabled={!canUpdateRow} className={`p-1.5 rounded-[8px] transition-colors ${!canUpdateRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={canUpdateRow ? "编辑" : noTouchReason(wf, "update")} aria-label="编辑"><Edit2 size={14} /></button>
+                        {canToggleWfEnabled && (
+                          <button onClick={() => canEnableRow && toggleWfEnabled(wf)} disabled={!canEnableRow} className={`p-1.5 rounded-[8px] transition-colors ${!canEnableRow ? "text-gray-300 cursor-not-allowed" : wf.enabled ? "text-[#002FA7] hover:bg-[#002FA7]/10" : "text-gray-300 hover:bg-gray-100"}`} title={canEnableRow ? (wf.enabled ? "停用" : "启用") : noTouchReason(wf, "enable")}>
+                            {wf.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                          </button>
+                        )}
+                        {canCopyWf && (
+                          <button onClick={() => canDuplicateRow && duplicateWf(wf)} disabled={!canDuplicateRow} className={`p-1.5 rounded-[8px] transition-colors ${!canDuplicateRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`} title={canDuplicateRow ? "复制工作流" : noTouchReason(wf, "duplicate")} aria-label="复制工作流"><Copy size={14} /></button>
+                        )}
+                        {canDeleteWf && (
+                          <button onClick={() => canDeleteRow && deleteWf(wf)} disabled={!canDeleteRow} className={`p-1.5 rounded-[8px] transition-colors ${!canDeleteRow ? "text-gray-300 cursor-not-allowed" : "hover:bg-red-50 text-gray-400 hover:text-red-500"}`} title={canDeleteRow ? "删除" : noTouchReason(wf, "delete")} aria-label="删除"><Trash2 size={14} /></button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
                   {isExpanded && (
-                    <div className="border-t border-gray-50 px-5 pb-4 pt-3">
+                    <tr>
+                      <td colSpan={5} className="bg-gray-50/40 px-5 py-4">
+                        <div className="rounded-[14px] border border-gray-100 bg-white px-4 pb-4 pt-3">
                       {/* 4.27up 阶段一：视图切换 Tab · 6.3up · 右侧紧邻分类标签 chip（折叠态从头部下沉）*/}
                       <div className="flex items-center gap-3 mb-3 flex-wrap">
                         <div className="flex items-center gap-1 p-0.5 bg-gray-100 rounded-[8px] w-fit shrink-0">
@@ -1204,7 +1579,7 @@ export default function WorkflowsAdminPage() {
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        router.push(`/admin/agents?focus=${boundAgent.id}&pageSize=100`);
+                                        router.push(`/admin/agent-center?focus=${boundAgent.id}`);
                                       }}
                                       className="text-xs text-[#002FA7] hover:underline mt-1 flex items-center gap-1"
                                       title="跳转到智能体管理"
@@ -1255,23 +1630,125 @@ export default function WorkflowsAdminPage() {
                       </button>
                       </>
                       )}
-                    </div>
+                        </div>
+                      </td>
+                    </tr>
                   )}
-                </div>
+                </Fragment>
               );
             })}
-              </div>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               )}
+              <div className="flex shrink-0 items-center justify-end border-t border-gray-100 bg-white px-5 py-3 text-sm text-gray-500">
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={page <= 1 || loading}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    aria-label="上一页"
+                    title="上一页"
+                  >
+                    <ChevronLeft size={16} />
+                  </Button>
+                  <span className="min-w-16 text-center">{pagination.page} / {totalPages}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={page >= totalPages || loading}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    aria-label="下一页"
+                    title="下一页"
+                  >
+                    <ChevronRight size={16} />
+                  </Button>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value));
+                      setPage(1);
+                    }}
+                    className="h-8 rounded-[8px] border border-gray-200 bg-white px-2 text-xs text-gray-600 focus:outline-none focus:border-[#002FA7]"
+                  >
+                    <option value={10}>10 条/页</option>
+                    <option value={20}>20 条/页</option>
+                    <option value={50}>50 条/页</option>
+                  </select>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </div>
+
+      {detailWf && (() => {
+        const detailSteps = [...(detailWf.workflow_steps ?? [])].sort((a, b) => a.step_order - b.step_order);
+        const canUpdateDetail = canActOnWf(detailWf, "update");
+        return (
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="工作流详情"
+            onMouseDown={() => setExpandedId(null)}
+          >
+            <div
+              className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-[22px] bg-white shadow-2xl"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-6 py-5">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[13px] bg-[#002FA7]/8 text-[#002FA7]">
+                    <GitBranch size={20} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="truncate text-lg font-semibold text-gray-900">{detailWf.name}</h2>
+                      {!detailWf.enabled && (
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-400">已停用</span>
+                      )}
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-sm text-gray-500">{detailWf.description || "暂无简介"}</p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-500">
+                    步骤 {detailWf.stepCount ?? detailSteps.length}
+                  </span>
+                  <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-500">
+                    智能体 {detailWf.boundAgentCount ?? detailSteps.filter((step) => !!step.agent_id).length}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openEditWf(detailWf)}
+                    disabled={!canUpdateDetail}
+                    className="gap-2"
+                    title={canUpdateDetail ? "编辑工作流" : noTouchReason(detailWf, "update")}
+                  >
+                    <Edit2 size={14} /> 编辑
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(null)}
+                    className="rounded-[10px] p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                    aria-label="关闭详情"
+                    title="关闭"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                {renderWorkflowDetailContent(detailWf)}
+              </div>
             </div>
-            );
-            })}
           </div>
         );
-        })()}
-
-        </>
-
-      </div>
+      })()}
 
       {/* Workflow Modal */}
       {showWfModal && (
@@ -1837,7 +2314,7 @@ function WorkflowFlowView(props: {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              flowRouter.push(`/admin/agents?focus=${agent.id}&pageSize=100`);
+                              flowRouter.push(`/admin/agent-center?focus=${agent.id}`);
                             }}
                             className="text-xs text-[#002FA7] hover:underline flex items-center gap-1 truncate text-left"
                             title={`跳转到智能体：${agent.name}`}

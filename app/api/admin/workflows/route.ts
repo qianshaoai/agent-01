@@ -4,13 +4,16 @@ import { getAdminAccessPayload } from "@/lib/session";
 import { isCustomAdminPayload } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { writeAuditLog } from "@/lib/audit";
+import { canActOnRole, noWritePermissionMessage, type AdminRole } from "@/lib/admin-permissions";
 import {
   buildPermissionActor,
   hasPermission,
   PermissionActor,
   listReadableScopes,
+  ResourceScope,
 } from "@/lib/permission-actor";
 import { PermissionKey, getPermissionScopeSuffix } from "@/lib/permission-keys";
+import { checkAnyScopedPermission } from "@/lib/adapters/access/_generic";
 // 6.4up v2 Phase D · D-3 · workflow builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
 import { isResourceEnforced } from "@/lib/access-facade";
 import { actorHierarchyRole } from "@/lib/creator-hierarchy";
@@ -18,6 +21,101 @@ import { actorHierarchyRole } from "@/lib/creator-hierarchy";
 export const dynamic = "force-dynamic";
 
 type WfPerm = { scope_type: string; scope_id: string | null };
+type WorkflowAction = "update" | "enable" | "duplicate" | "delete";
+type WorkflowActionFlags = {
+  canUpdate: boolean;
+  canEnable: boolean;
+  canDuplicate: boolean;
+  canDelete: boolean;
+  noUpdateReason?: string;
+  noEnableReason?: string;
+  noDuplicateReason?: string;
+  noDeleteReason?: string;
+};
+
+const UNGROUPED_CATEGORY_ID = "__uncategorized__";
+
+function sanitizeSearch(input: string) {
+  return input.replace(/[(),]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function intersectIds(base: Set<string> | null, ids: string[]) {
+  const next = new Set(ids);
+  if (base === null) return next;
+  return new Set([...base].filter((id) => next.has(id)));
+}
+
+function scopesFromPerms(perms: WfPerm[]): ResourceScope[] {
+  return perms
+    .filter((p) => p.scope_type === "all" || p.scope_type === "org" || p.scope_type === "dept" || p.scope_type === "team")
+    .map((p) => ({
+      scope_type: p.scope_type as ResourceScope["scope_type"],
+      scope_id: p.scope_type === "all" ? null : p.scope_id,
+    }));
+}
+
+function actorRoleForWorkflow(actor: PermissionActor): AdminRole {
+  if (actor.builtinRole === "super_admin" || actor.builtinRole === "system_admin" || actor.builtinRole === "org_admin") {
+    return actor.builtinRole;
+  }
+  const allWriteKeys = [
+    "workflow.create.all",
+    "workflow.update.all",
+    "workflow.enable.all",
+    "workflow.duplicate.all",
+    "workflow.delete.all",
+  ];
+  return allWriteKeys.some((key) => actor.permissions.has(key as PermissionKey)) ? "system_admin" : "org_admin";
+}
+
+async function canRunWorkflowAction(
+  actor: PermissionActor,
+  action: WorkflowAction,
+  scopes: ResourceScope[],
+  creatorRole: string | null | undefined,
+) {
+  if (!canActOnRole(actorRoleForWorkflow(actor), (creatorRole ?? "system_admin") as AdminRole)) {
+    return { ok: false, reason: noWritePermissionMessage((creatorRole ?? "system_admin") as AdminRole) };
+  }
+  if (actor.source === "custom_admin" && scopes.length === 0) {
+    return { ok: false, reason: "工作流无 scope 归属，custom admin 无法操作" };
+  }
+  if (actor.builtinRole === "org_admin" && scopes.length === 0) {
+    return { ok: false, reason: "无权操作该工作流" };
+  }
+  const ok = await checkAnyScopedPermission(actor, "workflow", action, scopes);
+  return ok ? { ok: true } : { ok: false, reason: "目标工作流超出权限范围或权限不足" };
+}
+
+async function buildWorkflowActions(
+  actor: PermissionActor,
+  scopes: ResourceScope[],
+  creatorRole: string | null | undefined,
+): Promise<WorkflowActionFlags> {
+  const result: WorkflowActionFlags = {
+    canUpdate: false,
+    canEnable: false,
+    canDuplicate: false,
+    canDelete: false,
+  };
+  for (const action of ["update", "enable", "duplicate", "delete"] as const) {
+    const checked = await canRunWorkflowAction(actor, action, scopes, creatorRole);
+    if (action === "update") {
+      result.canUpdate = checked.ok;
+      if (!checked.ok) result.noUpdateReason = checked.reason;
+    } else if (action === "enable") {
+      result.canEnable = checked.ok;
+      if (!checked.ok) result.noEnableReason = checked.reason;
+    } else if (action === "duplicate") {
+      result.canDuplicate = checked.ok;
+      if (!checked.ok) result.noDuplicateReason = checked.reason;
+    } else {
+      result.canDelete = checked.ok;
+      if (!checked.ok) result.noDeleteReason = checked.reason;
+    }
+  }
+  return result;
+}
 
 // 6.4up · 给 custom admin 计算可见 workflow id 集（从 resource_permissions 反查）
 async function computeCustomAdminVisibleWorkflowIds(
@@ -109,7 +207,15 @@ export async function GET(req: NextRequest) {
     return apiError("首次登录需先修改初始密码，请回登录页完成密码修改", "FORBIDDEN");
   }
 
-  const { page, pageSize, start } = parsePagination(req, 50);
+  const { page, pageSize } = parsePagination(req, 50);
+  const sp = req.nextUrl.searchParams;
+  const rawQ = (sp.get("q") ?? "").trim();
+  const q = sanitizeSearch(rawQ);
+  const categoryId = sp.get("categoryId") ?? "";
+  const status = sp.get("status") ?? "";
+  const visible = sp.get("visible") ?? "";
+  const focusId = sp.get("focusId") ?? "";
+  const actor = await buildPermissionActor(access);
 
   // 5.7up · org_admin 看本组织相关工作流：
   //   visible_to='org_only' / 'custom' 且 resource_permissions 里有 scope=本组织/部门/小组
@@ -118,7 +224,6 @@ export async function GET(req: NextRequest) {
 
   // Phase D D-3 · builtin 路径 v2 list 粗闸（env-gated；custom 分支下方独立处理，不受影响）
   if (isResourceEnforced("workflow") && !isCustomAdminPayload(access) && access.role !== "super_admin") {
-    const actor = await buildPermissionActor(access);
     const okOrg = actor.tenantCode
       ? await hasPermission(actor, "workflow.read.org", [
           { scope_type: "org", scope_id: actor.tenantCode },
@@ -132,7 +237,6 @@ export async function GET(req: NextRequest) {
 
   if (isCustomAdminPayload(access)) {
     // 6.4up · custom admin 路径：按持有的 read.* 计算可见 workflow id 集
-    const actor = await buildPermissionActor(access);
     const readKeys: PermissionKey[] = [
       "workflow.read.team",
       "workflow.read.dept",
@@ -187,6 +291,99 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  let idFilter: Set<string> | null = scopedWfIds ? new Set(scopedWfIds) : null;
+  let excludeIds: string[] = [];
+  const searchWorkflowIds = new Set<string>();
+
+  if (q) {
+    const { data: matchedCategories } = await db
+      .from("wf_categories")
+      .select("id")
+      .ilike("name", `%${q}%`)
+      .limit(500);
+    const matchedCategoryIds = (matchedCategories ?? []).map((c: { id: string }) => c.id);
+    if (matchedCategoryIds.length > 0) {
+      const { data: matchedWfCats } = await db
+        .from("workflow_categories")
+        .select("workflow_id")
+        .in("category_id", matchedCategoryIds);
+      for (const row of (matchedWfCats ?? []) as { workflow_id: string }[]) {
+        searchWorkflowIds.add(row.workflow_id);
+      }
+    }
+  }
+
+  if (categoryId) {
+    if (categoryId === UNGROUPED_CATEGORY_ID) {
+      const { data: categorizedRows } = await db
+        .from("workflow_categories")
+        .select("workflow_id");
+      excludeIds = Array.from(new Set((categorizedRows ?? []).map((row: { workflow_id: string }) => row.workflow_id)));
+    } else {
+      const { data: categoryRows } = await db
+        .from("workflow_categories")
+        .select("workflow_id")
+        .eq("category_id", categoryId);
+      idFilter = intersectIds(idFilter, (categoryRows ?? []).map((row: { workflow_id: string }) => row.workflow_id));
+    }
+  }
+
+  if (visible.startsWith("custom:")) {
+    const scopeType = visible.split(":")[1];
+    const { data: scopeRows } = await db
+      .from("resource_permissions")
+      .select("resource_id")
+      .eq("resource_type", "workflow")
+      .eq("scope_type", scopeType);
+    idFilter = intersectIds(idFilter, (scopeRows ?? []).map((row: { resource_id: string }) => row.resource_id));
+  }
+
+  if (idFilter && idFilter.size === 0) {
+    return NextResponse.json({
+      data: [],
+      pagination: { page: 1, pageSize, total: 0, focusFound: false, focusPage: null },
+    });
+  }
+
+  const searchOrParts: string[] = [];
+  if (q) {
+    searchOrParts.push(`name.ilike.%${q}%`);
+    searchOrParts.push(`description.ilike.%${q}%`);
+    if (searchWorkflowIds.size > 0) {
+      searchOrParts.push(`id.in.(${Array.from(searchWorkflowIds).join(",")})`);
+    }
+  }
+
+  let effectivePage = page;
+  let focusFound = false;
+  let focusPage: number | null = null;
+
+  if (focusId) {
+    let idQuery = db.from("workflows")
+      .select("id")
+      .order("sort_order", { ascending: true })
+      .range(0, 4999);
+    if (idFilter) idQuery = idQuery.in("id", Array.from(idFilter));
+    if (excludeIds.length > 0) idQuery = idQuery.not("id", "in", `(${excludeIds.join(",")})`);
+    if (searchOrParts.length > 0) idQuery = idQuery.or(searchOrParts.join(","));
+    if (status === "enabled") idQuery = idQuery.eq("enabled", true);
+    if (status === "disabled") idQuery = idQuery.eq("enabled", false);
+    if (visible === "all" || visible === "org_only" || visible === "personal_only" || visible === "custom") {
+      idQuery = idQuery.eq("visible_to", visible);
+    } else if (visible.startsWith("custom:")) {
+      idQuery = idQuery.eq("visible_to", "custom");
+    }
+    const { data: orderedIds } = await idQuery;
+    const focusIndex = ((orderedIds ?? []) as { id: string }[]).findIndex((row) => row.id === focusId);
+    if (focusIndex >= 0) {
+      focusFound = true;
+      focusPage = Math.floor(focusIndex / pageSize) + 1;
+      effectivePage = focusPage;
+    }
+  }
+
+  const effectiveStart = (effectivePage - 1) * pageSize;
+
   // R1.12 修复：v49 drop 了 workflows.created_by FK 后，PostgREST 不再认
   //   `creator:created_by ( username )` 隐式 join 关系（PGRST200），整个 GET 500。
   //   改为：① select 不带 creator；② 分别从 admins / users 表查 username 并 merge。
@@ -201,8 +398,17 @@ export async function GET(req: NextRequest) {
       )
     `, { count: "exact" })
     .order("sort_order", { ascending: true })
-    .range(start, start + pageSize - 1);
-  if (scopedWfIds) wfQuery = wfQuery.in("id", scopedWfIds);
+    .range(effectiveStart, effectiveStart + pageSize - 1);
+  if (idFilter) wfQuery = wfQuery.in("id", Array.from(idFilter));
+  if (excludeIds.length > 0) wfQuery = wfQuery.not("id", "in", `(${excludeIds.join(",")})`);
+  if (searchOrParts.length > 0) wfQuery = wfQuery.or(searchOrParts.join(","));
+  if (status === "enabled") wfQuery = wfQuery.eq("enabled", true);
+  if (status === "disabled") wfQuery = wfQuery.eq("enabled", false);
+  if (visible === "all" || visible === "org_only" || visible === "personal_only" || visible === "custom") {
+    wfQuery = wfQuery.eq("visible_to", visible);
+  } else if (visible.startsWith("custom:")) {
+    wfQuery = wfQuery.eq("visible_to", "custom");
+  }
 
   const [wfRes, permRes] = await Promise.all([
     wfQuery,
@@ -244,17 +450,34 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const result = (wfRes.data ?? []).map((wf) => {
+  const result = await Promise.all((wfRes.data ?? []).map(async (wf) => {
+    const perms = permMap.get(wf.id) ?? [];
+    const scopes = scopesFromPerms(perms);
+    const steps = (wf.workflow_steps ?? []) as { enabled: boolean; agent_id: string | null }[];
+    const actions = await buildWorkflowActions(actor, scopes, (wf as { created_by_role: string | null }).created_by_role);
     return {
       ...wf,
       categoryIds: (wf.workflow_categories ?? []).map((c: { category_id: string }) => c.category_id),
       workflow_categories: undefined,
       created_by_username: wf.created_by ? (usernameMap.get(wf.created_by) ?? null) : null,
-      permissions: permMap.get(wf.id) ?? [],
+      permissions: perms,
+      actions,
+      stepCount: steps.length,
+      enabledStepCount: steps.filter((step) => step.enabled).length,
+      boundAgentCount: steps.filter((step) => !!step.agent_id).length,
     };
-  });
+  }));
 
-  return paginatedResponse(result, wfRes.count ?? 0, page, pageSize);
+  return NextResponse.json({
+    data: result,
+    pagination: {
+      page: effectivePage,
+      pageSize,
+      total: wfRes.count ?? 0,
+      focusFound,
+      focusPage,
+    },
+  });
 }
 
 export async function POST(req: NextRequest) {

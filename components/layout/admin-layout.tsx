@@ -17,7 +17,6 @@ import {
   Users,
   ClipboardList,
   Plug,
-  Hammer,
   BookOpen,
   Tag,
   KeyRound,
@@ -72,9 +71,8 @@ const navGroups: NavGroup[] = [
     label: "内容",
     items: [
       { href: "/admin/model-providers", label: "API 管理",   icon: Plug,      allowedRoles: RBAC_SCOPED_ROLES, requiredAnyPermissions: ["provider.read.org", "provider.read.all"] },
-      { href: "/admin/agent-builder",   label: "智能体搭建", icon: Hammer,    allowedRoles: ALL_ROLES, requiredAnyPermissions: ["agent_draft.read.org", "agent_draft.read.all", "agent_draft.create.org", "agent_draft.create.all"] },
+      { href: "/admin/agent-center",    label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES, requiredAnyPermissions: ["agent.read.org", "agent.read.all", "agent_draft.read.org", "agent_draft.read.all"] },
       { href: "/admin/knowledge-bases", label: "知识库管理", icon: BookOpen,  allowedRoles: RBAC_SCOPED_ROLES, requiredAnyPermissions: ["kb.read.org", "kb.read.all"] },
-      { href: "/admin/agents",          label: "智能体管理", icon: Bot,       allowedRoles: ALL_ROLES, requiredAnyPermissions: ["agent.read.org", "agent.read.all"] },
       { href: "/admin/workflows",       label: "工作流管理", icon: GitBranch, allowedRoles: ALL_ROLES, requiredAnyPermissions: ["workflow.read.team", "workflow.read.dept", "workflow.read.org", "workflow.read.all", "workflow.create.team", "workflow.create.dept", "workflow.create.org", "workflow.create.all", "workflow.update.team", "workflow.update.dept", "workflow.update.org", "workflow.update.all"] },
       { href: "/admin/tags",            label: "标签管理",   icon: Tag,       allowedRoles: TAG_ADMIN_ROLES, requiredAnyPermissions: ["category.read.all"] },
       { href: "/admin/notices",         label: "公告管理",   icon: Megaphone, allowedRoles: ALL_ROLES, requiredAnyPermissions: ["notice.read.org", "notice.read.all"] },
@@ -193,6 +191,20 @@ export function AdminLayout({
   const showCustomFallback =
     meLoaded && accessSource === "custom_admin" && visibleNavGroups.length === 0;
 
+  function isNavActive(item: NavItem): boolean {
+    if (item.href === "/admin/agent-center") {
+      return (
+        pathname === item.href ||
+        pathname.startsWith(`${item.href}/`) ||
+        pathname.startsWith("/admin/agent-builder") ||
+        pathname.startsWith("/admin/agents")
+      );
+    }
+    return pathname === item.href || pathname.startsWith(`${item.href}/`);
+  }
+
+  const currentNavLabel = flatNav.find(isNavActive)?.label ?? "管理后台";
+
   const navContent = (
     <>
       {/* Logo 区 */}
@@ -253,7 +265,7 @@ export function AdminLayout({
             <p className="px-3 mb-1.5 text-[11px] font-medium text-white/50 tracking-wider uppercase">{group.label}</p>
             <div className="space-y-0.5">
               {group.items.map((item) => {
-                const active = pathname === item.href || pathname.startsWith(item.href + "/");
+                const active = isNavActive(item);
                 return (
                   <Link
                     key={item.href}
@@ -317,15 +329,15 @@ export function AdminLayout({
             <Menu size={20} className="text-gray-600" />
           </button>
           <span className="font-semibold text-gray-900 text-sm">
-            {flatNav.find((n) => pathname.startsWith(n.href))?.label ?? "管理后台"}
+            {currentNavLabel}
           </span>
         </div>
 
         <main
           className={
             fullBleed
-              ? "flex-1 page-enter w-full"
-              : "flex-1 p-5 sm:p-7 page-enter max-w-[1600px] w-full mx-auto"
+              ? "flex-1 w-full"
+              : "flex-1 p-5 sm:p-7 max-w-[1600px] w-full mx-auto"
           }
         >
           {showCustomFallback ? (

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
-import { Hammer, Plus, Copy, Trash2, Edit, Loader2 } from "lucide-react";
+import { ArrowLeft, Hammer, Plus, Copy, Trash2, Edit, Loader2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
 import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
@@ -155,11 +155,18 @@ export default function AgentBuilderListPage() {
           icon={<Hammer size={20} />}
           title="智能体搭建"
           actions={
-            canCreateDraft ? (
-              <Button onClick={create} loading={createGuard.loading} className="flex items-center gap-1.5">
-                <Plus size={16} /> 新建智能体
-              </Button>
-            ) : null
+            <>
+              <Link href="/admin/agent-center">
+                <Button variant="outline" className="flex items-center gap-1.5">
+                  <ArrowLeft size={16} /> 返回智能体管理
+                </Button>
+              </Link>
+              {canCreateDraft ? (
+                <Button onClick={create} loading={createGuard.loading} className="flex items-center gap-1.5">
+                  <Plus size={16} /> 新建智能体
+                </Button>
+              ) : null}
+            </>
           }
         />
 

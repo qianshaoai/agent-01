@@ -31,6 +31,7 @@ import {
   X,
 } from "lucide-react";
 import { AdminLayout } from "@/components/layout/admin-layout";
+import { KbVisibilityScopeEditor } from "@/components/admin/kb-visibility-scope-editor";
 import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
 
 type KbDocStatus = "pending" | "indexing" | "done" | "failed";
@@ -200,6 +201,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
   const [createBusy, setCreateBusy] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [newVisibilityScopes, setNewVisibilityScopes] = useState<KbVisibilityScope[]>(DEFAULT_VISIBILITY);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
@@ -210,6 +212,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
   const [visibilityOptionsLoading, setVisibilityOptionsLoading] = useState(false);
   const [docPage, setDocPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [returnDraftId, setReturnDraftId] = useState<string | null>(null);
 
   const detailRequestRef = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -270,6 +273,14 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
     () => new Set(editVisibilityScopes.map(scopeKey)),
     [editVisibilityScopes],
   );
+  const newScopeKeys = useMemo(
+    () => new Set(newVisibilityScopes.map(scopeKey)),
+    [newVisibilityScopes],
+  );
+  const newVisibilityMode =
+    newVisibilityScopes.length === 1 && newVisibilityScopes[0]?.scope_type === "all"
+      ? "all"
+      : "custom";
   const editVisibilityMode =
     editVisibilityScopes.length === 1 && editVisibilityScopes[0]?.scope_type === "all"
       ? "all"
@@ -361,6 +372,35 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
     }
   }, [visibilityTree.length]);
 
+  function openCreateModal() {
+    setShowCreate(true);
+    setNewVisibilityScopes(DEFAULT_VISIBILITY);
+    void loadVisibilityOptions();
+  }
+
+  function setNewVisibilityMode(mode: "all" | "custom") {
+    if (mode === "all") {
+      setNewVisibilityScopes(DEFAULT_VISIBILITY);
+      return;
+    }
+    setNewVisibilityScopes((prev) =>
+      prev.some((scope) => scope.scope_type !== "all")
+        ? prev.filter((scope) => scope.scope_type !== "all")
+        : [],
+    );
+  }
+
+  function toggleNewVisibilityScope(scope: KbVisibilityScope) {
+    setNewVisibilityScopes((prev) => {
+      const withoutAll = prev.filter((item) => item.scope_type !== "all");
+      const key = scopeKey(scope);
+      if (withoutAll.some((item) => scopeKey(item) === key)) {
+        return withoutAll.filter((item) => scopeKey(item) !== key);
+      }
+      return [...withoutAll, scope];
+    });
+  }
+
   function openEditModal() {
     if (!kb) return;
     setEditing(true);
@@ -398,6 +438,13 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
   }, [initialKbId, loadList]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const draftId = params.get("draftId");
+    setReturnDraftId(params.get("from") === "agent-builder" && draftId ? draftId : null);
+  }, []);
+
+  useEffect(() => {
     if (!selectedId) {
       setKb(null);
       setDocs([]);
@@ -427,6 +474,10 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
       setErr("请填写知识库名称");
       return;
     }
+    if (newVisibilityMode === "custom" && newVisibilityScopes.length === 0) {
+      setErr("请选择至少一个可见组织、部门或小组");
+      return;
+    }
     setCreateBusy(true);
     setErr("");
     setMsg("");
@@ -434,13 +485,18 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
       const res = await fetch("/api/admin/knowledge-bases", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName.trim(), description: newDesc.trim() }),
+        body: JSON.stringify({
+          name: newName.trim(),
+          description: newDesc.trim(),
+          visibilityScopes: newVisibilityScopes,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "创建知识库失败");
       setShowCreate(false);
       setNewName("");
       setNewDesc("");
+      setNewVisibilityScopes(DEFAULT_VISIBILITY);
       setMsg("知识库已创建");
       await loadList(json.id ?? null);
       if (json.id) {
@@ -609,10 +665,10 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
 
   return (
     <AdminLayout fullBleed hideFooter>
-      <div className="min-h-[calc(100vh-3.5rem)] lg:min-h-screen bg-[#f3f6ff]">
-        <div className="flex min-h-[calc(100vh-3.5rem)] lg:min-h-screen">
-          <aside className="hidden xl:flex w-[300px] shrink-0 flex-col border-r border-[#dfe6f5] bg-white/86 backdrop-blur">
-            <div className="px-7 pt-7 pb-4">
+      <div className="min-h-[calc(100vh-3.5rem)] bg-[#f3f6ff] lg:min-h-screen">
+        <div className="flex min-h-[calc(100vh-3.5rem)] gap-5 p-5 sm:p-7 lg:min-h-screen">
+          <aside className="hidden w-[300px] shrink-0 flex-col overflow-hidden rounded-[16px] border border-gray-200 bg-white shadow-sm xl:flex">
+            <div className="px-5 pt-5 pb-4">
               <div className="flex items-center gap-2">
                 <h1 className="text-[22px] font-semibold text-gray-950">知识库</h1>
                 <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 text-[12px] text-gray-400">
@@ -632,7 +688,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                 <button
                   type="button"
                   onClick={() => {
-                    setShowCreate(true);
+                    openCreateModal();
                     setErr("");
                   }}
                   className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-[10px] bg-[#002FA7] text-sm font-semibold text-white shadow-[0_8px_20px_rgba(0,47,167,0.24)] transition hover:bg-[#1a47c0]"
@@ -643,7 +699,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto px-3 pb-4">
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
               {listLoading ? (
                 <div className="space-y-2 px-2">
                   {Array.from({ length: 4 }).map((_, i) => (
@@ -665,7 +721,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                         onClick={() => selectKnowledgeBase(item.id)}
                         className={`flex w-full items-center gap-3 rounded-[12px] px-3 py-3 text-left transition ${
                           active
-                            ? "bg-[#edf3ff] shadow-[0_1px_8px_rgba(0,47,167,0.08)]"
+                            ? "bg-[#eef4ff] shadow-[0_1px_8px_rgba(0,47,167,0.08)]"
                             : "hover:bg-gray-50"
                         }`}
                       >
@@ -694,20 +750,20 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
               )}
             </div>
 
-            <div className="border-t border-gray-100 px-7 py-5 text-sm text-gray-500">
+            <div className="border-t border-gray-100 px-5 py-4 text-sm text-gray-500">
               共 {list.length} 个知识库
             </div>
           </aside>
 
           <main className="min-w-0 flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-[1320px] px-4 py-5 sm:px-6 lg:px-8">
+            <div className="mx-auto max-w-[1320px]">
               <div className="mb-5 xl:hidden">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <h1 className="text-[22px] font-semibold text-gray-950">知识库</h1>
                   {canCreateKb && (
                     <button
                       type="button"
-                      onClick={() => setShowCreate(true)}
+                      onClick={openCreateModal}
                       className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-[#002FA7] px-4 text-sm font-semibold text-white"
                     >
                       <Plus size={15} />
@@ -742,7 +798,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
               )}
 
               {!selectedId && !listLoading ? (
-                <EmptyState canCreate={canCreateKb} onCreate={() => setShowCreate(true)} />
+                <EmptyState canCreate={canCreateKb} onCreate={openCreateModal} />
               ) : detailLoading ? (
                 <DetailSkeleton />
               ) : !kb ? (
@@ -751,7 +807,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                 </div>
               ) : (
                 <div className="space-y-5">
-                  <section className="overflow-hidden rounded-[16px] border border-gray-200 bg-white">
+                  <section className="overflow-hidden rounded-[16px] border border-gray-200 bg-white shadow-sm">
                     <div className="flex flex-col gap-5 px-5 py-5 lg:flex-row lg:items-start lg:px-7">
                       <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[14px] bg-[#002FA7] text-white shadow-[0_8px_24px_rgba(0,47,167,0.24)]">
                         <BookOpen size={30} />
@@ -773,12 +829,21 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                         </p>
                       </div>
                       <div className="flex shrink-0 flex-wrap gap-2">
+                        {returnDraftId && (
+                          <a
+                            href={`/admin/agent-builder/${encodeURIComponent(returnDraftId)}`}
+                            className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[#002FA7]/20 bg-[#002FA7]/5 px-4 text-sm font-medium text-[#002FA7] shadow-sm transition hover:bg-[#002FA7]/10"
+                          >
+                            <ChevronLeft size={15} />
+                            返回智能体搭建
+                          </a>
+                        )}
                         <button
                           type="button"
                           onClick={openEditModal}
                           disabled={!canUpdateKb}
                           title={canUpdateKb ? "编辑" : READONLY_TITLE}
-                          className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-gray-200 bg-white px-4 text-sm font-medium text-gray-700 transition hover:border-[#002FA7]/30 hover:text-[#002FA7] disabled:cursor-not-allowed disabled:opacity-40"
+                          className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-gray-200 bg-white px-4 text-sm font-medium text-gray-700 shadow-sm transition hover:border-[#002FA7]/30 hover:text-[#002FA7] disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <Edit3 size={15} />
                           编辑
@@ -788,7 +853,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                           onClick={toggleStatus}
                           disabled={!canUpdateKb}
                           title={canUpdateKb ? undefined : READONLY_TITLE}
-                          className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-gray-200 bg-white px-4 text-sm font-medium text-gray-700 transition hover:border-amber-300 hover:text-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-gray-200 bg-white px-4 text-sm font-medium text-gray-700 shadow-sm transition hover:border-amber-300 hover:text-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <Power size={15} />
                           {kb.status === "active" ? "停用" : "启用"}
@@ -798,7 +863,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                           onClick={handleDeleteKb}
                           disabled={!canDeleteKb}
                           title={canDeleteKb ? "删除" : READONLY_TITLE}
-                          className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-gray-200 bg-white px-4 text-sm font-medium text-red-500 transition hover:border-red-200 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-gray-200 bg-white px-4 text-sm font-medium text-red-500 shadow-sm transition hover:border-red-200 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <Trash2 size={15} />
                           删除
@@ -830,9 +895,9 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                     </div>
                   )}
 
-                  <section className="overflow-hidden rounded-[16px] border border-gray-200 bg-white">
+                  <section className="overflow-hidden rounded-[16px] border border-gray-200 bg-white shadow-sm">
                     <div className="flex flex-col gap-4 border-b border-gray-100 px-5 py-5 lg:flex-row lg:items-center lg:px-7">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#002FA7] text-white">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#002FA7] text-white shadow-[0_8px_18px_rgba(0,47,167,0.18)]">
                         <FileText size={20} />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -872,8 +937,8 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                       <>
                         <div className="overflow-x-auto">
                           <table className="min-w-[860px] w-full border-collapse text-sm">
-                            <thead className="bg-[#fbfcff] text-left text-xs font-medium text-gray-500">
-                              <tr className="border-b border-gray-100">
+                            <thead className="bg-[#fafbfc] text-left text-xs font-semibold text-gray-500">
+                              <tr className="border-b border-gray-200">
                                 <th className="px-6 py-4">文件名称</th>
                                 <th className="w-28 px-4 py-4">分段数</th>
                                 <th className="w-28 px-4 py-4">字数</th>
@@ -881,9 +946,9 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                                 <th className="w-40 px-4 py-4 text-right">操作</th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-100">
+                            <tbody className="divide-y divide-gray-50">
                               {pageDocs.map((doc) => (
-                                <tr key={doc.id} className="hover:bg-gray-50/60">
+                                <tr key={doc.id} className="transition-colors hover:bg-gray-50/60">
                                   <td className="px-6 py-4">
                                     <div className="flex min-w-0 items-center gap-3">
                                       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-gray-100 text-gray-500">
@@ -948,45 +1013,45 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                           </table>
                         </div>
 
-                        <div className="flex flex-col gap-3 border-t border-gray-100 px-6 py-4 text-sm text-gray-500 sm:flex-row sm:items-center sm:justify-between">
-                          <label className="flex items-center gap-2">
-                            每页显示：
+                        <div className="flex items-center justify-end border-t border-gray-100 bg-white px-6 py-4 text-sm text-gray-500">
+                          <div className="flex flex-wrap items-center justify-end gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setDocPage((p) => Math.max(1, p - 1))}
+                              disabled={docPage <= 1}
+                              className="inline-flex h-8 min-w-8 items-center justify-center rounded-[8px] px-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label="上一页"
+                              title="上一页"
+                            >
+                              <ChevronLeft size={16} />
+                            </button>
+                            <span className="min-w-16 text-center">
+                              {Math.min(docPage, totalPages)} / {totalPages}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setDocPage((p) => Math.min(totalPages, p + 1))}
+                              disabled={docPage >= totalPages}
+                              className="inline-flex h-8 min-w-8 items-center justify-center rounded-[8px] px-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label="下一页"
+                              title="下一页"
+                            >
+                              <ChevronRight size={16} />
+                            </button>
                             <select
                               value={pageSize}
                               onChange={(e) => {
                                 setPageSize(Number(e.target.value));
                                 setDocPage(1);
                               }}
-                              className="h-9 rounded-[8px] border border-gray-200 bg-white px-3 text-sm outline-none"
+                              className="h-8 rounded-[8px] border border-gray-200 bg-white px-2 text-xs text-gray-600 outline-none focus:border-[#002FA7]"
                             >
                               {PAGE_SIZES.map((size) => (
                                 <option key={size} value={size}>
-                                  {size}
+                                  {size} 条/页
                                 </option>
                               ))}
                             </select>
-                          </label>
-                          <div className="flex items-center justify-end gap-3">
-                            <span>共 {docs.length} 条</span>
-                            <button
-                              type="button"
-                              onClick={() => setDocPage((p) => Math.max(1, p - 1))}
-                              disabled={docPage <= 1}
-                              className="flex h-9 w-9 items-center justify-center rounded-[8px] border border-gray-200 bg-white text-gray-500 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <ChevronLeft size={16} />
-                            </button>
-                            <span className="flex h-9 min-w-9 items-center justify-center rounded-[8px] border border-[#002FA7] bg-white px-3 text-[#002FA7]">
-                              {Math.min(docPage, totalPages)}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setDocPage((p) => Math.min(totalPages, p + 1))}
-                              disabled={docPage >= totalPages}
-                              className="flex h-9 w-9 items-center justify-center rounded-[8px] border border-gray-200 bg-white text-gray-500 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <ChevronRight size={16} />
-                            </button>
                           </div>
                         </div>
                       </>
@@ -1018,6 +1083,18 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
                 rows={3}
                 className="w-full resize-none rounded-[10px] border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10"
                 placeholder="一句话说明这个知识库装的是什么资料"
+              />
+            </Field>
+            <Field label="可见范围">
+              <KbVisibilityScopeEditor
+                mode={newVisibilityMode}
+                scopes={newVisibilityScopes}
+                scopeKeys={newScopeKeys}
+                tree={visibilityTree}
+                canUseAll={canUseAllVisibility}
+                loading={visibilityOptionsLoading}
+                onModeChange={setNewVisibilityMode}
+                onToggleScope={toggleNewVisibilityScope}
               />
             </Field>
             <div className="flex justify-end gap-2 pt-2">
@@ -1062,7 +1139,7 @@ export function KnowledgeBaseWorkbench({ initialKbId }: KnowledgeBaseWorkbenchPr
               />
             </Field>
             <Field label="可见范围">
-              <VisibilityScopeEditor
+              <KbVisibilityScopeEditor
                 mode={editVisibilityMode}
                 scopes={editVisibilityScopes}
                 scopeKeys={editScopeKeys}
@@ -1149,6 +1226,7 @@ function ReferenceText({
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function VisibilityScopeEditor({
   mode,
   scopes,

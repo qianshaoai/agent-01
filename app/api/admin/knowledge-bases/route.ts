@@ -6,6 +6,7 @@ import { writeAuditLog } from "@/lib/audit";
 import type { AdminPayload } from "@/lib/auth";
 import {
   listScopeFilter,
+  canWriteRow,
   resolveCreateOwnership,
   requireWriteAccess,
   validateTenantCode,
@@ -15,8 +16,13 @@ import {
 // 6.4up v2 Phase D · D-5 · kb enforce（resourceKind=knowledge_base；env "knowledge_base" 启用时生效；空时 no-op）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import { hasPermission } from "@/lib/permission-actor";
-import { actorHierarchyRole } from "@/lib/creator-hierarchy";
-import { canAdminUseKnowledgeBase } from "@/lib/kb/visibility";
+import { actorHierarchyRole, requireCreatorHierarchy } from "@/lib/creator-hierarchy";
+import {
+  canAdminUseKnowledgeBase,
+  loadEffectiveKbVisibilityScopes,
+  normalizeKbVisibilityInputForAdmin,
+  replaceKbVisibilityScopes,
+} from "@/lib/kb/visibility";
 
 // 5.19up 知识库方案 A · PR-A3 · 知识库列表 + 新建
 // 5.30up · B 半 RBAC 改造（R2 通过）：
@@ -26,6 +32,24 @@ import { canAdminUseKnowledgeBase } from "@/lib/kb/visibility";
 //   - 写白名单含 system_admin（KB 与 API 管理不同，沿用 KB 现状全写）
 
 const KB_WRITE_ROLES = ["super_admin", "system_admin", "org_admin"] as const;
+
+type KnowledgeBaseListRow = {
+  id: string;
+  tenant_code: string | null;
+  created_by_role?: string | null;
+};
+
+async function canUpdateKnowledgeBase(
+  ctx: Exclude<Awaited<ReturnType<typeof requireAdminActor>>, Response>,
+  kb: KnowledgeBaseListRow,
+) {
+  if (!ctx.isCustomAdmin && !canWriteRow(ctx.access as AdminPayload, kb)) return false;
+  if (ctx.role !== "super_admin") {
+    const accessErr = await requireAccess(ctx.actor, "knowledge_base", "update", { row: kb });
+    if (accessErr) return false;
+  }
+  return !requireCreatorHierarchy(ctx, "knowledge_base", kb.created_by_role);
+}
 
 export async function GET(req: NextRequest) {
   const ctx = await requireAdminActor();
@@ -72,7 +96,7 @@ export async function GET(req: NextRequest) {
     return apiError("获取知识库列表失败", "INTERNAL_ERROR");
   }
 
-  let kbs = (data ?? []) as Array<{ id: string; tenant_code: string | null }>;
+  let kbs = (data ?? []) as KnowledgeBaseListRow[];
   if (purpose === "bind") {
     const visible: typeof kbs = [];
     for (const kb of kbs) {
@@ -98,7 +122,13 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    data: kbs.map((k) => ({ ...k, document_count: counts[k.id] ?? 0 })),
+    data: await Promise.all(
+      kbs.map(async (k) => ({
+        ...k,
+        document_count: counts[k.id] ?? 0,
+        can_update: await canUpdateKnowledgeBase(ctx, k),
+      })),
+    ),
   });
 }
 
@@ -122,6 +152,11 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const name = String(body.name ?? "").trim();
   const description = String(body.description ?? "").trim();
+  const rawVisibilityInput = "visibilityScopes" in body
+    ? body.visibilityScopes
+    : "visibility_scopes" in body
+      ? body.visibility_scopes
+      : undefined;
   if (!name) return apiError("知识库名称不能为空", "VALIDATION_ERROR");
   if (name.length > 100) return apiError("知识库名称过长（上限 100 字）", "VALIDATION_ERROR");
 
@@ -164,6 +199,16 @@ export async function POST(req: NextRequest) {
 
   // 小B minor：建库时记录当前 embedding 模型名，便于将来识别"哪些库需按新模型重建"
   // 查询失败不阻塞（字段留空，建库照常成功）
+  const visibilityInput = rawVisibilityInput ?? (
+    ownership.tenant_code
+      ? [{ scope_type: "org", scope_id: ownership.tenant_code }]
+      : [{ scope_type: "all", scope_id: null }]
+  );
+  const normalizedVisibility = await normalizeKbVisibilityInputForAdmin(ctx, visibilityInput, "create");
+  if (!normalizedVisibility.ok) {
+    return apiError(normalizedVisibility.error, "VALIDATION_ERROR");
+  }
+
   let embedding_model = "";
   try {
     const { data: emb } = await db
@@ -197,6 +242,17 @@ export async function POST(req: NextRequest) {
   }
 
   // 5.30up · R2 §5 · KB 写路径补审计（原 KB 路由根本没写）
+  try {
+    await replaceKbVisibilityScopes(data.id, normalizedVisibility.scopes);
+  } catch (e) {
+    console.error("[knowledge-bases create visibility]", e);
+    const { error: rollbackErr } = await db.from("knowledge_bases").delete().eq("id", data.id);
+    if (rollbackErr) {
+      console.error("[knowledge-bases create visibility rollback]", rollbackErr);
+    }
+    return apiError(e instanceof Error ? e.message : "保存可见范围失败", "INTERNAL_ERROR");
+  }
+
   await writeAuditLog({
     adminId: ctx.adminId,
     adminUsername: ctx.username,
@@ -207,8 +263,12 @@ export async function POST(req: NextRequest) {
     resourceType: "knowledge_base",
     resourceId: data.id,
     resourceName: name,
-    detail: { embedding_model },
+    detail: { embedding_model, visibilityScopes: normalizedVisibility.scopes },
   });
 
-  return NextResponse.json({ ...data, document_count: 0 });
+  return NextResponse.json({
+    ...data,
+    document_count: 0,
+    visibilityScopes: await loadEffectiveKbVisibilityScopes(data.id, data.tenant_code),
+  });
 }
