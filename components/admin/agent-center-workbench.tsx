@@ -415,7 +415,18 @@ export function AgentCenterWorkbench() {
     await refreshDisplay(agentId);
   }
 
+  function markFilterUpdating() {
+    if (hasLoaded) setLoading(true);
+  }
+
+  function selectCategory(next: string) {
+    if (next !== categoryId) markFilterUpdating();
+    setCategoryId(next);
+    setPage(1);
+  }
+
   function clearFilters() {
+    if (hasFilters) markFilterUpdating();
     setQuery("");
     setDebouncedQuery("");
     setSource("");
@@ -445,10 +456,7 @@ export function AgentCenterWorkbench() {
           </div>
           <div className="p-3 space-y-1 overflow-y-auto xl:min-h-0 xl:flex-1">
             <button
-              onClick={() => {
-                setCategoryId("");
-                setPage(1);
-              }}
+              onClick={() => selectCategory("")}
               className={`w-full h-9 rounded-[8px] px-3 text-sm flex items-center justify-between ${
                 categoryId === "" ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
               }`}
@@ -457,10 +465,7 @@ export function AgentCenterWorkbench() {
               <span>{result.stats.total}</span>
             </button>
             <button
-              onClick={() => {
-                setCategoryId(UNGROUPED_CATEGORY_ID);
-                setPage(1);
-              }}
+              onClick={() => selectCategory(UNGROUPED_CATEGORY_ID)}
               className={`w-full h-9 rounded-[8px] px-3 text-sm flex items-center justify-between ${
                 categoryId === UNGROUPED_CATEGORY_ID ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
               }`}
@@ -471,10 +476,7 @@ export function AgentCenterWorkbench() {
             {result.categories.map((cat) => (
               <button
                 key={cat.id}
-                onClick={() => {
-                  setCategoryId(cat.id);
-                  setPage(1);
-                }}
+                onClick={() => selectCategory(cat.id)}
                 className={`w-full min-h-9 rounded-[8px] px-3 py-2 text-sm flex items-center justify-between gap-2 ${
                   categoryId === cat.id ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
                 }`}
@@ -504,6 +506,7 @@ export function AgentCenterWorkbench() {
               <select
                 value={source}
                 onChange={(e) => {
+                  if (e.target.value !== source) markFilterUpdating();
                   setSource(e.target.value);
                   setPage(1);
                 }}
@@ -517,6 +520,7 @@ export function AgentCenterWorkbench() {
               <select
                 value={status}
                 onChange={(e) => {
+                  if (e.target.value !== status) markFilterUpdating();
                   setStatus(e.target.value);
                   setPage(1);
                 }}
@@ -529,6 +533,7 @@ export function AgentCenterWorkbench() {
               <select
                 value={platform}
                 onChange={(e) => {
+                  if (e.target.value !== platform) markFilterUpdating();
                   setPlatform(e.target.value);
                   setPage(1);
                 }}
@@ -539,6 +544,7 @@ export function AgentCenterWorkbench() {
                   <option key={p.value} value={p.value}>{p.label}</option>
                 ))}
               </select>
+              {loading && hasLoaded && <span className="text-xs text-gray-400">更新中...</span>}
               {hasFilters && (
                 <button onClick={clearFilters} className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2">
                   <X size={13} /> 清除
@@ -569,7 +575,15 @@ export function AgentCenterWorkbench() {
               <p className="text-sm">暂无符合条件的智能体</p>
             </div>
           ) : (
-            <div className="overflow-x-auto xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
+            <div className="relative overflow-x-auto xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
+              {loading && hasLoaded && (
+                <div className="absolute inset-0 z-20 flex items-start justify-center bg-white/60 pt-16 backdrop-blur-[1px]">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-gray-100 bg-white px-3 py-1.5 text-xs text-gray-500 shadow-sm">
+                    <Loader2 size={13} className="animate-spin" />
+                    更新中
+                  </div>
+                </div>
+              )}
               <table className="w-full shrink-0 table-fixed text-sm">
                 <colgroup>
                   <col className="w-[30%]" />
