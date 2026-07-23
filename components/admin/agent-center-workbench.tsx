@@ -33,6 +33,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
+import { getAdminOrgTree } from "@/lib/admin-reference-data";
 
 type CenterSource = "builtin" | "external_api" | "external_link";
 type CenterStatus = "published" | "disabled";
@@ -324,17 +325,15 @@ export function AgentCenterWorkbench() {
         .catch(() => []);
       const needOrgData = tenants.length === 0 && depts.length === 0 && teams.length === 0 && userGroups.length === 0;
       if (needOrgData) {
-        const [permsData, tenantsData, deptsData, teamsData, groupsData] = await Promise.all([
+        const [permsData, orgTree, groupsData] = await Promise.all([
           permsPromise,
-          fetch("/api/admin/tenants").then((r) => r.json()).then((d) => d.data ?? d).catch(() => []),
-          fetch("/api/admin/departments").then((r) => r.json()).then((d) => d.data ?? d).catch(() => []),
-          fetch("/api/admin/teams").then((r) => r.json()).then((d) => d.data ?? d).catch(() => []),
+          getAdminOrgTree(),
           fetch("/api/admin/user-groups").then((r) => r.json()).then((d) => d.data ?? d).catch(() => []),
         ]);
         setPermissions(Array.isArray(permsData) ? permsData : []);
-        setTenants(Array.isArray(tenantsData) ? tenantsData : []);
-        setDepts(Array.isArray(deptsData) ? deptsData : []);
-        setTeams(Array.isArray(teamsData) ? teamsData : []);
+        setTenants(orgTree.tenants);
+        setDepts(orgTree.departments);
+        setTeams(orgTree.teams);
         setUserGroups(Array.isArray(groupsData) ? groupsData : []);
       } else {
         const permsData = await permsPromise;

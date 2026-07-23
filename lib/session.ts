@@ -1,12 +1,12 @@
 import {
   getCurrentUser,
   getCurrentAdmin,
-  getCurrentAdminAccess,
   UserPayload,
   AdminPayload,
   AdminRole,
   AdminAccessPayload,
   isCustomAdminPayload,
+  getUnvalidatedCurrentAdminAccess,
 } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { apiError } from "@/lib/api-error";
@@ -14,6 +14,7 @@ import {
   buildPermissionActor,
   hasPermission,
   PermissionActor,
+  PrefetchedPermissionActorProfile,
   ResourceScope,
 } from "@/lib/permission-actor";
 import { PermissionKey } from "@/lib/permission-keys";
@@ -163,7 +164,8 @@ export async function requireUser(): Promise<ActiveUser | Response> {
  * 用于 /api/admin/me、admin/login 复签、elevate-to-admin 等场景。
  */
 export async function getAdminAccessPayload(): Promise<AdminAccessPayload | null> {
-  return getCurrentAdminAccess();
+  const context = await resolveAdminRequestContext();
+  return context instanceof Response ? null : context.access;
 }
 
 export type AdminActorContext = {
@@ -185,8 +187,41 @@ export type AdminActorContext = {
  * requireAdmin() 只接受 builtin admin；6.6up 后绝大多数业务接口需要同时接受
  * builtin admin 与 custom_admin，因此统一通过 access payload 构造 PermissionActor。
  */
-export async function requireAdminActor(): Promise<AdminActorContext | Response> {
-  const access = await getAdminAccessPayload();
+function tokenIsFresh(iat: number | undefined, forceReloginAt: string | null | undefined): boolean {
+  if (!iat || !forceReloginAt) return true;
+  return iat * 1000 >= new Date(forceReloginAt).getTime();
+}
+
+async function requireActiveBuiltinOrg(
+  role: string | null | undefined,
+  tenantCode: string | null | undefined,
+): Promise<true | Response> {
+  if (role !== "org_admin") return true;
+  if (!tenantCode) return apiError("组织管理员缺少所属组织", "UNAUTHORIZED");
+  const { data: tenant, error } = await db
+    .from("tenants")
+    .select("enabled, expires_at")
+    .eq("code", tenantCode)
+    .maybeSingle();
+  if (error) {
+    console.error("[admin context builtin tenant]", error.code, error.message);
+    return apiError("管理员上下文加载失败", "INTERNAL_ERROR");
+  }
+  if (
+    !tenant?.enabled ||
+    (tenant.expires_at && new Date(tenant.expires_at).getTime() < Date.now())
+  ) {
+    return apiError("组织已停用或过期", "UNAUTHORIZED");
+  }
+  return true;
+}
+
+/**
+ * 单次请求统一解析后台管理员上下文：
+ * JWT 验签后只读取一次主资料，再加载权限；不再先 freshness 查询、随后重复读取同一资料。
+ */
+export async function resolveAdminRequestContext(): Promise<AdminActorContext | Response> {
+  const access = await getUnvalidatedCurrentAdminAccess();
   if (!access) return apiError("未登录或权限已变更", "UNAUTHORIZED");
 
   if (!isCustomAdminPayload(access) && (access as AdminPayload).firstLogin === true) {
@@ -196,8 +231,111 @@ export async function requireAdminActor(): Promise<AdminActorContext | Response>
     );
   }
 
-  const actor = await buildPermissionActor(access);
   const isCustom = isCustomAdminPayload(access);
+  let profile: PrefetchedPermissionActorProfile | null = null;
+
+  if (isCustom) {
+    const { data: userRow, error } = await db
+      .from("users")
+      .select(
+        "id, username, phone, tenant_code, dept_id, team_id, user_type, role, status, force_relogin_at",
+      )
+      .eq("id", access.userId)
+      .maybeSingle();
+    if (error) {
+      console.error("[admin context custom profile]", error.code, error.message);
+      return apiError("管理员上下文加载失败", "INTERNAL_ERROR");
+    }
+    if (
+      !userRow ||
+      userRow.status !== "active" ||
+      !tokenIsFresh(access.iat, userRow.force_relogin_at)
+    ) {
+      return apiError("未登录或权限已变更", "UNAUTHORIZED");
+    }
+
+    let tenantValid = true;
+    if (userRow.tenant_code && userRow.tenant_code !== "PERSONAL") {
+      const { data: tenant, error: tenantError } = await db
+        .from("tenants")
+        .select("enabled, expires_at")
+        .eq("code", userRow.tenant_code)
+        .maybeSingle();
+      if (tenantError) {
+        console.error("[admin context custom tenant]", tenantError.code, tenantError.message);
+        return apiError("管理员上下文加载失败", "INTERNAL_ERROR");
+      }
+      tenantValid = Boolean(
+        tenant?.enabled &&
+        (!tenant.expires_at || new Date(tenant.expires_at).getTime() >= Date.now()),
+      );
+    }
+    if (!tenantValid) return apiError("组织已停用或过期", "UNAUTHORIZED");
+    profile = { source: "custom_admin", row: userRow, tenantValid };
+  } else {
+    const builtin = access as AdminPayload;
+    let source: "admin_table" | "user_admin" = builtin.source ?? "admin_table";
+    if (source === "admin_table") {
+      const { data: adminRow, error } = await db
+        .from("admins")
+        .select("id, username, tenant_code, role, force_relogin_at")
+        .eq("id", builtin.adminId)
+        .maybeSingle();
+      if (error) {
+        console.error("[admin context admin profile]", error.code, error.message);
+        return apiError("管理员上下文加载失败", "INTERNAL_ERROR");
+      }
+      if (adminRow) {
+        if (
+          !["super_admin", "system_admin", "org_admin"].includes(adminRow.role) ||
+          !tokenIsFresh(builtin.iat, adminRow.force_relogin_at)
+        ) {
+          return apiError("未登录或权限已变更", "UNAUTHORIZED");
+        }
+        const tenantStatus = await requireActiveBuiltinOrg(
+          adminRow.role,
+          adminRow.tenant_code,
+        );
+        if (tenantStatus instanceof Response) return tenantStatus;
+        profile = { source: "admin_table", row: adminRow };
+      } else if (!builtin.source) {
+        source = "user_admin";
+      } else {
+        return apiError("未登录或权限已变更", "UNAUTHORIZED");
+      }
+    }
+
+    if (source === "user_admin") {
+      const { data: userRow, error } = await db
+        .from("users")
+        .select(
+          "id, username, phone, tenant_code, dept_id, team_id, user_type, role, status, force_relogin_at",
+        )
+        .eq("id", builtin.adminId)
+        .maybeSingle();
+      if (error) {
+        console.error("[admin context user profile]", error.code, error.message);
+        return apiError("管理员上下文加载失败", "INTERNAL_ERROR");
+      }
+      if (
+        !userRow ||
+        userRow.status !== "active" ||
+        !["super_admin", "system_admin", "org_admin"].includes(userRow.role) ||
+        !tokenIsFresh(builtin.iat, userRow.force_relogin_at)
+      ) {
+        return apiError("未登录或权限已变更", "UNAUTHORIZED");
+      }
+      const tenantStatus = await requireActiveBuiltinOrg(
+        userRow.role,
+        userRow.tenant_code,
+      );
+      if (tenantStatus instanceof Response) return tenantStatus;
+      profile = { source: "user_admin", row: userRow };
+    }
+  }
+
+  if (!profile) return apiError("管理员上下文加载失败", "INTERNAL_ERROR");
+  const actor = await buildPermissionActor(access, profile);
   return {
     access,
     actor,
@@ -205,10 +343,12 @@ export async function requireAdminActor(): Promise<AdminActorContext | Response>
     username: actor.username,
     role: isCustom ? "custom_admin" : actor.builtinRole ?? (access as AdminPayload).role,
     tenantCode: actor.tenantCode,
-    source: isCustom ? "custom_admin" : (access as AdminPayload).source ?? "admin_table",
+    source: actor.source,
     isCustomAdmin: isCustom,
   };
 }
+
+export const requireAdminActor = resolveAdminRequestContext;
 
 /**
  * 鉴权辅助：业务接口要求 actor 持有 permissionKey 才能执行。
@@ -225,20 +365,11 @@ export async function requireAdminActor(): Promise<AdminActorContext | Response>
 export async function requirePermission(
   permissionKey: PermissionKey
 ): Promise<PermissionActor | Response> {
-  const access = await getAdminAccessPayload();
-  if (!access) return apiError("未登录或权限已变更", "UNAUTHORIZED");
-  // custom admin firstLogin 处理：custom admin 走 users 表，由前置 elevate / login 强制改密 + freshness 把关
-  // builtin admin firstLogin 仍走 requireAdmin 同款守门（access 路径不重复实现，避免逻辑分叉）
-  if (!isCustomAdminPayload(access) && (access as AdminPayload).firstLogin === true) {
-    return apiError(
-      "首次登录需先修改初始密码，请回登录页完成密码修改",
-      "FORBIDDEN",
-    );
-  }
-  const actor = await buildPermissionActor(access);
-  const ok = await hasPermission(actor, permissionKey);
+  const context = await requireAdminActor();
+  if (context instanceof Response) return context;
+  const ok = await hasPermission(context.actor, permissionKey);
   if (!ok) return apiError("无此操作权限", "FORBIDDEN");
-  return actor;
+  return context.actor;
 }
 
 /**

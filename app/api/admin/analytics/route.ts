@@ -3,12 +3,19 @@ import { requireAdminActor } from "@/lib/session";
 import { db } from "@/lib/db";
 import { apiError } from "@/lib/api-error";
 import { hasPermission } from "@/lib/permission-actor";
+import { parsePagination } from "@/lib/api-error";
+import {
+  markRequestAuth,
+  markRequestBusiness,
+  withRequestLog,
+} from "@/lib/request-logger";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
+async function getAnalytics(req: NextRequest) {
   const ctx = await requireAdminActor();
   if (ctx instanceof Response) return ctx;
+  markRequestAuth(req, { source: ctx.source, role: ctx.role });
 
   const okAllAudit = await hasPermission(ctx.actor, "audit.read.all");
   if (ctx.role !== "super_admin") {
@@ -32,6 +39,50 @@ export async function GET(req: NextRequest) {
   const scopedTenant = tenantScoped ? ctx.tenantCode ?? "" : tenantFilter;
 
   const sinceIso = days > 0 ? new Date(Date.now() - days * 86400000).toISOString() : null;
+  const requestedView = searchParams.get("view");
+
+  if (process.env.ADMIN_ANALYTICS_SQL_AGG === "true") {
+    const view = requestedView === "users" ? "users" : "summary";
+    if (view === "users") {
+      const { page, pageSize } = parsePagination(req, 20);
+      const { data, error } = await db.rpc("admin_user_usage_page", {
+        p_tenant_code: scopedTenant || null,
+        p_since: sinceIso,
+        p_dept_id: deptFilter || null,
+        p_team_id: teamFilter || null,
+        p_search: userSearch || null,
+        p_page: page,
+        p_page_size: pageSize,
+      });
+      if (error) {
+        console.error("[admin analytics users rpc]", error.code, error.message);
+        return apiError("获取用户用量失败", "INTERNAL_ERROR");
+      }
+      markRequestBusiness(req);
+      return NextResponse.json(data ?? {
+        data: [],
+        pagination: { page, pageSize, total: 0 },
+      });
+    }
+
+    const { data, error } = await db.rpc("admin_usage_summary", {
+      p_tenant_code: scopedTenant || null,
+      p_since: sinceIso,
+    });
+    if (error) {
+      console.error("[admin analytics summary rpc]", error.code, error.message);
+      return apiError("获取用量摘要失败", "INTERNAL_ERROR");
+    }
+    const summary = (data ?? {}) as {
+      tenantUsage?: unknown[];
+      [key: string]: unknown;
+    };
+    markRequestBusiness(req);
+    return NextResponse.json({
+      ...summary,
+      totalTenants: summary.tenantUsage?.length ?? 0,
+    });
+  }
 
   // 构造一个带时间/租户/action=chat 过滤的 select builder
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -42,6 +93,8 @@ export async function GET(req: NextRequest) {
     if (sinceIso) q = q.gte("created_at", sinceIso);
     return q;
   }
+  const needsSummary = requestedView !== "users";
+  const needsUsers = requestedView !== "summary";
 
   const [
     { count: totalCalls },
@@ -51,16 +104,28 @@ export async function GET(req: NextRequest) {
     { data: tenants },
     { data: allLogs },
   ] = await Promise.all([
-    baseLogs("*", { count: "exact", head: true }),
-    baseLogs("*", { count: "exact", head: true }).eq("status", "success"),
-    tenantScoped
+    needsSummary
+      ? baseLogs("*", { count: "exact", head: true })
+      : Promise.resolve({ count: 0 }),
+    needsSummary
+      ? baseLogs("*", { count: "exact", head: true }).eq("status", "success")
+      : Promise.resolve({ count: 0 }),
+    needsSummary && tenantScoped
       ? Promise.resolve({ count: 1 })
-      : db.from("tenants").select("*", { count: "exact", head: true }),
-    baseLogs("agent_code, agent_name").eq("status", "success"),
-    tenantScoped
+      : needsSummary
+        ? db.from("tenants").select("*", { count: "exact", head: true })
+        : Promise.resolve({ count: 0 }),
+    needsSummary
+      ? baseLogs("agent_code, agent_name").eq("status", "success")
+      : Promise.resolve({ data: [] }),
+    needsSummary && tenantScoped
       ? db.from("tenants").select("code, name, quota, quota_used").eq("code", scopedTenant)
-      : db.from("tenants").select("code, name, quota, quota_used"),
-    baseLogs("user_phone, tenant_code, agent_code, agent_name, created_at"),
+      : needsSummary
+        ? db.from("tenants").select("code, name, quota, quota_used")
+        : Promise.resolve({ data: [] }),
+    needsUsers
+      ? baseLogs("user_phone, tenant_code, agent_code, agent_name, created_at")
+      : Promise.resolve({ data: [] }),
   ]);
 
   // Top agents
@@ -193,7 +258,17 @@ export async function GET(req: NextRequest) {
 
   userUsage.sort((a, b) => b.calls - a.calls);
 
-  return NextResponse.json({
+  if (requestedView === "users") {
+    const { page, pageSize, start } = parsePagination(req, 20);
+    const total = userUsage.length;
+    markRequestBusiness(req);
+    return NextResponse.json({
+      data: userUsage.slice(start, start + pageSize),
+      pagination: { page, pageSize, total },
+    });
+  }
+
+  const summaryPayload = {
     totalCalls: totalCalls ?? 0,
     successCalls: successCalls ?? 0,
     successRate:
@@ -208,6 +283,14 @@ export async function GET(req: NextRequest) {
       used: t.quota_used,
       quota: t.quota,
     })),
-    userUsage,
-  });
+  };
+
+  markRequestBusiness(req);
+  return NextResponse.json(
+    requestedView === "summary"
+      ? summaryPayload
+      : { ...summaryPayload, userUsage },
+  );
 }
+
+export const GET = withRequestLog(getAnalytics);

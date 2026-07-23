@@ -1,0 +1,1260 @@
+"use client";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { AdminPageFrame as AdminLayout } from "@/components/layout/admin-layout";
+import { useToast } from "@/components/ui/toast";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Edit2, Key, Settings2, Bot, Tag, ExternalLink, MessageSquare, LayoutGrid, Eye, EyeOff, Plus, PlusCircle, X, GitBranch, Trash2, AlertTriangle, ToggleLeft, ToggleRight, ChevronDown, ChevronRight } from "lucide-react";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
+import { getAdminOrgTree } from "@/lib/admin-reference-data";
+import { useAdminPermissions } from "@/lib/hooks/use-admin-permissions";
+import {
+  schemaForPlatform,
+  parseAdvancedJson,
+  validateNumberField,
+  type PlatformSchema,
+} from "@/lib/platform-param-schema";
+
+type WorkflowRef = { id: string; name: string };
+type UsedByEntry = { id: string; name: string; stepCount: number };
+
+type Agent = {
+  id: string;
+  agent_code: string;
+  name: string;
+  description: string;
+  platform: string;
+  agent_type: string;
+  external_url: string;
+  enabled: boolean;
+  category_id: string | null;
+  categoryIds?: string[];
+  api_key_masked?: string;
+  api_endpoint?: string;
+  model_params?: Record<string, unknown>;
+  provider_id?: string | null;
+  // 5.19up · 非空 = 由搭建器发布的智能体（API 配置归搭建器管）
+  published_from_draft_id?: string | null;
+  provider?: { name: string; category: string; platform: string; enabled: boolean } | null;
+  categories?: { name: string; icon_url?: string | null };
+  categoriesAll?: { id: string; name: string; icon_url: string | null }[];
+  tenant_codes?: string[];
+  permissions?: { scope_type: string; scope_id: string | null }[];
+  workflows?: WorkflowRef[];
+  created_by_role?: "super_admin" | "system_admin" | "org_admin" | null;
+};
+type ApiProvider = { id: string; name: string; platform: string; enabled: boolean };
+type Category = { id: string; name: string; icon_url?: string | null };
+type Tenant = { id: string; code: string; name: string };
+type Permission = { id: string; scope_type: string; scope_id: string | null; scope_label: string };
+type Dept = { id: string; name: string; tenant_code: string };
+type Team = { id: string; name: string; dept_id: string };
+
+const SCOPE_TYPE_LABELS: Record<string, string> = {
+  all: "全部用户", org: "组织", dept: "部门", team: "小组", user: "用户", user_type: "用户类型", group: "按分组",
+};
+type CategoryDisplayConfig = {
+  category_id: string;
+  category_name: string;
+  is_auto: boolean;
+  is_manual: boolean;
+  is_hidden: boolean;
+};
+
+const PLATFORMS = ["coze", "dify", "qingyan", "yuanqi", "openai", "other"];
+// 5.15up PR-2 · 智能体平台 → API category（决定 API 配置下拉拉哪类命名 API）
+const AGENT_PLATFORMS = ["coze", "dify", "yuanqi", "qingyan"];
+const EMPTY_AGENT = { id: "", name: "", description: "", categoryIds: [] as string[], platform: "coze", agentType: "chat", externalUrl: "" };
+// 6.2up · API 配置弹窗状态：inputs（按 schema 拉的字段值） + advancedJson（schema 之外的 key） + 折叠展开状态
+type ApiFormState = {
+  providerId: string;
+  inputs: Record<string, string>;
+  advancedJson: string;
+  advancedOpen: boolean;
+};
+const EMPTY_API: ApiFormState = { providerId: "", inputs: {}, advancedJson: "", advancedOpen: false };
+
+function resolveEffectivePlatform(providerId: string, providers: ApiProvider[], agent: Agent): string {
+  const selectedProvider = providers.find((p) => p.id === providerId);
+  if (selectedProvider) return selectedProvider.platform;
+  if (providerId && providerId === agent.provider_id && agent.provider?.platform) return agent.provider.platform;
+  return agent.platform;
+}
+
+// 把存量 model_params（任意 key → value）按 schema 分流成 inputs / advancedJson 两段
+function splitParamsBySchema(
+  params: Record<string, unknown>,
+  schema: PlatformSchema,
+): { inputs: Record<string, string>; advancedJson: string } {
+  const inputs: Record<string, string> = {};
+  const extra: Record<string, unknown> = {};
+  const schemaKeys = new Set(schema.fields.map((f) => f.key));
+  for (const [k, v] of Object.entries(params)) {
+    if (schemaKeys.has(k)) inputs[k] = v === null || v === undefined ? "" : String(v);
+    else extra[k] = v;
+  }
+  return {
+    inputs,
+    advancedJson: Object.keys(extra).length > 0 ? JSON.stringify(extra, null, 2) : "",
+  };
+}
+
+// provider 切换 / apiProviders 异步加载时收集当前 form 已填的全部参数（用于 re-split）
+// JSON 解析失败时退到空，避免切换被卡（仍保留 inputs 里的值）
+function collectCurrentParams(form: ApiFormState, schema: PlatformSchema): Record<string, unknown> {
+  const adv = parseAdvancedJson(form.advancedJson);
+  const extra = adv.ok ? adv.value : {};
+  const inputParams: Record<string, unknown> = {};
+  for (const f of schema.fields) {
+    const raw = form.inputs[f.key] ?? "";
+    if (raw === "") continue;
+    if (f.type === "number") {
+      const n = Number(raw);
+      inputParams[f.key] = Number.isFinite(n) ? n : raw;
+    } else {
+      inputParams[f.key] = raw;
+    }
+  }
+  return { ...extra, ...inputParams };
+}
+
+export default function AgentsAdminPage() {
+  const { toast } = useToast();
+  const router = useRouter();
+  const [agents, setAgents] = useState<Agent[]>([]);
+  // 4.29up：?focus=<agentId> 跨页定位 / 5.16up R4：列表已全量加载，pageSize 参数不再需要
+  // urlReady：客户端 hydrate 后才能读到 window.location.search，防 load() 在 URL 解析前抢跑
+  const [focusAgentId, setFocusAgentId] = useState<string | null>(null);
+  const [urlReady, setUrlReady] = useState(false);
+  const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
+  // 工作流引用列表"+N 更多"popover
+  const [openMoreFor, setOpenMoreFor] = useState<string | null>(null);
+  const focusFiredRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    setFocusAgentId(sp.get("focus"));
+    setUrlReady(true);
+  }, []);
+  // 删除流程
+  const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  // 引用阻止弹窗
+  const [usedByModal, setUsedByModal] = useState<{ agent: Agent; usedBy: UsedByEntry[] } | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const adminPerms = useAdminPermissions();
+  // 5.7up 旧兜底保留：builtin org_admin 在本页仍按只读展示；custom admin 走权限 key。
+  const isOrgAdmin = adminPerms.role === "org_admin";
+  // 6.6up 验收修复 · 恢复 cc96106 误删的「新增智能体」入口（外链/外部接入型唯一创建路径，搭建器只产 chat 型）。
+  // 可见范围严格对齐后端 POST /api/admin/agents：org_admin 与自定义角色被硬拒（5.7up），故仅超管/系统管理员显示。
+  const canCreateAgent = adminPerms.role === "super_admin" || adminPerms.role === "system_admin";
+  // 6.5up · 分类管理 Tab 已抽到 /admin/tags，本页只保留智能体列表（无 Tab 切换）
+  // 6.3up · 智能体管理改风格 · 分类分组默认折叠 · 点 chevron 展开
+  const [expandedAgentSections, setExpandedAgentSections] = useState<Set<string>>(new Set());
+  function toggleAgentSection(id: string) {
+    setExpandedAgentSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  const [showAgentModal, setShowAgentModal] = useState(false);
+  const [showApiModal, setShowApiModal] = useState<Agent | null>(null);
+  const [showDisplayModal, setShowDisplayModal] = useState<Agent | null>(null);
+  const [displayConfig, setDisplayConfig] = useState<CategoryDisplayConfig[]>([]);
+  const [displayLoading, setDisplayLoading] = useState(false);
+  const [editing, setEditing] = useState<Agent | null>(null);
+  const [form, setForm] = useState(EMPTY_AGENT);
+  const [apiForm, setApiForm] = useState<ApiFormState>(EMPTY_API);
+  // 5.15up PR-2 · API 配置弹窗的「命名 API」下拉选项
+  const [apiProviders, setApiProviders] = useState<ApiProvider[]>([]);
+  // 6.2up · 记录上一次 effectivePlatform，用于在 provider 切换 / apiProviders 异步加载时触发 re-split
+  const prevEffPlatRef = useRef<string | null>(null);
+
+  // 6.2up · provider 切换 / apiProviders 异步加载时按新 schema 重做分流
+  // 通用字段（model/temperature/max_tokens）继续显示；平台专属字段（bot_id 等）归入高级 JSON，不静默丢弃
+  useEffect(() => {
+    if (!showApiModal) {
+      prevEffPlatRef.current = null;
+      return;
+    }
+    const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
+    if (prevEffPlatRef.current === effPlat) return;
+    const oldPlat = prevEffPlatRef.current;
+    prevEffPlatRef.current = effPlat;
+    if (oldPlat === null) return; // 首次由 openApi 设置，不重做
+    const oldSchema = schemaForPlatform(oldPlat);
+    const collected = collectCurrentParams(apiForm, oldSchema);
+    const newSchema = schemaForPlatform(effPlat);
+    const reSplit = splitParamsBySchema(collected, newSchema);
+    setApiForm((prev) => ({
+      ...prev,
+      inputs: reSplit.inputs,
+      advancedJson: reSplit.advancedJson,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiForm.inputs/advancedJson 故意不放依赖：避免输入时无限 re-split
+  }, [showApiModal, apiForm.providerId, apiProviders]);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  // 6.5up · saveCatAssignGuard / addCatGuard 已抽到 /admin/tags
+  const saveAgentGuard = useSubmitGuard();
+  const saveApiGuard = useSubmitGuard();
+  const [agentTypeFilter, setAgentTypeFilter] = useState("");
+  const [agentCategoryFilter, setAgentCategoryFilter] = useState("");
+  const [agentStatusFilter, setAgentStatusFilter] = useState("");
+
+  // 权限弹窗状态
+  const [showPermModal, setShowPermModal] = useState<Agent | null>(null);
+  const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [permLoading, setPermLoading] = useState(false);
+  const [newScopeType, setNewScopeType] = useState("org");
+  const [newScopeId, setNewScopeId] = useState("");
+  const [addingPerm, setAddingPerm] = useState(false);
+  const [depts, setDepts] = useState<Dept[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [userGroups, setUserGroups] = useState<{ id: string; name: string }[]>([]);
+  const [formError, setFormError] = useState("");
+  // 6.5up · 分类管理 state（newCatName / editingCatId / showCatAssignModal 等）已抽到 /admin/tags
+
+  // 5.16up R4 · 完整展示：分页循环拉完所有智能体（parsePagination MAX_PAGE_SIZE=100）
+  async function fetchAllAgents(): Promise<Agent[]> {
+    const PS = 100;
+    const all: Agent[] = [];
+    for (let page = 1; ; page++) {
+      const res = await fetch(`/api/admin/agents?page=${page}&pageSize=${PS}`).then((r) => r.json());
+      const batch: Agent[] = Array.isArray(res?.data) ? res.data : [];
+      all.push(...batch);
+      const total: number = res?.pagination?.total ?? all.length;
+      if (batch.length < PS || all.length >= total) break;
+    }
+    return all;
+  }
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [ar, cr, orgTree] = await Promise.all([
+        fetchAllAgents(),
+        fetch("/api/admin/categories").then((r) => r.json()).then(d => d.data ?? d),
+        getAdminOrgTree(),
+      ]);
+      setAgents(ar);
+      setCategories(Array.isArray(cr) ? cr : []);
+      setTenants(orgTree.tenants);
+    } catch {
+      setAgents([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // 等 URL 解析完成（hydrate 后才能读到 window.location.search）才发请求，避免抢跑
+  useEffect(() => {
+    if (!urlReady) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlReady]);
+
+  // focus 高亮：数据加载完成后清掉筛选 + 定位 + ring 1.5s
+  useEffect(() => {
+    if (!focusAgentId || loading || focusFiredRef.current) return;
+    if (agents.length === 0) return;
+    const target = agents.find((a) => a.id === focusAgentId);
+    if (!target) {
+      // 数据被删 / 跨页（总数 > pageSize）→ 不报错、不空白，仅 toast 提示
+      focusFiredRef.current = true;
+      toast("目标智能体不在当前页，请翻页查找");
+      return;
+    }
+    focusFiredRef.current = true;
+    // 清掉所有筛选条件，确保目标行在 filteredAgents 中能被渲染
+    setAgentTypeFilter("");
+    setAgentCategoryFilter("");
+    setAgentStatusFilter("");
+    setHighlightedRowId(target.id);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-agent-row="${target.id}"]`);
+        if (el && el instanceof HTMLElement) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    });
+    setTimeout(() => setHighlightedRowId(null), 1500);
+  }, [focusAgentId, loading, agents, toast]);
+
+  // 6.3up · focus 跳转时自动展开 target 所在 section（避免目标在折叠分类里看不到）
+  useEffect(() => {
+    if (!focusAgentId) return;
+    const target = agents.find((a) => a.id === focusAgentId);
+    if (!target) return;
+    const sectionIds: string[] = (target.categoryIds ?? []).length > 0
+      ? target.categoryIds!
+      : ["__uncategorized__"];
+    setExpandedAgentSections((prev) => {
+      const next = new Set(prev);
+      for (const sid of sectionIds) next.add(sid);
+      return next;
+    });
+  }, [focusAgentId, agents]);
+
+  function openAdd() { setEditing(null); setForm(EMPTY_AGENT); setFormError(""); setShowAgentModal(true); }
+  function openEdit(a: Agent) { setEditing(a); setForm({ id: a.agent_code, name: a.name, description: a.description, categoryIds: a.categoryIds ?? (a.category_id ? [a.category_id] : []), platform: a.platform, agentType: a.agent_type ?? "chat", externalUrl: a.external_url ?? "" }); setFormError(""); setShowAgentModal(true); }
+  async function openApi(a: Agent) {
+    setShowApiModal(a);
+    // 6.2up · 首次分流不依赖 apiProviders 异步结果；
+    // 仅原绑定 provider 可用 agent.provider.platform 兜底，解绑时回退 agent.platform。
+    const initialPlatform = resolveEffectivePlatform(a.provider_id ?? "", [], a);
+    const initialSchema = schemaForPlatform(initialPlatform);
+    const params = (a.model_params ?? {}) as Record<string, unknown>;
+    const split = splitParamsBySchema(params, initialSchema);
+    setApiForm({
+      providerId: a.provider_id ?? "",
+      inputs: split.inputs,
+      advancedJson: split.advancedJson,
+      advancedOpen: false, // 默认收起
+    });
+    prevEffPlatRef.current = initialPlatform;
+    // 按 agent 平台拉对应类别的命名 API 作下拉选项
+    setApiProviders([]);
+    const cat = AGENT_PLATFORMS.includes(a.platform) ? "agent" : "model";
+    try {
+      const res = await fetch(`/api/admin/model-providers?category=${cat}`, { cache: "no-store" });
+      const data = await res.json();
+      if (res.ok) setApiProviders(data.data ?? []);
+    } catch { /* 下拉为空时弹窗仍可用，提示去 API 管理新建 */ }
+  }
+
+  async function openPermModal(a: Agent) {
+    setShowPermModal(a);
+    setPermLoading(true);
+    setNewScopeType("org");
+    setNewScopeId("");
+
+    // 权限数据每次都要刷新（和具体 agent 相关）；部门/团队/分组只拉一次做页面级缓存
+    const permsPromise = fetch(`/api/admin/resource-permissions?resource_type=agent&resource_id=${a.id}`).then(r => r.json()).catch(() => []);
+    const needOrgData = depts.length === 0 && teams.length === 0 && userGroups.length === 0;
+
+    if (needOrgData) {
+      const [permsData, orgTree, groupsData] = await Promise.all([
+        permsPromise,
+        getAdminOrgTree(),
+        fetch("/api/admin/user-groups").then(r => r.json()).then(d => d.data ?? d).catch(() => []),
+      ]);
+      setPermissions(Array.isArray(permsData) ? permsData : []);
+      setDepts(orgTree.departments);
+      setTeams(orgTree.teams);
+      setUserGroups(Array.isArray(groupsData) ? groupsData : []);
+    } else {
+      const permsData = await permsPromise;
+      setPermissions(Array.isArray(permsData) ? permsData : []);
+    }
+    setPermLoading(false);
+  }
+
+  async function refreshPerms() {
+    if (!showPermModal) return;
+    const data = await fetch(`/api/admin/resource-permissions?resource_type=agent&resource_id=${showPermModal.id}`).then(r => r.json()).catch(() => []);
+    setPermissions(Array.isArray(data) ? data : []);
+  }
+
+  async function deletePerm(permId: string) {
+    await fetch("/api/admin/resource-permissions", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: permId }) });
+    await refreshPerms();
+  }
+
+  async function addPerm() {
+    if (!showPermModal) return;
+    if (newScopeType !== "all" && !newScopeId) return;
+    setAddingPerm(true);
+    const res = await fetch("/api/admin/resource-permissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resourceType: "agent", resourceId: showPermModal.id, scopeType: newScopeType, scopeId: newScopeType === "all" ? null : newScopeId }),
+    });
+    setAddingPerm(false);
+    if (res.ok) { setNewScopeId(""); await refreshPerms(); load(); }
+  }
+
+  async function openDisplay(a: Agent) {
+    setShowDisplayModal(a);
+    setDisplayLoading(true);
+    const data = await fetch(`/api/admin/category-display?agentId=${a.id}`).then((r) => r.json()).catch(() => []);
+    setDisplayConfig(Array.isArray(data) ? data : []);
+    setDisplayLoading(false);
+  }
+
+  async function toggleDisplayConfig(agentId: string, categoryId: string, field: "isManual" | "isHidden", currentValue: boolean) {
+    await fetch("/api/admin/category-display", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId, categoryId, [field]: !currentValue }),
+    });
+    // 刷新展示配置
+    const data = await fetch(`/api/admin/category-display?agentId=${agentId}`).then((r) => r.json()).catch(() => []);
+    setDisplayConfig(Array.isArray(data) ? data : []);
+  }
+
+  // 4.29up：删除智能体
+  async function handleDeleteAgent(agent: Agent) {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/agents/${agent.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && Array.isArray(data.used_by)) {
+        // 被引用：弹引用阻止弹窗
+        setUsedByModal({ agent, usedBy: data.used_by });
+        setDeletingAgent(null);
+        setShowAgentModal(false);
+        return;
+      }
+      if (res.status === 404) {
+        toast("智能体不存在或已被删除");
+        setDeletingAgent(null);
+        setShowAgentModal(false);
+        load();
+        return;
+      }
+      if (!res.ok) {
+        toast(data.error ?? "删除失败");
+        return;
+      }
+      // 删除成功
+      setDeletingAgent(null);
+      setShowAgentModal(false);
+      load();
+      toast("智能体已删除");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  // 5.14up PR-D 配套 · 启用/禁用切换
+  // 后端 PATCH /api/admin/agents/[id] 已支持 enabled 字段 + 自动写审计
+  async function toggleAgentEnabled(agent: Agent) {
+    try {
+      const res = await fetch(`/api/admin/agents/${agent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !agent.enabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(data.error ?? "切换失败");
+        return;
+      }
+      toast(agent.enabled ? "已禁用" : "已启用");
+      load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "切换失败");
+    }
+  }
+
+  async function handleSaveAgent() {
+    setFormError("");
+    if (!form.name || !form.platform) { setFormError("请填写名称和平台"); return; }
+    if (!form.id) { setFormError("请填写智能体编号"); return; }
+    await saveAgentGuard.submit(async (idempotencyKey) => {
+      const body = JSON.stringify({ agentCode: form.id, name: form.name, description: form.description, categoryIds: form.categoryIds, platform: form.platform, agentType: form.agentType, externalUrl: form.externalUrl });
+      // PATCH 天然幂等不带 Idempotency-Key；POST 创建带
+      const res = editing
+        ? await fetch(`/api/admin/agents/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
+        : await fetch("/api/admin/agents", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body });
+      const data = await res.json();
+      if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
+      setShowAgentModal(false); load();
+      // 平台变更导致原命名 API 绑定类型不符、被后端自动解绑 → 提示重新配置
+      if (data.providerUnbound) {
+        toast("智能体已更新；平台已变更，原 API 绑定类型不符已自动解除，请在「API 配置」里重新选择");
+      } else {
+        toast(editing ? "智能体已更新" : "智能体已创建");
+      }
+    });
+  }
+
+  async function handleSaveApi() {
+    if (!showApiModal) return;
+    // 6.2up · 按 effectivePlatform 取 schema，校验高级 JSON + 各 input 字段，input 优先合并
+    const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
+    const schema = schemaForPlatform(effPlat);
+    // 1. 解析高级 JSON
+    const adv = parseAdvancedJson(apiForm.advancedJson);
+    if (!adv.ok) { toast(adv.msg); return; }
+    // 2. 校验 input 字段（number 越界 / NaN / required）
+    const inputParams: Record<string, unknown> = {};
+    for (const f of schema.fields) {
+      const raw = apiForm.inputs[f.key] ?? "";
+      if (f.type === "number") {
+        const r = validateNumberField(f, raw);
+        if (!r.ok) { toast(r.msg); return; }
+        if (Number.isFinite(r.value)) inputParams[f.key] = r.value;
+      } else if (raw !== "") {
+        inputParams[f.key] = raw;
+      }
+    }
+    for (const f of schema.fields) {
+      if (f.required && (inputParams[f.key] === undefined || inputParams[f.key] === "")) {
+        toast(`「${f.label}」必填`); return;
+      }
+    }
+    // 3. input 优先合并：高级 JSON 提供兜底，input 覆盖同名 key
+    const finalParams = { ...adv.value, ...inputParams };
+    await saveApiGuard.submit(async () => {
+      // 5.15up PR-2 · 只提交 providerId（绑定/解绑命名 API）+ modelParams；
+      // 旧 apiEndpoint/apiKey 不再从此入口写入。PATCH 天然幂等。
+      const res = await fetch(`/api/admin/agents/${showApiModal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: apiForm.providerId, modelParams: finalParams }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast(d.error ?? "保存失败");
+        return;
+      }
+      setShowApiModal(null); load(); toast("API 配置已保存");
+    });
+  }
+
+  // 6.5up · openCatAssign / handleCatAssign / addCategory / saveEditCat / handleCatIcon / removeCatIcon
+  //        已抽到 /admin/tags 页面（不动后端 API，仅前端搬迁）
+
+  const platformColor: Record<string, string> = { coze: "bg-blue-100 text-blue-700", dify: "bg-purple-100 text-purple-700", zhipu: "bg-green-100 text-green-700", openai: "bg-gray-100 text-gray-600", other: "bg-gray-100 text-gray-600" };
+
+  const filteredAgents = useMemo(() => agents.filter(a => {
+    if (agentTypeFilter && a.agent_type !== agentTypeFilter) return false;
+    // 5.16up R4 · 修筛选漏项：用多分类 categoryIds，不再用遗留单列 category_id
+    if (agentCategoryFilter && !(a.categoryIds ?? []).includes(agentCategoryFilter)) return false;
+    if (agentStatusFilter === "enabled" && !a.enabled) return false;
+    if (agentStatusFilter === "disabled" && a.enabled) return false;
+    return true;
+  }), [agents, agentTypeFilter, agentCategoryFilter, agentStatusFilter]);
+  const hasAgentFilter = agentTypeFilter || agentCategoryFilter || agentStatusFilter;
+
+  function canTouchAgent(a: Agent, action: "basic.update" | "enable" | "delete"): boolean {
+    return adminPerms.canAction("agent", action) && adminPerms.canActOnCreator("agent", a.created_by_role);
+  }
+
+  // 5.16up R4 · 完整展示按分类分组：多分类智能体在每个所属分类下都出现（D4-1）；
+  // 未分类兜底分区；分区顺序按 categories（接口已按 sort_order 排）。
+  const groupedSections = useMemo(() => {
+    const cats = agentCategoryFilter
+      ? categories.filter((c) => c.id === agentCategoryFilter)
+      : categories;
+    const sections = cats.map((c) => ({
+      id: c.id,
+      name: c.name,
+      icon_url: c.icon_url ?? null,
+      agents: filteredAgents.filter((a) => (a.categoryIds ?? []).includes(c.id)),
+    }));
+    if (!agentCategoryFilter) {
+      const uncategorized = filteredAgents.filter((a) => (a.categoryIds ?? []).length === 0);
+      if (uncategorized.length > 0) {
+        sections.push({ id: "__uncategorized__", name: "未设置标签", icon_url: null, agents: uncategorized });
+      }
+    }
+    return sections.filter((s) => s.agents.length > 0);
+  }, [categories, filteredAgents, agentCategoryFilter]);
+
+  return (
+    <AdminLayout>
+      <div className="space-y-6">
+        <PageHeader
+          icon={<Bot size={20} />}
+          title="智能体管理"
+          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {agents.length} 个</span>}
+          actions={canCreateAgent ? (
+            <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增智能体</Button>
+          ) : null}
+        />
+
+        {/* 6.5up · 智能体列表主体（旧分类管理 Tab 已抽到 /admin/tags） */}
+        <>
+          <Card padding="md" className="flex flex-wrap gap-3 items-center">
+            <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentTypeFilter} onChange={e => setAgentTypeFilter(e.target.value)}>
+              <option value="">全部类型</option>
+              <option value="chat">对话型</option>
+              <option value="external">外链型</option>
+            </select>
+            <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentCategoryFilter} onChange={e => setAgentCategoryFilter(e.target.value)}>
+              <option value="">全部标签</option>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select className="h-10 border border-gray-200 rounded-[10px] px-3.5 text-sm bg-white focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" value={agentStatusFilter} onChange={e => setAgentStatusFilter(e.target.value)}>
+              <option value="">全部状态</option>
+              <option value="enabled">已启用</option>
+              <option value="disabled">已停用</option>
+            </select>
+            {hasAgentFilter && (
+              <button onClick={() => { setAgentTypeFilter(""); setAgentCategoryFilter(""); setAgentStatusFilter(""); }} className="text-[12px] text-gray-400 hover:text-gray-600 flex items-center gap-1 px-2">
+                <X size={13} /> 清除
+              </button>
+            )}
+            <span className="ml-auto text-[12px] text-gray-500">{filteredAgents.length} / {agents.length} 个</span>
+          </Card>
+          <Card padding="none" className="overflow-hidden">
+            {loading ? (
+              <div className="p-6 space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
+            ) : groupedSections.length === 0 ? (
+              <div className="py-16 text-center text-gray-400"><Bot size={32} className="mx-auto mb-3 text-gray-200" /><p className="text-sm">{agents.length === 0 ? (canCreateAgent ? "暂无智能体，点击右上角新增" : "暂无智能体") : "没有符合筛选条件的智能体"}</p></div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm table-sticky-head table-fixed">
+                  {/* 6.3up · 固定列宽 · 防止折叠/展开时列宽抖动导致表头偏移 */}
+                  <colgroup>
+                    <col className="w-[28%]" />
+                    <col className="w-[18%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[22%]" />
+                    <col className="w-[18%]" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      {/* 6.3up · 表头居中（除"编号/名称"列保持左对齐，避免长名字行视觉偏移）*/}
+                      {(["编号/名称", "标签", "类型/平台", "引用工作流", "操作"] as const).map((h) => (
+                        <th
+                          key={h}
+                          className={`px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider ${
+                            h === "编号/名称" ? "text-left" : "text-center"
+                          }`}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  {/* 5.16up R4 · 按分类分组展示；多分类智能体在每个所属分类下各出现一次 */}
+                  {/* 6.3up · 风格靠近工作流卡片 · 分类 header 加 chevron 折叠/展开，默认折叠 */}
+                  {groupedSections.map((section) => {
+                  const isExpanded = expandedAgentSections.has(section.id);
+                  return (
+                  <tbody key={section.id} className="divide-y divide-gray-50">
+                    <tr
+                      className="bg-gray-50/80 border-t border-gray-100 hover:bg-gray-100/80 cursor-pointer transition-colors"
+                      onClick={() => toggleAgentSection(section.id)}
+                    >
+                      <td colSpan={5} className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          {isExpanded
+                            ? <ChevronDown size={18} className="text-gray-500 shrink-0" />
+                            : <ChevronRight size={18} className="text-gray-500 shrink-0" />}
+                          {section.icon_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={section.icon_url} alt={section.name} className="w-6 h-6 rounded-[6px] object-contain" />
+                          ) : (
+                            <div className="w-6 h-6 rounded-[6px] bg-[#002FA7]/10 flex items-center justify-center shrink-0">
+                              <Tag size={14} className="text-[#002FA7]" />
+                            </div>
+                          )}
+                          <span className="text-[16px] font-semibold text-gray-800">{section.name}</span>
+                          <span className="text-[12px] text-gray-400 font-medium">{section.agents.length} 个</span>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded && section.agents.map((a) => (
+                      <tr
+                        key={a.id}
+                        data-agent-row={a.id}
+                        className={`hover:bg-gray-50/50 transition-all ${
+                          highlightedRowId === a.id
+                            ? "bg-[#002FA7]/5 ring-2 ring-[#002FA7] ring-inset"
+                            : ""
+                        }`}
+                      >
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0 ${a.agent_type === "external" ? "bg-orange-50" : "bg-[#002FA7]/8"}`}>
+                              {a.agent_type === "external"
+                                ? <ExternalLink size={16} className="text-orange-500" />
+                                : <Bot size={18} className="text-[#002FA7]" />}
+                            </div>
+                            <div><p className="font-medium text-gray-800">{a.name}</p><code className="text-[10px] text-gray-400 font-mono">{a.agent_code}</code></div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          {a.categoriesAll && a.categoriesAll.length > 0 ? (
+                            <div className="flex flex-wrap items-center justify-center gap-1">
+                              {a.categoriesAll.map((c) => (
+                                <span key={c.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                                  {/* 小图标（<20px），next/image 优化收益低 */}
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  {c.icon_url ? <img src={c.icon_url} alt={c.name} className="w-3.5 h-3.5 rounded-[3px] object-contain" /> : <Tag size={10} />}
+                                  {c.name}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="flex justify-center"><Badge variant="muted">未设置标签</Badge></div>
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                            {a.agent_type === "external" ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-700 flex items-center gap-1"><ExternalLink size={10} />外链</span>
+                            ) : (
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${platformColor[a.platform] ?? "bg-gray-100 text-gray-600"}`}>{a.platform}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-5 py-4 relative">
+                          {(a.workflows?.length ?? 0) === 0 ? (
+                            <div className="flex justify-center"><span className="text-[11px] text-gray-400">未被工作流引用</span></div>
+                          ) : (
+                            <div className="flex flex-wrap items-center justify-center gap-1.5">
+                              {a.workflows!.slice(0, 2).map((w) => (
+                                <button
+                                  key={w.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    router.push(`/admin/workflows?focus=${w.id}&fromAgent=${a.id}&pageSize=100`);
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-[#002FA7]/8 text-[#002FA7] border border-[#002FA7]/20 hover:bg-[#002FA7]/15 transition-colors max-w-[180px]"
+                                  title={`跳转到工作流：${w.name}`}
+                                >
+                                  <GitBranch size={10} />
+                                  <span className="truncate">{w.name}</span>
+                                </button>
+                              ))}
+                              {a.workflows!.length > 2 && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    // 5.16up R4 · 多分类智能体在多分区有重复行，弹层 key 须含 section.id 区分
+                                    const k = `${section.id}:${a.id}`;
+                                    setOpenMoreFor(openMoreFor === k ? null : k);
+                                  }}
+                                  className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 transition-colors"
+                                >
+                                  +{a.workflows!.length - 2} 更多
+                                </button>
+                              )}
+                              {openMoreFor === `${section.id}:${a.id}` && (
+                                <>
+                                  {/* 点击空白关闭 popover */}
+                                  <div
+                                    className="fixed inset-0 z-40"
+                                    onClick={() => setOpenMoreFor(null)}
+                                  />
+                                  <div className="absolute z-50 top-full left-0 mt-1 bg-white border border-gray-200 rounded-[10px] shadow-lg p-2 min-w-[240px] max-w-[360px]">
+                                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2 py-1">引用工作流（{a.workflows!.length}）</p>
+                                    <div className="flex flex-col gap-0.5 max-h-[280px] overflow-y-auto">
+                                      {a.workflows!.map((w) => (
+                                        <button
+                                          key={w.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setOpenMoreFor(null);
+                                            router.push(`/admin/workflows?focus=${w.id}&fromAgent=${a.id}&pageSize=100`);
+                                          }}
+                                          className="text-left text-[12px] px-2 py-1.5 rounded-[6px] hover:bg-[#002FA7]/8 hover:text-[#002FA7] flex items-center gap-2 transition-colors"
+                                        >
+                                          <GitBranch size={11} className="text-gray-400 shrink-0" />
+                                          <span className="truncate">{w.name}</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          {/* 5.7up · org_admin 只读，整个操作列不显示 */}
+                          {isOrgAdmin ? (
+                            <div className="flex justify-center"><span className="text-xs text-gray-300">仅可查看</span></div>
+                          ) : (
+                          (() => {
+                            const canUpdate = canTouchAgent(a, "basic.update");
+                            const canEnable = canTouchAgent(a, "enable");
+                            const canDelete = canTouchAgent(a, "delete");
+                            const canDisplay = adminPerms.canAction("category", "update") && adminPerms.canActOnCreator("agent", a.created_by_role);
+                            if (!canUpdate && !canEnable && !canDelete && !canDisplay) {
+                              return <div className="flex justify-center"><span className="text-xs text-gray-300">仅可查看</span></div>;
+                            }
+                            return (
+                              <div className="flex items-center justify-center gap-1">
+                                {canEnable && (
+                                  <button
+                                    onClick={() => toggleAgentEnabled(a)}
+                                    className={`p-1.5 rounded-[8px] transition-colors ${a.enabled ? "text-green-600 hover:bg-green-50" : "text-gray-400 hover:bg-gray-100"}`}
+                                    title={a.enabled ? "已启用，点击禁用" : "已禁用，点击启用"}
+                                    aria-label={a.enabled ? "禁用" : "启用"}
+                                  >
+                                    {a.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                                  </button>
+                                )}
+                                {canUpdate && (
+                                  <button onClick={() => openEdit(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
+                                )}
+                                {/* 5.19up · 搭建器发布的智能体 API 配置归搭建器管，此处不放按钮，防误触误改 */}
+                                {canUpdate && a.agent_type !== "external" && !a.published_from_draft_id && (
+                                  <button onClick={() => openApi(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="API 配置" aria-label="API 配置"><Key size={14} /></button>
+                                )}
+                                {canUpdate && (
+                                  <button onClick={() => openPermModal(a)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="权限设置" aria-label="权限设置"><Settings2 size={14} /></button>
+                                )}
+                                {canDisplay && (
+                                  <button onClick={() => openDisplay(a)} className="p-1.5 rounded-[8px] hover:bg-[#002FA7]/10 text-gray-400 hover:text-[#002FA7] transition-colors" title="标签展示配置" aria-label="标签展示配置"><LayoutGrid size={14} /></button>
+                                )}
+                                {canDelete && (
+                                  <button onClick={() => setDeletingAgent(a)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
+                                )}
+                              </div>
+                            );
+                          })()
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  );
+                  })}
+                </table>
+              </div>
+            )}
+          </Card>
+        </>
+      </div>
+
+      {/* Agent Modal */}
+      {showAgentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+            <h2 className="font-semibold text-gray-900 mb-5">{editing ? "编辑智能体" : "新增智能体"}</h2>
+            <div className="space-y-4">
+              <Input label="智能体编号（ID）" placeholder="如 AGT-009" value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} />
+              <Input label="名称" placeholder="如 营销文案助手" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">简介</label><textarea rows={3} className="w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 resize-none" placeholder="简短描述功能…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-gray-700">所属标签（可多选）</label>
+                {categories.length === 0 ? (
+                  <p className="text-xs text-gray-400">暂无标签，请先在&quot;标签管理&quot;中创建</p>
+                ) : (
+                  <>
+                    <div className="border border-gray-200 rounded-[12px] p-3 max-h-40 overflow-y-auto space-y-1.5">
+                      {categories.map((cat) => {
+                        const checked = form.categoryIds.includes(cat.id);
+                        return (
+                          <label key={cat.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 rounded px-1 py-1">
+                            <input
+                              type="checkbox"
+                              className="accent-[#002FA7] w-4 h-4"
+                              checked={checked}
+                              onChange={() => {
+                                const next = checked
+                                  ? form.categoryIds.filter((id) => id !== cat.id)
+                                  : [...form.categoryIds, cat.id];
+                                setForm({ ...form, categoryIds: next });
+                              }}
+                            />
+                            {cat.icon_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={cat.icon_url} alt={cat.name} className="w-5 h-5 rounded-[4px] object-contain" />
+                            ) : (
+                              <Tag size={14} className="text-gray-400" />
+                            )}
+                            <span className="text-sm text-gray-700">{cat.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-gray-400">可为智能体勾选多个标签，便于在多个标签下显示。不选则不出现在任何标签下。</p>
+                  </>
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-gray-700">智能体类型</label>
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="agentType" value="chat" checked={form.agentType === "chat"} onChange={() => setForm({ ...form, agentType: "chat" })} className="accent-[#002FA7]" />
+                    <MessageSquare size={14} className="text-[#002FA7]" /><span className="text-sm">站内对话型</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="agentType" value="external" checked={form.agentType === "external"} onChange={() => setForm({ ...form, agentType: "external" })} className="accent-[#002FA7]" />
+                    <ExternalLink size={14} className="text-orange-500" /><span className="text-sm">外链跳转型</span>
+                  </label>
+                </div>
+              </div>
+              {form.agentType === "external" && (
+                <Input label="跳转链接 URL" placeholder="https://example.com/tool" value={form.externalUrl} onChange={(e) => setForm({ ...form, externalUrl: e.target.value })} />
+              )}
+              {form.agentType === "chat" && (
+                <div className="flex flex-col gap-1.5"><label className="text-sm font-medium text-gray-700">对接平台</label><select className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>{PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
+              )}
+              {formError && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{formError}</div>}
+            </div>
+            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowAgentModal(false)}>取消</Button><Button onClick={handleSaveAgent} loading={saveAgentGuard.loading}>{editing ? "保存" : "创建"}</Button></div>
+          </div>
+        </div>
+      )}
+
+      {/* API Config Modal */}
+      {showApiModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+            <h2 className="font-semibold text-gray-900 mb-1">API 配置</h2>
+            <p className="text-sm text-gray-500 mb-5">{showApiModal.agent_code} · {showApiModal.name} · {showApiModal.platform}</p>
+            <div className="space-y-4">
+              {/* 5.15up PR-2 · 主操作：选择命名 API（按平台类别过滤） */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-gray-700">命名 API</label>
+                <select
+                  className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm focus:outline-none focus:border-[#002FA7]"
+                  value={apiForm.providerId}
+                  onChange={(e) => setApiForm({ ...apiForm, providerId: e.target.value })}
+                >
+                  <option value="">未绑定</option>
+                  {apiProviders.map((p) => (
+                    <option key={p.id} value={p.id} disabled={!p.enabled}>
+                      {p.name}（{p.platform}）{p.enabled ? "" : " · 已禁用"}
+                    </option>
+                  ))}
+                </select>
+                <a
+                  href="/admin/model-providers"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-[#002FA7] hover:underline w-fit"
+                >
+                  去「API 管理」新建 / 更新 API →
+                </a>
+                <p className="text-[11px] text-gray-400">
+                  API Key 统一在「API 管理」里命名维护，此处选择引用即可。
+                </p>
+              </div>
+
+              {/* 6.2up · 模型参数：按 effectivePlatform 渲染 input 列表 + 折叠 JSON */}
+              {(() => {
+                const effPlat = resolveEffectivePlatform(apiForm.providerId, apiProviders, showApiModal);
+                const schema = schemaForPlatform(effPlat);
+                // dify 在 advancedJson 空时隐藏折叠；其它平台（含 other）始终允许打开
+                const showJsonAdvanced = !schema.hideJsonIfEmpty || apiForm.advancedJson.trim().length > 0;
+                return (
+                  <>
+                    <div className="border-t border-gray-100 pt-3 -mx-1 px-1">
+                      <div className="flex items-baseline justify-between mb-2">
+                        <label className="text-sm font-medium text-gray-700">模型参数</label>
+                        <span className="text-[11px] text-gray-400">按平台 {effPlat}</span>
+                      </div>
+                      {schema.fields.length === 0 && schema.noFieldsHint && (
+                        <p className="text-xs text-gray-500 bg-gray-50 rounded-[8px] px-3 py-2">{schema.noFieldsHint}</p>
+                      )}
+                      {schema.fields.map((f) => {
+                        const inputType = f.type === "password" ? "password" : f.type === "number" ? "number" : "text";
+                        return (
+                          <div key={f.key} className="flex flex-col gap-1 mt-3">
+                            <label className="text-xs font-medium text-gray-600">
+                              {f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}
+                            </label>
+                            <input
+                              type={inputType}
+                              min={f.min}
+                              max={f.max}
+                              step={f.step}
+                              placeholder={f.placeholder}
+                              className="w-full h-10 border border-gray-200 rounded-[10px] px-3 text-sm focus:outline-none focus:border-[#002FA7]"
+                              value={apiForm.inputs[f.key] ?? ""}
+                              onChange={(e) => setApiForm((prev) => ({ ...prev, inputs: { ...prev.inputs, [f.key]: e.target.value } }))}
+                            />
+                            {f.hint && <p className="text-[11px] text-gray-400">{f.hint}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {showJsonAdvanced && (
+                      <div className="border-t border-gray-100 pt-3">
+                        <button
+                          type="button"
+                          onClick={() => setApiForm((prev) => ({ ...prev, advancedOpen: !prev.advancedOpen }))}
+                          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          <span className="font-mono">{apiForm.advancedOpen ? "▼" : "▶"}</span>
+                          <span>高级（JSON）</span>
+                          {apiForm.advancedJson.trim().length > 0 && (
+                            <span className="text-[10px] text-amber-600 ml-1">· 已保留旧参数</span>
+                          )}
+                        </button>
+                        {apiForm.advancedOpen && (
+                          <>
+                            <textarea
+                              rows={4}
+                              placeholder="{}"
+                              className="mt-2 w-full border border-gray-200 rounded-[12px] px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#002FA7] resize-none"
+                              value={apiForm.advancedJson}
+                              onChange={(e) => setApiForm((prev) => ({ ...prev, advancedJson: e.target.value }))}
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">
+                              仅用于覆盖 input 之外的额外字段；同名 key 时 input 值优先。
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+            <div className="flex justify-end gap-2 mt-6"><Button variant="ghost" onClick={() => setShowApiModal(null)}>取消</Button><Button onClick={handleSaveApi} loading={saveApiGuard.loading}>保存配置</Button></div>
+          </div>
+        </div>
+      )}
+
+      {/* Category Display Modal */}
+      {showDisplayModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+            <h2 className="font-semibold text-gray-900 mb-1">标签展示配置</h2>
+            <p className="text-sm text-gray-500 mb-2">
+              {showDisplayModal.name} — 控制此智能体在各标签「智能体展示」中的可见性
+            </p>
+            {!displayLoading && displayConfig.length > 0 && (
+              <div className="flex items-center gap-2 mb-3">
+                <button onClick={async () => {
+                  const items = displayConfig.filter(c => !c.is_manual).map(c => ({ categoryId: c.category_id, isManual: true }));
+                  if (items.length === 0) return;
+                  await fetch("/api/admin/category-display", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentId: showDisplayModal.id, items }) });
+                  const data = await fetch(`/api/admin/category-display?agentId=${showDisplayModal.id}`).then(r => r.json()).catch(() => []);
+                  setDisplayConfig(Array.isArray(data) ? data : []);
+                }} className="text-xs text-[#002FA7] hover:underline">一键全选</button>
+                <span className="text-gray-300">·</span>
+                <button onClick={async () => {
+                  const items = displayConfig.filter(c => c.is_manual).map(c => ({ categoryId: c.category_id, isManual: false }));
+                  if (items.length === 0) return;
+                  await fetch("/api/admin/category-display", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentId: showDisplayModal.id, items }) });
+                  const data = await fetch(`/api/admin/category-display?agentId=${showDisplayModal.id}`).then(r => r.json()).catch(() => []);
+                  setDisplayConfig(Array.isArray(data) ? data : []);
+                }} className="text-xs text-gray-400 hover:text-gray-600 hover:underline">全部取消</button>
+              </div>
+            )}
+            {displayLoading ? (
+              <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-12 bg-gray-50 rounded-[10px] animate-pulse" />)}</div>
+            ) : displayConfig.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">暂无标签</p>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {displayConfig.map((cfg) => (
+                  <div key={cfg.category_id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-[12px]">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800">{cfg.category_name}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {cfg.is_auto && <span className="mr-2 text-blue-500">自动同步（工作流）</span>}
+                        {cfg.is_manual && <span className="mr-2 text-green-600">手动添加</span>}
+                        {cfg.is_hidden && <span className="text-red-500">已隐藏</span>}
+                        {!cfg.is_auto && !cfg.is_manual && !cfg.is_hidden && <span className="text-gray-300">未展示</span>}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {/* 手动添加（仅对非自动同步的有意义） */}
+                      <button
+                        onClick={() => toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isManual", cfg.is_manual)}
+                        title={cfg.is_manual ? "取消手动添加" : "手动添加到此标签展示"}
+                        className={`p-1.5 rounded-[8px] transition-colors ${cfg.is_manual ? "bg-green-100 text-green-600" : "hover:bg-gray-200 text-gray-400"}`}
+                      >
+                        <PlusCircle size={14} />
+                      </button>
+                      {/* 隐藏（对自动同步和手动添加的都有效） */}
+                      <button
+                        onClick={() => toggleDisplayConfig(showDisplayModal.id, cfg.category_id, "isHidden", cfg.is_hidden)}
+                        title={cfg.is_hidden ? "取消隐藏" : "在此标签中隐藏"}
+                        className={`p-1.5 rounded-[8px] transition-colors ${cfg.is_hidden ? "bg-red-100 text-red-500" : "hover:bg-gray-200 text-gray-400"}`}
+                      >
+                        {cfg.is_hidden ? <Eye size={14} /> : <EyeOff size={14} />}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 p-3 bg-[#f0f4ff] rounded-[10px]">
+              <p className="text-xs text-[#002FA7]">
+                <strong>说明：</strong>自动同步来自工作流步骤绑定；手动添加可补充未在工作流中的智能体；隐藏优先级最高，会覆盖自动同步。
+              </p>
+            </div>
+            <div className="flex justify-end mt-4">
+              <Button variant="ghost" onClick={() => setShowDisplayModal(null)}>关闭</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 权限设置弹窗 */}
+      {showPermModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-lg p-6 max-h-[90vh] flex flex-col">
+            <h2 className="font-semibold text-gray-900 mb-0.5">权限设置</h2>
+            <p className="text-sm text-gray-500 mb-4">{showPermModal.name} — 控制哪些用户可以访问此智能体</p>
+
+            {/* 当前权限列表 */}
+            <div className="mb-4 flex-1 overflow-y-auto">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">当前权限</p>
+              {permLoading ? (
+                <div className="h-10 bg-gray-50 rounded-[10px] animate-pulse" />
+              ) : permissions.length === 0 ? (
+                <div className="p-3 bg-amber-50 border border-amber-100 rounded-[10px] text-sm text-amber-700">
+                  暂无权限配置 — 所有人均无法访问此智能体
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {permissions.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-[10px]">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="shrink-0 text-xs px-2 py-0.5 bg-[#e8eeff] text-[#002FA7] rounded-full font-medium">
+                          {SCOPE_TYPE_LABELS[p.scope_type] ?? p.scope_type}
+                        </span>
+                        <span className="text-sm text-gray-700 truncate">{p.scope_label}</span>
+                      </div>
+                      <button onClick={() => deletePerm(p.id)} className="shrink-0 text-gray-300 hover:text-red-500 transition-colors"><X size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 添加权限 */}
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">添加权限</p>
+              <div className="flex gap-2 mb-2 flex-wrap">
+                <select value={newScopeType} onChange={e => { setNewScopeType(e.target.value); setNewScopeId(""); }}
+                  className="h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white shrink-0">
+                  <option value="all">全部用户</option>
+                  <option value="user_type">用户类型</option>
+                  <option value="org">按组织</option>
+                  <option value="dept">按部门</option>
+                  <option value="team">按小组</option>
+                  <option value="user">指定用户(ID)</option>
+                  <option value="group">按分组</option>
+                </select>
+                {newScopeType === "group" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择分组</option>
+                    {userGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  </select>
+                )}
+                {newScopeType === "user_type" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择</option>
+                    <option value="personal">个人用户</option>
+                    <option value="organization">组织用户</option>
+                  </select>
+                )}
+                {newScopeType === "org" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择组织</option>
+                    {tenants.map(t => <option key={t.code} value={t.code}>{t.name} ({t.code})</option>)}
+                  </select>
+                )}
+                {newScopeType === "dept" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择部门</option>
+                    {depts.map(d => <option key={d.id} value={d.id}>{d.name} ({d.tenant_code})</option>)}
+                  </select>
+                )}
+                {newScopeType === "team" && (
+                  <select value={newScopeId} onChange={e => setNewScopeId(e.target.value)}
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7] bg-white">
+                    <option value="">请选择小组</option>
+                    {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                )}
+                {newScopeType === "user" && (
+                  <input value={newScopeId} onChange={e => setNewScopeId(e.target.value)} placeholder="粘贴用户 ID"
+                    className="flex-1 h-9 px-3 border border-gray-200 rounded-[8px] text-sm focus:outline-none focus:border-[#002FA7]" />
+                )}
+              </div>
+              <button onClick={addPerm} disabled={addingPerm || (newScopeType !== "all" && !newScopeId)}
+                className="w-full h-9 bg-[#002FA7] text-white rounded-[8px] text-sm font-medium hover:bg-[#001f7a] transition-colors disabled:opacity-50">
+                {addingPerm ? "添加中…" : "+ 添加权限"}
+              </button>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <Button variant="ghost" onClick={() => { setShowPermModal(null); load(); }}>关闭</Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 4.29up：删除智能体二次确认 */}
+      {deletingAgent && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-[10px] bg-red-50 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} className="text-red-500" />
+              </div>
+              <h3 className="font-semibold text-gray-900">确认删除？</h3>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed mb-1">
+              即将删除智能体「<span className="font-medium text-gray-900">{deletingAgent.name}</span>」
+            </p>
+            <p className="text-xs text-gray-400 mb-5">此操作不可恢复</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setDeletingAgent(null)} disabled={deleting}>取消</Button>
+              <button
+                onClick={() => handleDeleteAgent(deletingAgent)}
+                disabled={deleting}
+                className="px-4 py-2 rounded-[10px] text-sm font-medium bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+              >
+                {deleting ? "删除中…" : "确认删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4.29up：引用阻止弹窗 */}
+      {usedByModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-[10px] bg-amber-50 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} className="text-amber-500" />
+              </div>
+              <h3 className="font-semibold text-gray-900">无法删除</h3>
+            </div>
+            <p className="text-sm text-gray-700 leading-relaxed mb-1">
+              智能体「<span className="font-medium">{usedByModal.agent.name}</span>」被以下 {usedByModal.usedBy.length} 个工作流引用：
+            </p>
+            <p className="text-xs text-gray-400 mb-3">请先在对应工作流中解绑该智能体后再删除</p>
+            <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto mb-5 border border-gray-100 rounded-[10px] p-2">
+              {usedByModal.usedBy.map((wf) => (
+                <button
+                  key={wf.id}
+                  onClick={() => {
+                    const aid = usedByModal.agent.id;
+                    setUsedByModal(null);
+                    router.push(`/admin/workflows?focus=${wf.id}&fromAgent=${aid}&pageSize=100`);
+                  }}
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-[8px] hover:bg-[#002FA7]/8 transition-colors text-left"
+                >
+                  <span className="flex items-center gap-2 min-w-0 flex-1">
+                    <GitBranch size={13} className="text-[#002FA7] shrink-0" />
+                    <span className="text-sm text-gray-800 truncate">{wf.name}</span>
+                  </span>
+                  <span className="flex items-center gap-1 shrink-0">
+                    <span className="text-[11px] text-gray-400">{wf.stepCount} 步</span>
+                    <span className="text-[12px] text-[#002FA7]">前往 →</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end">
+              <Button variant="ghost" onClick={() => setUsedByModal(null)}>关闭</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </AdminLayout>
+  );
+}

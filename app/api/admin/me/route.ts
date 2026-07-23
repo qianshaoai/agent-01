@@ -1,8 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAdminAccessPayload } from "@/lib/session";
-import { isCustomAdminPayload } from "@/lib/auth";
-import { buildPermissionActor } from "@/lib/permission-actor";
-import { apiError } from "@/lib/api-error";
+import { requireAdminActor } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -20,11 +17,11 @@ export const revalidate = 0;
 //   - 不把 customRoleCodes / permissions 灌回到 AdminPayload；避免 `role ?? "super_admin"` 误判风险
 
 export async function GET() {
-  const access = await getAdminAccessPayload();
-  if (!access) return apiError("未登录", "UNAUTHORIZED");
-  const actor = await buildPermissionActor(access);
+  const context = await requireAdminActor();
+  if (context instanceof Response) return context;
+  const { actor } = context;
 
-  if (isCustomAdminPayload(access)) {
+  if (context.isCustomAdmin) {
     return NextResponse.json({
       source: "custom_admin",
       userId: actor.actorId,
@@ -43,7 +40,7 @@ export async function GET() {
   }
 
   return NextResponse.json({
-    source: access.source ?? "admin_table",
+    source: context.source,
     adminId: actor.actorId,
     username: actor.username,
     role: actor.builtinRole ?? "super_admin",

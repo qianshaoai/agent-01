@@ -1,6 +1,9 @@
 import { db } from "@/lib/db";
 import type { ResourceScope } from "@/lib/permission-actor";
-import { scopesFromTenantCode } from "@/lib/adapters/access/_scope-utils";
+import {
+  coalesceAdminUserTenantCode,
+  scopesFromTenantCode,
+} from "@/lib/adapters/access/_scope-utils";
 
 type CreatorTenantRow = { id: string; tenant_code: string | null };
 type DraftOwnerRow = { id: string; created_by: string | null };
@@ -15,10 +18,9 @@ export async function resolveAdminOrUserTenantCode(
     db.from("users").select("tenant_code").eq("id", actorId).maybeSingle(),
   ]);
 
-  return (
-    (adminCreator?.tenant_code as string | null | undefined) ??
-    (userCreator?.tenant_code as string | null | undefined) ??
-    null
+  return coalesceAdminUserTenantCode(
+    adminCreator?.tenant_code as string | null | undefined,
+    userCreator?.tenant_code as string | null | undefined,
   );
 }
 
@@ -60,7 +62,8 @@ export async function resolveAgentDraftOwnerScopesMap(
     ),
   ];
 
-  const tenantByCreator = new Map<string, string | null>();
+  const adminTenantByCreator = new Map<string, string | null>();
+  const userTenantByCreator = new Map<string, string | null>();
   if (creatorIds.length > 0) {
     const [{ data: admins }, { data: users }] = await Promise.all([
       db.from("admins").select("id, tenant_code").in("id", creatorIds),
@@ -68,16 +71,19 @@ export async function resolveAgentDraftOwnerScopesMap(
     ]);
 
     for (const row of (users ?? []) as CreatorTenantRow[]) {
-      tenantByCreator.set(row.id, row.tenant_code ?? null);
+      userTenantByCreator.set(row.id, row.tenant_code ?? null);
     }
     for (const row of (admins ?? []) as CreatorTenantRow[]) {
-      tenantByCreator.set(row.id, row.tenant_code ?? null);
+      adminTenantByCreator.set(row.id, row.tenant_code ?? null);
     }
   }
 
   for (const row of draftRows) {
     const tenantCode = row.created_by
-      ? tenantByCreator.get(row.created_by) ?? null
+      ? coalesceAdminUserTenantCode(
+          adminTenantByCreator.get(row.created_by),
+          userTenantByCreator.get(row.created_by),
+        )
       : null;
     out.set(row.id, scopesFromTenantCode(tenantCode));
   }

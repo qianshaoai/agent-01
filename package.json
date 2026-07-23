@@ -11,8 +11,10 @@
     "ci:lint": "npm run lint",
     "ci:typecheck": "tsc --noEmit",
     "ci:build": "npm run build",
-    "ci:test": "tsx scripts/phase-d-scope-utils.test.ts && tsx scripts/check-permission-honoring.ts && npm run seed:check",
+    "ci:test": "tsx scripts/phase-d-scope-utils.test.ts && tsx scripts/admin-org-tree-access.test.ts && tsx scripts/check-7.23up-runtime.ts && tsx scripts/check-7.23up-migrations.ts && tsx scripts/check-permission-honoring.ts && npm run seed:check",
     "ci:check": "npm run ci:lint && npm run ci:typecheck && npm run ci:build && npm run ci:test",
+    "verify:7.23up:db": "tsx scripts/verify-7.23up-db.ts && tsx scripts/verify-7.23up-equivalence.ts",
+    "loadtest:7.23up": "tsx scripts/loadtest-7.23up.ts",
     "seed:gen": "tsx scripts/generate-permission-seed.ts",
     "seed:check": "tsx scripts/check-permission-seed.ts"
   },

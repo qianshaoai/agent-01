@@ -273,6 +273,19 @@ export async function getCurrentAdminAccess(): Promise<AdminAccessPayload | null
 }
 
 /**
+ * 仅完成 cookie 读取与 JWT 验签，不访问数据库。
+ * 业务 API 必须把结果交给 resolveAdminRequestContext() 做实时状态、强制下线和权限校验；
+ * 该函数不能作为独立鉴权结果使用。
+ */
+export async function getUnvalidatedCurrentAdminAccess(): Promise<AdminAccessPayload | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(ADMIN_COOKIE_NAME)?.value;
+  if (!token) return null;
+  const payload = await verifyToken(token);
+  return payload?.type === "admin" ? payload : null;
+}
+
+/**
  * 6.4up · custom admin token 新鲜度
  *
  * custom admin 的 actorId 是 users.id，所以直接比对 users.force_relogin_at。

@@ -1,0 +1,20 @@
+{
+  "conversations_agent_id_idx": {
+    "decision": "create",
+    "beforePlan": "artifacts/explain/conversations-before.txt",
+    "afterPlan": "artifacts/explain/conversations-after.txt",
+    "rationale": "示例：现有计划为顺序扫描，创建后命中 Index Only Scan。"
+  },
+  "workflow_steps_agent_id_idx": {
+    "decision": "not_required",
+    "beforePlan": "artifacts/explain/workflow-steps-before.txt",
+    "rationale": "示例：目标库数据量很小，现有索引和缓存已满足 P95；暂不承担写放大。"
+  },
+  "agent_knowledge_bases_agent_id_idx": {
+    "decision": "create",
+    "beforePlan": "artifacts/explain/agent-kb-before.txt",
+    "afterPlan": "artifacts/explain/agent-kb-after.txt",
+    "rationale": "示例：当前页关联统计存在大量扫描，创建后读取块数明显下降。"
+  }
+}
+

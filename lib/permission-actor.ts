@@ -89,6 +89,34 @@ export type PermissionActor = {
   username: string;
 };
 
+export type PrefetchedPermissionActorProfile =
+  | {
+      source: "admin_table";
+      row: {
+        id: string;
+        username: string | null;
+        tenant_code: string | null;
+        role: AdminRole | null;
+        force_relogin_at?: string | null;
+      };
+    }
+  | {
+      source: "user_admin" | "custom_admin";
+      row: {
+        id: string;
+        username: string | null;
+        phone: string | null;
+        tenant_code: string | null;
+        dept_id: string | null;
+        team_id: string | null;
+        user_type: string | null;
+        role?: AdminRole | "user" | null;
+        status: string;
+        force_relogin_at?: string | null;
+      };
+      tenantValid?: boolean;
+    };
+
 export type ResourceScope = {
   scope_type: "all" | "org" | "dept" | "team";
   scope_id: string | null;
@@ -97,21 +125,27 @@ export type ResourceScope = {
 // ─── 1. buildPermissionActor ─────────────────────────────────
 
 export async function buildPermissionActor(
-  payload: AdminAccessPayload
+  payload: AdminAccessPayload,
+  prefetchedProfile?: PrefetchedPermissionActorProfile,
 ): Promise<PermissionActor> {
   if (isCustomAdminPayload(payload)) {
-    return buildCustomAdminActor(payload);
+    return buildCustomAdminActor(payload, prefetchedProfile);
   }
-  return buildBuiltinAdminActor(payload as AdminPayload);
+  return buildBuiltinAdminActor(payload as AdminPayload, prefetchedProfile);
 }
 
-async function buildBuiltinAdminActor(p: AdminPayload): Promise<PermissionActor> {
+async function buildBuiltinAdminActor(
+  p: AdminPayload,
+  prefetchedProfile?: PrefetchedPermissionActorProfile,
+): Promise<PermissionActor> {
   // 先查 admins 表（admin_table 路径）
-  const { data: adminRow } = await db
-    .from("admins")
-    .select("id, username, tenant_code, role")
-    .eq("id", p.adminId)
-    .maybeSingle();
+  const adminRow = prefetchedProfile?.source === "admin_table"
+    ? prefetchedProfile.row
+    : (await db
+        .from("admins")
+        .select("id, username, tenant_code, role")
+        .eq("id", p.adminId)
+        .maybeSingle()).data;
   if (adminRow) {
     const builtinRole = (adminRow.role as AdminRole | null) ?? p.role;
     const v2 = await loadEffectivePermissions("admin_table", p.adminId, builtinRole);
@@ -131,11 +165,13 @@ async function buildBuiltinAdminActor(p: AdminPayload): Promise<PermissionActor>
     };
   }
   // 再查 users 表（user_admin 路径，5.11up 起 users.role 提升模式）
-  const { data: userRow } = await db
-    .from("users")
-    .select("id, username, phone, tenant_code, dept_id, team_id, user_type, role")
-    .eq("id", p.adminId)
-    .maybeSingle();
+  const userRow = prefetchedProfile?.source === "user_admin"
+    ? prefetchedProfile.row
+    : (await db
+        .from("users")
+        .select("id, username, phone, tenant_code, dept_id, team_id, user_type, role")
+        .eq("id", p.adminId)
+        .maybeSingle()).data;
   if (userRow) {
     const builtinRole = (userRow.role as AdminRole | null) ?? p.role;
     const v2 = await loadEffectivePermissions("user_admin", p.adminId, builtinRole);
@@ -225,13 +261,18 @@ async function loadEffectivePermissions(
   return { kind: "loaded", set: eff };
 }
 
-async function buildCustomAdminActor(p: CustomAdminPayload): Promise<PermissionActor> {
+async function buildCustomAdminActor(
+  p: CustomAdminPayload,
+  prefetchedProfile?: PrefetchedPermissionActorProfile,
+): Promise<PermissionActor> {
   const [{ data: userRow }, { data: roleRows }] = await Promise.all([
-    db
-      .from("users")
-      .select("id, username, phone, tenant_code, dept_id, team_id, user_type, status")
-      .eq("id", p.userId)
-      .maybeSingle(),
+    prefetchedProfile?.source === "custom_admin"
+      ? Promise.resolve({ data: prefetchedProfile.row })
+      : db
+          .from("users")
+          .select("id, username, phone, tenant_code, dept_id, team_id, user_type, status")
+          .eq("id", p.userId)
+          .maybeSingle(),
     db
       .from("user_custom_roles")
       .select("role_id, custom_roles!inner(code, enabled)")
@@ -262,7 +303,19 @@ async function buildCustomAdminActor(p: CustomAdminPayload): Promise<PermissionA
 
   // tenant 状态兜底校验（与 freshness 同口径）
   const tc = userRow.tenant_code;
-  if (tc && tc !== "PERSONAL") {
+  if (
+    tc &&
+    tc !== "PERSONAL" &&
+    prefetchedProfile?.source === "custom_admin" &&
+    prefetchedProfile.tenantValid === false
+  ) {
+    return emptyActor("tenant_inactive");
+  }
+  if (
+    tc &&
+    tc !== "PERSONAL" &&
+    !(prefetchedProfile?.source === "custom_admin" && prefetchedProfile.tenantValid === true)
+  ) {
     const { data: tenant } = await db
       .from("tenants")
       .select("enabled, expires_at")

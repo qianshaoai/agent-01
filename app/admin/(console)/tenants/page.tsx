@@ -1,0 +1,534 @@
+"use client";
+import { useState, useEffect } from "react";
+import { AdminPageFrame as AdminLayout } from "@/components/layout/admin-layout";
+import { useAdminSession } from "@/components/admin/admin-session-provider";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/ui/page-header";
+import { Card } from "@/components/ui/card";
+import {
+  Plus, Search, Edit2, Ban, Calendar, Zap, CheckCircle2, Building2,
+  ChevronRight, ChevronDown, GitBranch, Users, Pencil, Trash2, X, Check,
+  Loader2,
+} from "lucide-react";
+import { useSubmitGuard } from "@/lib/hooks/use-submit-guard";
+import {
+  getAdminOrgTree,
+  invalidateAdminReferenceData,
+} from "@/lib/admin-reference-data";
+
+type Tenant = {
+  id: string; code: string; name: string;
+  quota: number; quota_used: number; expires_at: string; enabled: boolean;
+};
+type Department = { id: string; tenant_code: string; name: string; sort_order: number };
+type Team = { id: string; dept_id: string; tenant_code: string; name: string; sort_order: number };
+
+const EMPTY_FORM = { code: "", name: "", initialPwd: "", quota: "500", expiresAt: "" };
+
+export default function TenantsPage() {
+  const { me } = useAdminSession();
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState<Tenant | null>(null);
+  const [form, setForm] = useState(EMPTY_FORM);
+  // 5.27up Fix · 防重复提交（详见 lib/hooks/use-submit-guard.ts）
+  const saveGuard = useSubmitGuard();
+  const [formError, setFormError] = useState("");
+
+  // 展开的组织结构
+  const [expandedTenant, setExpandedTenant] = useState<string | null>(null);
+  const [departments, setDepartments] = useState<Record<string, Department[]>>({});
+  const [teams, setTeams] = useState<Record<string, Team[]>>({});
+  const [expandedDept, setExpandedDept] = useState<string | null>(null);
+  // 5.11up · 加载中状态：避免"空-内容"闪烁，按 tenantCode/deptId 维度跟踪
+  const [loadingDepts, setLoadingDepts] = useState<Set<string>>(new Set());
+  const [loadingTeams, setLoadingTeams] = useState<Set<string>>(new Set());
+
+  // 部门内联编辑
+  const [newDeptName, setNewDeptName] = useState<Record<string, string>>({});
+  const [editingDept, setEditingDept] = useState<{ id: string; name: string } | null>(null);
+  // 5.7up · 部门 / 小组输入框空值 inline 提示（按 key 存）
+  const [deptHint, setDeptHint] = useState<Record<string, string>>({});
+  const [teamHint, setTeamHint] = useState<Record<string, string>>({});
+  // 小组内联编辑
+  const [newTeamName, setNewTeamName] = useState<Record<string, string>>({});
+  const [editingTeam, setEditingTeam] = useState<{ id: string; name: string } | null>(null);
+
+  const [structErr, setStructErr] = useState("");
+
+  // 5.7up · org_admin 只能看自己组织 + 不可改组织本身
+  const adminRole = me?.role ?? me?.builtinRole ?? null;
+  const isOrgAdmin = adminRole === "org_admin";
+
+  async function load() {
+    setLoading(true);
+    const res = await fetch("/api/admin/tenants");
+    if (res.ok) { const d = await res.json(); setTenants(d.data ?? d); }
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  const filtered = tenants.filter(
+    (t) => t.code.toLowerCase().includes(search.toLowerCase()) || t.name.includes(search)
+  );
+
+  // ── 展开组织结构 ─────────────────────────────────────────────
+  async function toggleExpand(t: Tenant) {
+    if (expandedTenant === t.id) { setExpandedTenant(null); return; }
+    setExpandedTenant(t.id);
+    setStructErr("");
+    if (!departments[t.code]) await loadDepts(t.code);
+  }
+
+  // 5.7up · org_admin 进入时自动展开自己组织那一行
+  // 后端 GET 已过滤为只返回本组织一行，直接取 tenants[0]
+  useEffect(() => {
+    if (!isOrgAdmin) return;
+    if (expandedTenant !== null) return;
+    if (tenants.length === 0) return;
+    const own = tenants[0];
+    setExpandedTenant(own.id);
+    if (!departments[own.code]) loadDepts(own.code);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOrgAdmin, tenants.length]);
+
+  async function loadDepts(tenantCode: string, force = false) {
+    // 5.11up · 加载中标记，UI 渲染 spinner 直到数据回来
+    setLoadingDepts((prev) => new Set(prev).add(tenantCode));
+    try {
+      const orgTree = await getAdminOrgTree(force);
+      const data = orgTree.departments.filter(
+        (dept) => dept.tenant_code === tenantCode,
+      ) as Department[];
+      setDepartments((prev) => ({ ...prev, [tenantCode]: data }));
+      setTeams((prev) => {
+        const next = { ...prev };
+        for (const dept of data) {
+          next[dept.id] = orgTree.teams.filter(
+            (team) => team.dept_id === dept.id,
+          ) as Team[];
+        }
+        return next;
+      });
+    } finally {
+      setLoadingDepts((prev) => {
+        const next = new Set(prev);
+        next.delete(tenantCode);
+        return next;
+      });
+    }
+  }
+
+  async function loadTeams(deptId: string, force = false) {
+    setLoadingTeams((prev) => new Set(prev).add(deptId));
+    try {
+      const orgTree = await getAdminOrgTree(force);
+      const data = orgTree.teams.filter((team) => team.dept_id === deptId) as Team[];
+      setTeams((prev) => ({ ...prev, [deptId]: data }));
+    } finally {
+      setLoadingTeams((prev) => {
+        const next = new Set(prev);
+        next.delete(deptId);
+        return next;
+      });
+    }
+  }
+
+  // ── 部门操作 ─────────────────────────────────────────────────
+  async function addDept(tenantCode: string) {
+    const name = newDeptName[tenantCode]?.trim();
+    if (!name) {
+      setDeptHint((p) => ({ ...p, [tenantCode]: "请输入部门名称" }));
+      return;
+    }
+    setStructErr("");
+    const res = await fetch("/api/admin/departments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tenantCode, name }),
+    });
+    if (res.ok) {
+      setNewDeptName((p) => ({ ...p, [tenantCode]: "" }));
+      invalidateAdminReferenceData();
+      await loadDepts(tenantCode, true);
+    } else {
+      const d = await res.json();
+      setStructErr(d.error ?? "添加失败");
+    }
+  }
+
+  async function saveDept(dept: Department) {
+    if (!editingDept) return;
+    const res = await fetch(`/api/admin/departments/${dept.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: editingDept.name }),
+    });
+    if (res.ok) {
+      setEditingDept(null);
+      invalidateAdminReferenceData();
+      await loadDepts(dept.tenant_code, true);
+    }
+  }
+
+  async function deleteDept(dept: Department) {
+    if (!confirm(`确认删除部门「${dept.name}」？小组也会一并删除。`)) return;
+    const res = await fetch(`/api/admin/departments/${dept.id}`, { method: "DELETE" });
+    if (res.ok) {
+      setTeams((p) => { const n = { ...p }; delete n[dept.id]; return n; });
+      invalidateAdminReferenceData();
+      await loadDepts(dept.tenant_code, true);
+    } else {
+      const d = await res.json();
+      setStructErr(d.error ?? "删除失败");
+    }
+  }
+
+  // ── 小组操作 ─────────────────────────────────────────────────
+  async function addTeam(dept: Department) {
+    const name = newTeamName[dept.id]?.trim();
+    if (!name) {
+      setTeamHint((p) => ({ ...p, [dept.id]: "请输入小组名称" }));
+      return;
+    }
+    setStructErr("");
+    const res = await fetch("/api/admin/teams", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deptId: dept.id, tenantCode: dept.tenant_code, name }),
+    });
+    if (res.ok) {
+      setNewTeamName((p) => ({ ...p, [dept.id]: "" }));
+      invalidateAdminReferenceData();
+      await loadTeams(dept.id, true);
+    } else {
+      const d = await res.json();
+      setStructErr(d.error ?? "添加失败");
+    }
+  }
+
+  async function saveTeam(team: Team) {
+    if (!editingTeam) return;
+    const res = await fetch(`/api/admin/teams/${team.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: editingTeam.name }),
+    });
+    if (res.ok) {
+      setEditingTeam(null);
+      invalidateAdminReferenceData();
+      await loadTeams(team.dept_id, true);
+    }
+  }
+
+  async function deleteTeam(team: Team) {
+    if (!confirm(`确认删除小组「${team.name}」？`)) return;
+    const res = await fetch(`/api/admin/teams/${team.id}`, { method: "DELETE" });
+    if (res.ok) {
+      invalidateAdminReferenceData();
+      await loadTeams(team.dept_id, true);
+    }
+    else { const d = await res.json(); setStructErr(d.error ?? "删除失败"); }
+  }
+
+  // ── 租户表单 ─────────────────────────────────────────────────
+  function openAdd() { setEditing(null); setForm(EMPTY_FORM); setFormError(""); setShowModal(true); }
+  function openEdit(t: Tenant) {
+    setEditing(t);
+    setForm({ code: t.code, name: t.name, initialPwd: "", quota: String(t.quota), expiresAt: t.expires_at });
+    setFormError(""); setShowModal(true);
+  }
+  async function toggleEnabled(t: Tenant) {
+    const res = await fetch(`/api/admin/tenants/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !t.enabled }) });
+    if (res.ok) invalidateAdminReferenceData();
+    load();
+  }
+
+  async function deleteTenant(t: Tenant) {
+    if (!confirm(`确认删除组织「${t.name}（${t.code}）」？\n此操作不可撤销。`)) return;
+    const res = await fetch(`/api/admin/tenants/${t.id}`, { method: "DELETE" });
+    if (res.ok) {
+      invalidateAdminReferenceData();
+      load();
+    } else {
+      const d = await res.json();
+      alert(d.error ?? "删除失败");
+    }
+  }
+  async function handleSave() {
+    setFormError("");
+    if (!form.name || !form.quota || !form.expiresAt) { setFormError("请填写组织名称、配额和到期日"); return; }
+    // 5.12up · initialPwd 已废弃，不再校验
+    if (!editing && !form.code) { setFormError("新建时请填写组织码"); return; }
+    if (!editing && !/^[A-Za-z]{4,8}$/.test(form.code.trim())) { setFormError("组织码只能为 4~8 位英文字母"); return; }
+    await saveGuard.submit(async (idempotencyKey) => {
+      // PATCH 天然幂等；POST 创建带 Idempotency-Key
+      const res = editing
+        ? await fetch(`/api/admin/tenants/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.name, quota: form.quota, expiresAt: form.expiresAt, initialPwd: form.initialPwd || undefined }) })
+        : await fetch("/api/admin/tenants", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ code: form.code, name: form.name, initialPwd: form.initialPwd, quota: form.quota, expiresAt: form.expiresAt }) });
+      const data = await res.json();
+      if (!res.ok) { setFormError(data.error ?? "保存失败"); return; }
+      invalidateAdminReferenceData();
+      setShowModal(false); load();
+    });
+  }
+
+  return (
+    <AdminLayout>
+      <div className="space-y-6">
+        <PageHeader
+          icon={<Building2 size={20} />}
+          title="组织管理"
+          badge={<span className="text-[11px] font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">共 {tenants.length} 家</span>}
+          actions={isOrgAdmin ? null : <Button onClick={openAdd} className="gap-2"><Plus size={16} /> 新增组织</Button>}
+        />
+
+        {/* 5.7up · org_admin 只能看到自己组织一行，搜索无意义，隐藏 */}
+        {!isOrgAdmin && (
+          <Card padding="sm">
+            <div className="relative max-w-md">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input className="w-full h-10 pl-9 pr-4 bg-white border border-gray-200 rounded-[10px] text-sm focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all" placeholder="搜索组织名称或组织码…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+          </Card>
+        )}
+
+        <div className="space-y-3">
+          {loading ? (
+            <div className="card p-6 space-y-3">
+              {[...Array(4)].map((_, i) => <div key={i} className="h-12 bg-gray-50 rounded-[10px] animate-pulse" />)}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="card py-16 text-center text-gray-400">
+              <Building2 size={32} className="mx-auto mb-3 text-gray-200" />
+              <p className="text-sm">{search ? "没有匹配的组织" : "暂无组织，点击右上角新增"}</p>
+            </div>
+          ) : (
+            filtered.map((t) => {
+              const pct = Math.round((t.quota_used / t.quota) * 100);
+              const expired = new Date(t.expires_at) < new Date();
+              const isExpanded = expandedTenant === t.id;
+              const depts = departments[t.code] ?? [];
+
+              return (
+                <div key={t.id} className="card overflow-hidden">
+                  {/* 主行 */}
+                  <div className="flex items-center gap-3 px-5 py-4">
+                    <button onClick={() => toggleExpand(t)} className="p-1 rounded-[8px] hover:bg-gray-100 text-gray-400 shrink-0">
+                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                    </button>
+                    <code className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-[6px] text-xs font-mono shrink-0">{t.code}</code>
+                    <span className="font-medium text-gray-800 flex-1">{t.name}</span>
+                    {/* 配额 */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Zap size={12} className="text-amber-500" />
+                      <span className={`text-xs font-medium ${pct >= 100 ? "text-red-500" : "text-gray-600"}`}>{t.quota_used}/{t.quota}</span>
+                    </div>
+                    {/* 到期 */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Calendar size={12} className="text-gray-400" />
+                      <span className={`text-xs ${expired ? "text-red-500 font-medium" : "text-gray-500"}`}>{t.expires_at}</span>
+                      {expired && <Badge variant="danger">已到期</Badge>}
+                    </div>
+                    <Badge variant={t.enabled ? "success" : "muted"} >{t.enabled ? "启用" : "禁用"}</Badge>
+                    {/* 5.7up · org_admin 不可改组织本身（编辑 / 禁用 / 删除全隐） */}
+                    {!isOrgAdmin && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button onClick={() => openEdit(t)} className="p-1.5 rounded-[8px] hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors" title="编辑" aria-label="编辑"><Edit2 size={14} /></button>
+                        <button onClick={() => toggleEnabled(t)} className={`p-1.5 rounded-[8px] transition-colors ${t.enabled ? "hover:bg-red-50 text-gray-400 hover:text-red-500" : "hover:bg-green-50 text-gray-400 hover:text-green-500"}`} title={t.enabled ? "禁用" : "启用"}>{t.enabled ? <Ban size={14} /> : <CheckCircle2 size={14} />}</button>
+                        <button onClick={() => deleteTenant(t)} className="p-1.5 rounded-[8px] hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="删除" aria-label="删除"><Trash2 size={14} /></button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 展开：组织结构 */}
+                  {isExpanded && (
+                    <div className="border-t border-gray-50 px-5 pb-5 pt-4 bg-gray-50/40">
+                      <div className="flex items-center gap-2 mb-3">
+                        <GitBranch size={14} className="text-[#002FA7]" />
+                        <span className="text-sm font-semibold text-gray-700">组织结构</span>
+                        <span className="text-xs text-gray-400">（组织 → 部门 → 小组）</span>
+                      </div>
+
+                      {structErr && (
+                        <div className="mb-3 p-2 bg-red-50 rounded-[8px] text-xs text-red-500 flex items-center justify-between gap-1">
+                          <span>{structErr}</span>
+                          <button onClick={() => setStructErr("")} className="p-0.5 rounded hover:bg-red-100 shrink-0"><X size={12} /></button>
+                        </div>
+                      )}
+
+                      {/* 部门列表 */}
+                      <div className="space-y-2">
+                        {/* 5.11up · loadingDepts 中表示首次加载中，显示 spinner 避免空内容闪烁 */}
+                        {loadingDepts.has(t.code) ? (
+                          <div className="flex items-center gap-2 text-xs text-gray-400 py-3">
+                            <Loader2 size={12} className="animate-spin" />
+                            <span>加载部门中…</span>
+                          </div>
+                        ) : depts.length === 0 ? (
+                          <p className="text-xs text-gray-400 py-2">暂无部门，在下方添加</p>
+                        ) : null}
+                        {depts.map((dept) => {
+                          const deptTeams = teams[dept.id] ?? [];
+                          const isDeptExpanded = expandedDept === dept.id;
+                          return (
+                            <div key={dept.id} className="border border-gray-100 rounded-[12px] bg-white overflow-hidden">
+                              {/* 部门行 */}
+                              <div className="flex items-center gap-2 px-3 py-2.5">
+                                <button onClick={() => setExpandedDept(isDeptExpanded ? null : dept.id)} className="p-0.5 rounded hover:bg-gray-100 text-gray-400">
+                                  {isDeptExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                </button>
+                                <Users size={13} className="text-[#002FA7] shrink-0" />
+                                {editingDept?.id === dept.id ? (
+                                  <input
+                                    autoFocus
+                                    className="flex-1 h-7 border border-[#002FA7]/40 rounded-[6px] px-2 text-sm focus:outline-none focus:border-[#002FA7]"
+                                    value={editingDept.name}
+                                    onChange={(e) => setEditingDept({ ...editingDept, name: e.target.value })}
+                                    onKeyDown={(e) => { if (e.key === "Enter") saveDept(dept); if (e.key === "Escape") setEditingDept(null); }}
+                                  />
+                                ) : (
+                                  <span className="flex-1 text-sm font-medium text-gray-700">{dept.name}</span>
+                                )}
+                                <span className="text-xs text-gray-400">{deptTeams.length} 个小组</span>
+                                {editingDept?.id === dept.id ? (
+                                  <>
+                                    <button onClick={() => saveDept(dept)} className="p-1 rounded hover:bg-green-50 text-green-600"><Check size={13} /></button>
+                                    <button onClick={() => setEditingDept(null)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X size={13} /></button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button onClick={() => setEditingDept({ id: dept.id, name: dept.name })} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"><Pencil size={12} /></button>
+                                    <button onClick={() => deleteDept(dept)} className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"><Trash2 size={12} /></button>
+                                  </>
+                                )}
+                              </div>
+
+                              {/* 小组列表 */}
+                              {isDeptExpanded && (
+                                <div className="border-t border-gray-50 px-4 pb-3 pt-2 bg-gray-50/60 space-y-1.5">
+                                  {/* 5.11up · 小组加载中 spinner */}
+                                  {loadingTeams.has(dept.id) ? (
+                                    <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                                      <Loader2 size={11} className="animate-spin" />
+                                      <span>加载小组中…</span>
+                                    </div>
+                                  ) : deptTeams.length === 0 ? (
+                                    <p className="text-xs text-gray-400 py-1">暂无小组</p>
+                                  ) : null}
+                                  {deptTeams.map((team) => (
+                                    <div key={team.id} className="flex items-center gap-2 px-2 py-1.5 bg-white rounded-[8px] border border-gray-100">
+                                      <div className="w-1.5 h-1.5 rounded-full bg-[#002FA7]/30 shrink-0" />
+                                      {editingTeam?.id === team.id ? (
+                                        <input
+                                          autoFocus
+                                          className="flex-1 h-6 border border-[#002FA7]/40 rounded-[6px] px-2 text-xs focus:outline-none focus:border-[#002FA7]"
+                                          value={editingTeam.name}
+                                          onChange={(e) => setEditingTeam({ ...editingTeam, name: e.target.value })}
+                                          onKeyDown={(e) => { if (e.key === "Enter") saveTeam(team); if (e.key === "Escape") setEditingTeam(null); }}
+                                        />
+                                      ) : (
+                                        <span className="flex-1 text-xs text-gray-600">{team.name}</span>
+                                      )}
+                                      {editingTeam?.id === team.id ? (
+                                        <>
+                                          <button onClick={() => saveTeam(team)} className="p-0.5 rounded hover:bg-green-50 text-green-600"><Check size={11} /></button>
+                                          <button onClick={() => setEditingTeam(null)} className="p-0.5 rounded hover:bg-gray-100 text-gray-400"><X size={11} /></button>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <button onClick={() => setEditingTeam({ id: team.id, name: team.name })} className="p-0.5 rounded hover:bg-gray-100 text-gray-400"><Pencil size={11} /></button>
+                                          <button onClick={() => deleteTeam(team)} className="p-0.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"><Trash2 size={11} /></button>
+                                        </>
+                                      )}
+                                    </div>
+                                  ))}
+                                  {/* 新增小组 */}
+                                  <div className="flex items-center gap-2 mt-2">
+                                    <input
+                                      className={`flex-1 h-7 border rounded-[8px] px-3 text-xs focus:outline-none transition-colors ${
+                                        teamHint[dept.id]
+                                          ? "border-red-400 placeholder:text-red-500 focus:border-red-500"
+                                          : "border-gray-200 focus:border-[#002FA7]"
+                                      }`}
+                                      placeholder={teamHint[dept.id] || "新小组名称…"}
+                                      value={newTeamName[dept.id] ?? ""}
+                                      onChange={(e) => {
+                                        setNewTeamName((p) => ({ ...p, [dept.id]: e.target.value }));
+                                        if (teamHint[dept.id]) setTeamHint((p) => ({ ...p, [dept.id]: "" }));
+                                      }}
+                                      onFocus={() => {
+                                        if (teamHint[dept.id]) setTeamHint((p) => ({ ...p, [dept.id]: "" }));
+                                      }}
+                                      onKeyDown={(e) => e.key === "Enter" && addTeam(dept)}
+                                    />
+                                    <button onClick={() => addTeam(dept)} className="h-7 px-3 bg-[#002FA7] text-white text-xs rounded-[8px] hover:bg-[#001f7a] transition-colors flex items-center gap-1">
+                                      <Plus size={11} /> 添加
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* 新增部门 */}
+                      <div className="flex items-center gap-2 mt-3">
+                        <input
+                          className={`flex-1 h-9 border rounded-[10px] px-3 text-sm bg-white focus:outline-none transition-colors ${
+                            deptHint[t.code]
+                              ? "border-red-400 placeholder:text-red-500 focus:border-red-500"
+                              : "border-gray-200 focus:border-[#002FA7]"
+                          }`}
+                          placeholder={deptHint[t.code] || "新部门名称…"}
+                          value={newDeptName[t.code] ?? ""}
+                          onChange={(e) => {
+                            setNewDeptName((p) => ({ ...p, [t.code]: e.target.value }));
+                            if (deptHint[t.code]) setDeptHint((p) => ({ ...p, [t.code]: "" }));
+                          }}
+                          onFocus={() => {
+                            if (deptHint[t.code]) setDeptHint((p) => ({ ...p, [t.code]: "" }));
+                          }}
+                          onKeyDown={(e) => e.key === "Enter" && addDept(t.code)}
+                        />
+                        <button onClick={() => addDept(t.code)} className="h-9 px-4 bg-[#002FA7] text-white text-sm rounded-[10px] hover:bg-[#001f7a] transition-colors flex items-center gap-1.5 shrink-0">
+                          <Plus size={14} /> 添加部门
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* 新增/编辑组织弹窗 */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-[20px] shadow-2xl w-full max-w-md p-6">
+            <h2 className="font-semibold text-gray-900 mb-5">{editing ? "编辑组织" : "新增组织"}</h2>
+            <div className="space-y-4">
+              <Input label="组织码（4~8 位英文字母）" placeholder="如 DEMO" value={form.code} disabled={!!editing} onChange={(e) => setForm({ ...form, code: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 8) })} />
+              <Input label="组织名称" placeholder="如 前哨科技有限公司" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              {/* 5.12up · "组织初始密码"字段已废弃 — 用户自助注册上线后此字段写入 DB 但从不参与登录校验，UI 中隐藏 */}
+              <Input label="总配额（次数）" type="number" placeholder="500" value={form.quota} onChange={(e) => setForm({ ...form, quota: e.target.value })} />
+              <Input label="到期日" type="date" value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} />
+              {formError && <div className="p-3 bg-red-50 rounded-[10px] text-sm text-red-500">{formError}</div>}
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <Button variant="ghost" onClick={() => setShowModal(false)}>取消</Button>
+              <Button onClick={handleSave} loading={saveGuard.loading}>{editing ? "保存修改" : "创建"}</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </AdminLayout>
+  );
+}

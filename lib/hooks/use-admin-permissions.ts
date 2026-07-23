@@ -1,20 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
+import {
+  type AdminRole,
+  type AdminSource,
+  useAdminSession,
+} from "@/components/admin/admin-session-provider";
 
-export type AdminRole = "super_admin" | "system_admin" | "org_admin";
-export type AdminSource = "admin_table" | "user_admin" | "custom_admin";
+export type { AdminRole, AdminSource };
 export type HierarchyResource = "agent" | "kb" | "workflow";
-
-type AdminMePayload = {
-  source?: AdminSource | null;
-  role?: AdminRole | null;
-  builtinRole?: AdminRole | null;
-  tenantCode?: string | null;
-  deptId?: string | null;
-  teamId?: string | null;
-  permissions?: string[];
-};
 
 const SCOPES = ["team", "dept", "org", "all"] as const;
 const ROLE_LEVEL: Record<AdminRole, number> = {
@@ -58,27 +52,8 @@ function normalizeCreatorRole(role: unknown): AdminRole {
 }
 
 export function useAdminPermissions() {
-  const [loaded, setLoaded] = useState(false);
-  const [me, setMe] = useState<AdminMePayload | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/admin/me", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!alive) return;
-        setMe(d);
-      })
-      .catch(() => {
-        if (alive) setMe(null);
-      })
-      .finally(() => {
-        if (alive) setLoaded(true);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const { me, status } = useAdminSession();
+  const loaded = status === "ready" || (status === "error" && me !== null);
 
   return useMemo(() => {
     const role = me?.role ?? me?.builtinRole ?? null;

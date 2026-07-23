@@ -14,6 +14,7 @@
  */
 
 import {
+  coalesceAdminUserTenantCode,
   mapResourcePermissionRowsToScopes,
   selectDuplicatePermRows,
   type RawScopeRow,
@@ -89,6 +90,29 @@ eq(
   "未知 scope_type 丢弃",
   mapResourcePermissionRowsToScopes([{ scope_type: "galaxy", scope_id: "x" }]),
   [],
+);
+
+console.log("\nphase-d-scope-utils · coalesceAdminUserTenantCode");
+
+eq(
+  "admin tenant 非空时优先",
+  coalesceAdminUserTenantCode("ADMIN_ORG", "USER_ORG"),
+  "ADMIN_ORG",
+);
+eq(
+  "admin tenant 为空时回退 user tenant",
+  coalesceAdminUserTenantCode(null, "USER_ORG"),
+  "USER_ORG",
+);
+eq(
+  "admins 不存在时使用 user tenant",
+  coalesceAdminUserTenantCode(undefined, "USER_ORG"),
+  "USER_ORG",
+);
+eq(
+  "两侧 tenant 都为空时保持 all 语义",
+  coalesceAdminUserTenantCode(null, null),
+  null,
 );
 
 // ─────────────────────────────────────────────────────────────

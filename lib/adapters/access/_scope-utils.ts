@@ -52,6 +52,18 @@ export function scopesFromTenantCode(
 }
 
 /**
+ * 草稿创建者 UUID 可能同时存在于 admins / users。
+ * 与单条 resolver 的 nullish fallback 保持一致：admin 非空优先；
+ * admin 行存在但 tenant 为空时继续使用 user tenant，避免误扩大为 all。
+ */
+export function coalesceAdminUserTenantCode(
+  adminTenantCode: string | null | undefined,
+  userTenantCode: string | null | undefined,
+): string | null {
+  return adminTenantCode ?? userTenantCode ?? null;
+}
+
+/**
  * 6.4up v2 Phase D · D-3 Fix · workflow 复制时挑选要克隆给副本的 resource_permissions 行。
  *
  * 背景：duplicate 原本只复制 workflow + steps + categories，漏了 resource_permissions →

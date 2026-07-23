@@ -44,13 +44,31 @@ export async function POST(req: NextRequest) {
       recordLoginFail(rateKey);
       return apiError("用户名或密码错误", "UNAUTHORIZED");
     }
+    const adminRole = (admin.role as AdminRole) ?? "super_admin";
+    if (adminRole === "org_admin") {
+      if (!admin.tenant_code) {
+        return apiError("组织管理员缺少所属组织", "FORBIDDEN");
+      }
+      const { data: tenant, error: tenantError } = await db
+        .from("tenants")
+        .select("enabled, expires_at")
+        .eq("code", admin.tenant_code)
+        .maybeSingle();
+      if (tenantError) return dbUnavailable("tenants/admin-table-org-admin", tenantError);
+      if (!tenant?.enabled) {
+        return apiError("所属组织已被禁用，无法登录", "FORBIDDEN");
+      }
+      if (tenant.expires_at && new Date(tenant.expires_at).getTime() < Date.now()) {
+        return apiError("所属组织已过期，无法登录", "FORBIDDEN");
+      }
+    }
     clearLoginFail(rateKey);
 
     const token = await signToken({
       type: "admin",
       adminId: admin.id,
       username: admin.username,
-      role: (admin.role as AdminRole) ?? "super_admin",
+      role: adminRole,
       tenantCode: admin.tenant_code ?? null,
       source: "admin_table",
     });

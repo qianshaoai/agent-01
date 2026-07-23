@@ -2,6 +2,12 @@ import { apiError, dbError, parsePagination } from "@/lib/api-error";
 import { requireAccess } from "@/lib/access-facade";
 import { db } from "@/lib/db";
 import { requireAdminActor } from "@/lib/session";
+import { hasPermission } from "@/lib/permission-actor";
+import {
+  markRequestAuth,
+  markRequestBusiness,
+  withRequestLog,
+} from "@/lib/request-logger";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -111,9 +117,10 @@ async function canWrite(
   return !(await requireAccess(ctx.actor, "agent", action, { id }));
 }
 
-export async function GET(req: NextRequest) {
+async function getAgentCenter(req: NextRequest) {
   const ctx = await requireAdminActor();
   if (ctx instanceof Response) return ctx;
+  markRequestAuth(req, { source: ctx.source, role: ctx.role });
 
   const { page, pageSize } = parsePagination(req, 10);
   const sp = req.nextUrl.searchParams;
@@ -128,6 +135,81 @@ export async function GET(req: NextRequest) {
   }
   if (status && !["published", "disabled"].includes(status)) {
     return apiError("智能体状态筛选值无效", "VALIDATION_ERROR");
+  }
+
+  if (process.env.ADMIN_AGENT_CENTER_V2 === "true") {
+    const isSuper = ctx.role === "super_admin";
+    const orgScope = ctx.tenantCode
+      ? [{ scope_type: "org" as const, scope_id: ctx.tenantCode }]
+      : [];
+    const [
+      canReadAll,
+      canReadOrg,
+      canUpdateAll,
+      canUpdateOrg,
+      canEnableAll,
+      canEnableOrg,
+      canDeleteAll,
+      canDeleteOrg,
+    ] = await Promise.all([
+      isSuper ? true : hasPermission(ctx.actor, "agent.read.all"),
+      isSuper || !ctx.tenantCode
+        ? false
+        : hasPermission(ctx.actor, "agent.read.org", orgScope),
+      isSuper ? true : hasPermission(ctx.actor, "agent.basic.update.all"),
+      isSuper || !ctx.tenantCode
+        ? false
+        : hasPermission(ctx.actor, "agent.basic.update.org", orgScope),
+      isSuper ? true : hasPermission(ctx.actor, "agent.enable.all"),
+      isSuper || !ctx.tenantCode
+        ? false
+        : hasPermission(ctx.actor, "agent.enable.org", orgScope),
+      isSuper ? true : hasPermission(ctx.actor, "agent.delete.all"),
+      isSuper || !ctx.tenantCode
+        ? false
+        : hasPermission(ctx.actor, "agent.delete.org", orgScope),
+    ]);
+
+    if (!canReadAll && !canReadOrg) {
+      return apiError("权限不足", "FORBIDDEN");
+    }
+
+    const { data, error } = await db.rpc("admin_agent_center_page", {
+      p_tenant_code: ctx.tenantCode,
+      p_can_read_all: canReadAll,
+      p_can_read_org: canReadOrg,
+      p_can_update_all: canUpdateAll,
+      p_can_update_org: canUpdateOrg,
+      p_can_enable_all: canEnableAll,
+      p_can_enable_org: canEnableOrg,
+      p_can_delete_all: canDeleteAll,
+      p_can_delete_org: canDeleteOrg,
+      p_q: q || null,
+      p_source: source || null,
+      p_status: status || null,
+      p_category_id: categoryId || null,
+      p_platform: platform || null,
+      p_page: page,
+      p_page_size: pageSize,
+    });
+    if (error) {
+      console.error("[admin agent center rpc]", error.code, error.message);
+      return apiError("获取智能体中心数据失败", "INTERNAL_ERROR");
+    }
+    markRequestBusiness(req);
+    return NextResponse.json(data ?? {
+      data: [],
+      pagination: { page, pageSize, total: 0 },
+      stats: {
+        total: 0,
+        published: 0,
+        disabled: 0,
+        workflowReferenced: 0,
+        ungrouped: 0,
+      },
+      categories: [],
+      platforms: [],
+    });
   }
 
   const [agentsRes, categoriesRes] = await Promise.all([
@@ -311,6 +393,7 @@ export async function GET(req: NextRequest) {
 
   const platforms = [...new Set(items.map((item) => item.platform).filter(Boolean))].sort();
 
+  markRequestBusiness(req);
   return NextResponse.json({
     data,
     pagination: { page, pageSize, total },
@@ -324,3 +407,5 @@ export async function GET(req: NextRequest) {
     platforms,
   });
 }
+
+export const GET = withRequestLog(getAgentCenter);

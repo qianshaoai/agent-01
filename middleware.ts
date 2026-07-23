@@ -4,8 +4,6 @@ import {
   ADMIN_COOKIE_NAME,
   verifyToken,
   validateUserTokenFreshness,
-  validateAdminTokenFreshness,
-  validateCustomAdminTokenFreshness,
   isCustomAdminPayload,
   COOKIE_NAME,
 } from "@/lib/auth";
@@ -36,7 +34,11 @@ export async function middleware(req: NextRequest) {
   if (pathname.startsWith("/api/")) {
     const requestId = `${Date.now().toString(36)}-${(reqCounter++ % 0xFFFF).toString(16).padStart(4, "0")}`;
 
-    const res = NextResponse.next();
+    const requestHeaders = new Headers(req.headers);
+    requestHeaders.set("x-request-id", requestId);
+    const res = NextResponse.next({
+      request: { headers: requestHeaders },
+    });
     res.headers.set("X-Request-Id", requestId);
 
     // 结构化日志（method、path、requestId）
@@ -59,24 +61,11 @@ export async function middleware(req: NextRequest) {
     if (!payload || payload.type !== "admin") {
       return NextResponse.redirect(new URL("/admin", req.url));
     }
-    // 6.4up · custom admin 也在此通道（同一 cookie），但走自己的 freshness + 无 firstLogin 概念
+    // 页面壳只做 JWT 验签和首次改密闸门；实时状态、强制下线和权限
+    // 统一由 /api/admin/me 及所有业务 API 的 requireAdminActor() 校验，
+    // 避免页面导航与随后 API 对同一管理员重复查库。
     if (isCustomAdminPayload(payload)) {
-      const fresh = await validateCustomAdminTokenFreshness(payload);
-      if (!fresh) {
-        const res = NextResponse.redirect(new URL("/admin", req.url));
-        res.cookies.set(ADMIN_COOKIE_NAME, "", { path: "/", maxAge: 0 });
-        return res;
-      }
-      // custom admin 没有 firstLogin（不存在 admins 表 first_login 字段语义）
-      // 页面层 admin-layout 会按 permission 把 nav 全部隐藏；无菜单时显示兜底页
       return NextResponse.next();
-    }
-    // builtin admin · 5.6up · 强制重登检查
-    const fresh = await validateAdminTokenFreshness(payload);
-    if (!fresh) {
-      const res = NextResponse.redirect(new URL("/admin", req.url));
-      res.cookies.set(ADMIN_COOKIE_NAME, "", { path: "/", maxAge: 0 });
-      return res;
     }
     // 5.28up 小B 复审 R3 Fix 1 · 强制改密码闸门：
     //   admin token 含 firstLogin=true（admin/login 首次登录签发的）→ 直接踢回
