@@ -1,0 +1,25 @@
+{
+  "overLimit": {
+    "picker": [
+      {
+        "query": "page=101&pageSize=20",
+        "expectedIds": [],
+        "total": 0
+      }
+    ],
+    "workflows": [
+      {
+        "query": "page=501&pageSize=10",
+        "expectedIds": [],
+        "paginationTotal": 0,
+        "stats": {
+          "total": 0,
+          "ungrouped": 0,
+          "categoryCounts": {}
+        },
+        "focusFound": false,
+        "focusPage": null
+      }
+    ]
+  }
+}

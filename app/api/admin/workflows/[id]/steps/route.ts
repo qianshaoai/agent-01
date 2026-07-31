@@ -15,6 +15,7 @@ import { PermissionKey } from "@/lib/permission-keys";
 // 6.4up v2 Phase D · D-3 · workflow step builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import { requireActorCreatorHierarchy } from "@/lib/creator-hierarchy";
+import { requireReadableAgentForBinding } from "@/lib/agent-binding-access";
 
 /** 给步骤路由用：custom admin 持有的最高 update key */
 function pickStepUpdateKey(actor: PermissionActor): PermissionKey | null {
@@ -99,8 +100,10 @@ export async function POST(
 
   // 6.4up · custom admin：校验对父 workflow 是否有 update 权限
   let admin: { adminId: string; username: string; role: string; tenantCode?: string | null };
+  let permissionActor: PermissionActor | null = null;
   if (isCustomAdminPayload(access)) {
     const actor = await buildPermissionActor(access);
+    permissionActor = actor;
     const updateKey = pickStepUpdateKey(actor);
     if (!updateKey) return apiError("无修改工作流权限", "FORBIDDEN");
     const scopes = await getWorkflowScopesForStep(workflowId);
@@ -128,6 +131,7 @@ export async function POST(
     // Phase D D-3 · v2 第二闸（builtin；step 写视为 workflow update）
     if (isResourceEnforced("workflow") && access.role !== "super_admin") {
       const actorV2 = await buildPermissionActor(access);
+      permissionActor = actorV2;
       const e = await requireAccess(actorV2, "workflow", "update", { id: workflowId });
       if (e) return e;
     }
@@ -145,6 +149,24 @@ export async function POST(
 
   const validExecTypes = ["agent", "manual", "review", "external"];
   const safeExecType = validExecTypes.includes(execType) ? execType : "agent";
+  if (
+    safeExecType === "agent" &&
+    agentId !== undefined &&
+    agentId !== null &&
+    agentId !== "" &&
+    typeof agentId !== "string"
+  ) {
+    return apiError("智能体 ID 格式无效", "VALIDATION_ERROR");
+  }
+  const safeAgentId =
+    safeExecType === "agent" && typeof agentId === "string" && agentId
+      ? agentId
+      : null;
+  if (safeAgentId) {
+    const actor = permissionActor ?? await buildPermissionActor(access);
+    const readableAgent = await requireReadableAgentForBinding(actor, safeAgentId);
+    if (readableAgent instanceof Response) return readableAgent;
+  }
 
   const { data, error } = await db
     .from("workflow_steps")
@@ -154,7 +176,7 @@ export async function POST(
       title,
       description: description ?? "",
       exec_type: safeExecType,
-      agent_id: safeExecType === "agent" ? (agentId || null) : null,
+      agent_id: safeAgentId,
       button_text: buttonText ?? "进入智能体",
       enabled: enabled ?? true,
     })

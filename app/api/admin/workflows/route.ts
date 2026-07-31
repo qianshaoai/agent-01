@@ -17,6 +17,7 @@ import { checkAnyScopedPermission } from "@/lib/adapters/access/_generic";
 // 6.4up v2 Phase D · D-3 · workflow builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
 import { isResourceEnforced } from "@/lib/access-facade";
 import { actorHierarchyRole } from "@/lib/creator-hierarchy";
+import { loadReadableAgentBindingSummaries } from "@/lib/agent-binding-access";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ type WorkflowActionFlags = {
 
 const UNGROUPED_CATEGORY_ID = "__uncategorized__";
 const WORKFLOW_COUNT_SCAN_LIMIT = 5000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function sanitizeSearch(input: string) {
   return input.replace(/[(),]/g, " ").replace(/\s+/g, " ").trim();
@@ -218,6 +220,19 @@ export async function GET(req: NextRequest) {
   const focusId = sp.get("focusId") ?? "";
   const actor = await buildPermissionActor(access);
 
+  const allowedVisible = new Set([
+    "", "all", "org_only", "personal_only", "custom",
+    "custom:org", "custom:dept", "custom:team",
+  ]);
+  if (!allowedVisible.has(visible)) return apiError("可见范围筛选无效", "VALIDATION_ERROR");
+  if (status && status !== "enabled" && status !== "disabled") {
+    return apiError("状态筛选无效", "VALIDATION_ERROR");
+  }
+  if (categoryId && categoryId !== UNGROUPED_CATEGORY_ID && !UUID_RE.test(categoryId)) {
+    return apiError("分类参数无效", "VALIDATION_ERROR");
+  }
+  if (focusId && !UUID_RE.test(focusId)) return apiError("focusId 无效", "VALIDATION_ERROR");
+
   // 5.7up · org_admin 看本组织相关工作流：
   //   visible_to='org_only' / 'custom' 且 resource_permissions 里有 scope=本组织/部门/小组
   // R1.11 · 用户要求叠加：visible_to='all' 的全平台工作流也可见
@@ -232,6 +247,110 @@ export async function GET(req: NextRequest) {
       : false;
     const okAll = await hasPermission(actor, "workflow.read.all");
     if (!okOrg && !okAll) return apiError("权限不足", "FORBIDDEN");
+  }
+
+  if (process.env.ADMIN_WORKFLOW_PAGE_V2 === "true") {
+    const readableScope = listReadableScopes(actor);
+    const { data: rpcData, error: rpcError } = await db.rpc("admin_workflow_page", {
+      p_can_read_all: readableScope.all,
+      p_scope_org: readableScope.org,
+      p_scope_dept: readableScope.dept,
+      p_scope_team: readableScope.team,
+      p_include_visible_all: actor.source !== "custom_admin" && actor.builtinRole === "org_admin",
+      p_q: q || null,
+      p_category_id: categoryId && categoryId !== UNGROUPED_CATEGORY_ID ? categoryId : null,
+      p_category_ungrouped: categoryId === UNGROUPED_CATEGORY_ID,
+      p_status: status || null,
+      p_visible: visible || null,
+      p_focus_id: focusId || null,
+      p_page: page,
+      p_page_size: pageSize,
+    });
+    if (rpcError) return dbError(rpcError);
+
+    type RpcStep = {
+      id: string;
+      step_order: number;
+      title: string;
+      description: string;
+      exec_type: string;
+      agent_id: string | null;
+      button_text: string;
+      enabled: boolean;
+    };
+    type RpcWorkflow = {
+      id: string;
+      name: string;
+      description: string;
+      category: string;
+      sort_order: number;
+      enabled: boolean;
+      visible_to: string;
+      created_at: string;
+      created_by: string | null;
+      created_by_role: string | null;
+      categoryIds: string[];
+      workflow_steps: RpcStep[];
+      permissions: WfPerm[];
+    };
+    const payload = (rpcData ?? {}) as {
+      data?: RpcWorkflow[];
+      pagination?: Record<string, unknown>;
+      stats?: Record<string, unknown>;
+    };
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    const agentIds = Array.from(new Set(rows.flatMap((wf) =>
+      (wf.workflow_steps ?? [])
+        .map((step) => step.agent_id)
+        .filter((id): id is string => !!id)
+    )));
+    const readableAgents = await loadReadableAgentBindingSummaries(actor, agentIds);
+    if (readableAgents instanceof Response) return readableAgents;
+
+    const creatorIds = Array.from(new Set(
+      rows.map((wf) => wf.created_by).filter((id): id is string => !!id)
+    ));
+    const usernameMap = new Map<string, string>();
+    if (creatorIds.length > 0) {
+      const [{ data: adminRows }, { data: userRows }] = await Promise.all([
+        db.from("admins").select("id, username").in("id", creatorIds),
+        db.from("users").select("id, username").in("id", creatorIds),
+      ]);
+      for (const row of (adminRows ?? []) as { id: string; username: string | null }[]) {
+        if (row.username) usernameMap.set(row.id, row.username);
+      }
+      for (const row of (userRows ?? []) as { id: string; username: string | null }[]) {
+        if (row.username && !usernameMap.has(row.id)) usernameMap.set(row.id, row.username);
+      }
+    }
+
+    const data = await Promise.all(rows.map(async (wf) => {
+      const permissions = Array.isArray(wf.permissions) ? wf.permissions : [];
+      const steps = Array.isArray(wf.workflow_steps) ? wf.workflow_steps : [];
+      const actions = await buildWorkflowActions(
+        actor,
+        scopesFromPerms(permissions),
+        wf.created_by_role
+      );
+      return {
+        ...wf,
+        workflow_steps: steps.map((step) => ({
+          ...step,
+          agent: step.agent_id ? (readableAgents.get(step.agent_id) ?? null) : null,
+        })),
+        created_by_username: wf.created_by ? (usernameMap.get(wf.created_by) ?? null) : null,
+        permissions,
+        actions,
+        stepCount: steps.length,
+        enabledStepCount: steps.filter((step) => step.enabled).length,
+        boundAgentCount: steps.filter((step) => !!step.agent_id).length,
+      };
+    }));
+    return NextResponse.json({
+      data,
+      pagination: payload.pagination ?? { page, pageSize, total: 0 },
+      stats: payload.stats ?? { total: 0, ungrouped: 0, categoryCounts: {} },
+    });
   }
 
   let scopedWfIds: string[] | null = null;
@@ -457,14 +576,17 @@ export async function GET(req: NextRequest) {
     wfQuery = wfQuery.eq("visible_to", "custom");
   }
 
-  const [wfRes, permRes] = await Promise.all([
-    wfQuery,
-    db.from("resource_permissions")
-      .select("resource_id, scope_type, scope_id")
-      .eq("resource_type", "workflow"),
-  ]);
-
+  const wfRes = await wfQuery;
   if (wfRes.error) return dbError(wfRes.error);
+
+  const pageWorkflowIds = ((wfRes.data ?? []) as { id: string }[]).map((wf) => wf.id);
+  const permRes = pageWorkflowIds.length > 0
+    ? await db.from("resource_permissions")
+      .select("resource_id, scope_type, scope_id")
+      .eq("resource_type", "workflow")
+      .in("resource_id", pageWorkflowIds)
+    : { data: [], error: null };
+  if (permRes.error) return dbError(permRes.error);
 
   const permMap = new Map<string, WfPerm[]>();
   for (const p of (permRes.data ?? []) as { resource_id: string; scope_type: string; scope_id: string | null }[]) {
@@ -497,13 +619,38 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  type PageStep = {
+    id: string;
+    step_order: number;
+    title: string;
+    description: string;
+    exec_type: string;
+    agent_id: string | null;
+    button_text: string;
+    enabled: boolean;
+  };
+  const pageAgentIds = Array.from(new Set(
+    (wfRes.data ?? []).flatMap((wf) =>
+      ((wf.workflow_steps ?? []) as PageStep[])
+        .map((step) => step.agent_id)
+        .filter((id): id is string => !!id)
+    )
+  ));
+  const readableAgents = await loadReadableAgentBindingSummaries(actor, pageAgentIds);
+  if (readableAgents instanceof Response) return readableAgents;
+
   const result = await Promise.all((wfRes.data ?? []).map(async (wf) => {
     const perms = permMap.get(wf.id) ?? [];
     const scopes = scopesFromPerms(perms);
-    const steps = (wf.workflow_steps ?? []) as { enabled: boolean; agent_id: string | null }[];
+    const steps = (wf.workflow_steps ?? []) as PageStep[];
+    const safeSteps = steps.map((step) => ({
+      ...step,
+      agent: step.agent_id ? (readableAgents.get(step.agent_id) ?? null) : null,
+    }));
     const actions = await buildWorkflowActions(actor, scopes, (wf as { created_by_role: string | null }).created_by_role);
     return {
       ...wf,
+      workflow_steps: safeSteps,
       categoryIds: (wf.workflow_categories ?? []).map((c: { category_id: string }) => c.category_id),
       workflow_categories: undefined,
       created_by_username: wf.created_by ? (usernameMap.get(wf.created_by) ?? null) : null,

@@ -18,6 +18,8 @@ export async function GET() {
         process.env.NEXT_PUBLIC_ADMIN_DASHBOARD_SUMMARY_V2 === "true",
       analyticsSqlAgg: process.env.ADMIN_ANALYTICS_SQL_AGG === "true",
       agentCenterV2: process.env.ADMIN_AGENT_CENTER_V2 === "true",
+      agentPickerV2: process.env.ADMIN_AGENT_PICKER_V2 === "true",
+      workflowPageV2: process.env.ADMIN_WORKFLOW_PAGE_V2 === "true",
     },
     node: {
       pid: process.pid,
@@ -29,4 +31,3 @@ export async function GET() {
     generatedAt: new Date().toISOString(),
   });
 }
-

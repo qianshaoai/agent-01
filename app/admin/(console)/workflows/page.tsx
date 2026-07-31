@@ -51,10 +51,9 @@ type Agent = {
   agent_code: string;
   name: string;
   agent_type: string;
-  external_url: string;
   published_from_draft_id: string | null;
   platform: string;
-  description: string;
+  description?: string;
 };
 type Category = { id: string; name: string; icon_url?: string | null };
 type Tenant = { id: string; code: string; name: string; enabled: boolean };
@@ -71,6 +70,7 @@ type WorkflowStep = {
   agent_id: string | null;
   button_text: string;
   enabled: boolean;
+  agent?: Agent | null;
 };
 
 type Workflow = {
@@ -237,10 +237,6 @@ export default function WorkflowsAdminPage() {
     return `该工作流由${label}创建，无权修改`;
   }
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  // 6.5up R1 · picker 接口截断标记 + 真实总数，用于 AgentBindPopover 顶部提示
-  const [agentsCapped, setAgentsCapped] = useState(false);
-  const [agentsTotalCount, setAgentsTotalCount] = useState(0);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [allDepts, setAllDepts] = useState<Dept[]>([]);
@@ -276,6 +272,7 @@ export default function WorkflowsAdminPage() {
   // Step modal
   const [showStepModal, setShowStepModal] = useState<{ workflowId: string; step?: WorkflowStep; insertAfterOrder?: number } | null>(null);
   const [stepForm, setStepForm] = useState<{ title: string; description: string; execType: "agent" | "manual" | "review" | "external"; agentId: string; buttonText: string; enabled: boolean; stepOrder: number }>(EMPTY_STEP);
+  const [stepAgent, setStepAgent] = useState<Agent | null>(null);
   const [stepError, setStepError] = useState("");
   // 6.5up · 编辑步骤弹窗里"绑定智能体"用 AgentBindPopover 替代原生 select
   const [showStepFormAgentPicker, setShowStepFormAgentPicker] = useState(false);
@@ -302,8 +299,12 @@ export default function WorkflowsAdminPage() {
   // 4.29up：从智能体跳过来时，把使用该 agent 的步骤一并高亮
   const [highlightedStepAgentId, setHighlightedStepAgentId] = useState<string | null>(null);
   const focusFiredRef = useRef(false);
-  const referenceDataLoadedRef = useRef(false);
-  const referenceDataPromiseRef = useRef<Promise<void> | null>(null);
+  const categoryDataLoadedRef = useRef(false);
+  const categoryDataPromiseRef = useRef<Promise<void> | null>(null);
+  const orgTreeLoadedRef = useRef(false);
+  const orgTreePromiseRef = useRef<Promise<void> | null>(null);
+  const workflowRequestRef = useRef(0);
+  const workflowAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -328,41 +329,51 @@ export default function WorkflowsAdminPage() {
     return () => window.clearTimeout(t);
   }, [wfSearch]);
 
-  async function loadReferenceData(force = false) {
-    if (referenceDataLoadedRef.current && !force) return;
-    if (referenceDataPromiseRef.current && !force) return referenceDataPromiseRef.current;
+  async function loadCategories() {
+    if (categoryDataLoadedRef.current) return;
+    if (categoryDataPromiseRef.current) return categoryDataPromiseRef.current;
+    categoryDataPromiseRef.current = fetch("/api/admin/wf-categories", { cache: "no-store" })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) return;
+        setCategories(Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []));
+        categoryDataLoadedRef.current = true;
+      })
+      .catch(() => {
+        categoryDataLoadedRef.current = false;
+      })
+      .finally(() => {
+        categoryDataPromiseRef.current = null;
+      });
+    return categoryDataPromiseRef.current;
+  }
 
-    referenceDataPromiseRef.current = Promise.all([
-      // 6.5up R1 · 走 picker 专用接口（极简字段 + 全量拉 hard cap 2000），
-      //   替代 4.27up 阶段一的 ?pageSize=100 兜底；同时拿 capped/totalCount 用于
-      //   popover 截断提示。超过 2000 的场景需要做服务端搜索（方案 C），目前留作下一轮。
-      fetch("/api/admin/agents/picker").then((r) => r.json()).then(d => ({
-        list: Array.isArray(d?.data) ? d.data : [],
-        capped: !!d?.capped,
-        totalCount: typeof d?.totalCount === "number" ? d.totalCount : 0,
-      })),
-      fetch("/api/admin/wf-categories").then((r) => r.json()).then(d => d.data ?? d),
-      getAdminOrgTree(force),
-    ]).then(([ar, cr, orgTree]) => {
-      setAgents(ar.list);
-      setAgentsCapped(ar.capped);
-      setAgentsTotalCount(ar.totalCount);
-      setCategories(Array.isArray(cr) ? cr : []);
-      setTenants(orgTree.tenants);
-      setAllDepts(orgTree.departments);
-      setAllTeams(orgTree.teams);
-      referenceDataLoadedRef.current = true;
-    }).catch(() => {
-      referenceDataLoadedRef.current = false;
-    }).finally(() => {
-      referenceDataPromiseRef.current = null;
-    });
-
-    return referenceDataPromiseRef.current;
+  async function ensureOrgTree(force = false) {
+    if (orgTreeLoadedRef.current && !force) return;
+    if (orgTreePromiseRef.current && !force) return orgTreePromiseRef.current;
+    orgTreePromiseRef.current = getAdminOrgTree(force)
+      .then((orgTree) => {
+        setTenants(orgTree.tenants);
+        setAllDepts(orgTree.departments);
+        setAllTeams(orgTree.teams);
+        orgTreeLoadedRef.current = true;
+      })
+      .catch(() => {
+        orgTreeLoadedRef.current = false;
+      })
+      .finally(() => {
+        orgTreePromiseRef.current = null;
+      });
+    return orgTreePromiseRef.current;
   }
 
   async function load() {
+    workflowAbortRef.current?.abort();
+    const controller = new AbortController();
+    workflowAbortRef.current = controller;
+    const requestId = ++workflowRequestRef.current;
     setLoading(true);
+    void loadCategories();
     try {
       const params = new URLSearchParams({
         page: String(page),
@@ -373,8 +384,13 @@ export default function WorkflowsAdminPage() {
       if (wfVisibleFilter) params.set("visible", wfVisibleFilter);
       if (wfStatusFilter) params.set("status", wfStatusFilter);
       if (focusWfId && !focusFiredRef.current) params.set("focusId", focusWfId);
-      const referenceDataPromise = loadReferenceData();
-      const wr = await fetch(`/api/admin/workflows?${params.toString()}`, { cache: "no-store" }).then((r) => r.json());
+      const response = await fetch(`/api/admin/workflows?${params.toString()}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const wr = await response.json();
+      if (!response.ok) throw new Error(wr?.error ?? "工作流加载失败");
+      if (requestId !== workflowRequestRef.current) return;
       setWorkflows(Array.isArray(wr?.data) ? wr.data : []);
       if (wr?.pagination) {
         setPagination(wr.pagination);
@@ -389,11 +405,12 @@ export default function WorkflowsAdminPage() {
           ? wr.stats.categoryCounts
           : {},
       });
-      if (!referenceDataLoadedRef.current) await referenceDataPromise;
     } catch {
+      if (controller.signal.aborted || requestId !== workflowRequestRef.current) return;
       setWorkflows([]);
       setWorkflowStats({ total: 0, ungrouped: 0, categoryCounts: {} });
     } finally {
+      if (requestId !== workflowRequestRef.current) return;
       setHasLoaded(true);
       setLoading(false);
     }
@@ -403,6 +420,7 @@ export default function WorkflowsAdminPage() {
   useEffect(() => {
     if (!urlReady) return;
     load();
+    return () => workflowAbortRef.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlReady, page, pageSize, debouncedWfSearch, wfCatFilter, wfVisibleFilter, wfStatusFilter, focusWfId]);
 
@@ -451,8 +469,15 @@ export default function WorkflowsAdminPage() {
   }, [focusWfId, focusFromAgentId, loading, hasLoaded, pagination.focusFound, workflows, toast]);
 
   // ── Workflow CRUD ──────────────────────────────────────────────
-  function openAddWf() { setEditingWf(null); setWfForm(EMPTY_WF); setWfError(""); setShowWfModal(true); }
+  function openAddWf() {
+    void ensureOrgTree();
+    setEditingWf(null);
+    setWfForm(EMPTY_WF);
+    setWfError("");
+    setShowWfModal(true);
+  }
   function openEditWf(wf: Workflow) {
+    void ensureOrgTree();
     setEditingWf(wf);
     // 从权限规则还原 permScope / permIds
     const rules = wf.permissions ?? [];
@@ -564,7 +589,14 @@ export default function WorkflowsAdminPage() {
         toast(d?.error ?? "删除失败", "error");
         return;
       }
-      load(); toast("工作流已删除");
+      const remainingTotal = Math.max(0, pagination.total - 1);
+      const lastValidPage = Math.max(1, Math.ceil(remainingTotal / pageSize));
+      if (page > lastValidPage) {
+        setPage(lastValidPage);
+      } else {
+        await load();
+      }
+      toast("工作流已删除");
     });
   }
 
@@ -572,17 +604,20 @@ export default function WorkflowsAdminPage() {
   function openAddStep(workflowId: string, currentStepCount: number) {
     setShowStepModal({ workflowId });
     setStepForm({ ...EMPTY_STEP, stepOrder: currentStepCount + 1 });
+    setStepAgent(null);
     setStepError("");
   }
   // 在指定位置插入（insertAfterOrder: 插入在第几步之后，0=最前面）
   function openInsertStep(workflowId: string, insertAfterOrder: number) {
     setShowStepModal({ workflowId, insertAfterOrder });
     setStepForm({ ...EMPTY_STEP, stepOrder: insertAfterOrder + 1 });
+    setStepAgent(null);
     setStepError("");
   }
   function openEditStep(workflowId: string, step: WorkflowStep) {
     setShowStepModal({ workflowId, step });
     setStepForm({ title: step.title, description: step.description, execType: step.exec_type, agentId: step.agent_id ?? "", buttonText: step.button_text, enabled: step.enabled, stepOrder: step.step_order });
+    setStepAgent(step.agent ?? null);
     setStepError("");
   }
 
@@ -841,14 +876,15 @@ export default function WorkflowsAdminPage() {
 
   // 4.27up 阶段二：节点内快捷绑定智能体
   // 必须同时传 execType 和 agentId（见接口逻辑：只传 agentId 时 exec_type 为 undefined，会被改写成 null）
-  async function bindAgentToStep(step: WorkflowStep, agentId: string) {
+  async function bindAgentToStep(step: WorkflowStep, agentId: string, agent?: Agent) {
     const prevAgentId = step.agent_id;
+    const prevAgent = step.agent ?? null;
     // 乐观更新
     setWorkflows((prev) =>
       prev.map((wf) => ({
         ...wf,
         workflow_steps: (wf.workflow_steps ?? []).map((s) =>
-          s.id === step.id ? { ...s, agent_id: agentId } : s
+          s.id === step.id ? { ...s, agent_id: agentId, agent: agent ?? null } : s
         ),
       }))
     );
@@ -859,13 +895,14 @@ export default function WorkflowsAdminPage() {
         body: JSON.stringify({ execType: "agent", agentId }),
       });
       if (!res.ok) throw new Error("PATCH failed");
+      await load();
     } catch (e) {
       // 回滚到原 agent_id
       setWorkflows((prev) =>
         prev.map((wf) => ({
           ...wf,
           workflow_steps: (wf.workflow_steps ?? []).map((s) =>
-            s.id === step.id ? { ...s, agent_id: prevAgentId } : s
+            s.id === step.id ? { ...s, agent_id: prevAgentId, agent: prevAgent } : s
           ),
         }))
       );
@@ -876,7 +913,13 @@ export default function WorkflowsAdminPage() {
 
   const getAgent = (agentId: string | null): Agent | null => {
     if (!agentId) return null;
-    return agents.find((a) => a.id === agentId) ?? null;
+    for (const workflow of workflows) {
+      const match = (workflow.workflow_steps ?? []).find(
+        (step) => step.agent_id === agentId && step.agent?.id === agentId
+      );
+      if (match?.agent) return match.agent;
+    }
+    return null;
   };
 
   const totalPages = Math.max(1, Math.ceil((pagination.total || 0) / pagination.pageSize));
@@ -1018,7 +1061,6 @@ export default function WorkflowsAdminPage() {
           <WorkflowFlowView
             wfId={wf.id}
             steps={steps}
-            agents={agents}
             getAgent={getAgent}
             openInsertStep={openInsertStep}
             openEditStep={openEditStep}
@@ -1029,8 +1071,6 @@ export default function WorkflowsAdminPage() {
             moving={moving}
             openAddStep={openAddStep}
             highlightedStepAgentId={highlightedStepAgentId}
-            agentsCapped={agentsCapped}
-            agentsTotalCount={agentsTotalCount}
             canEditSteps={canEdit}
             isCustomAdmin={isCustomAdmin}
           />
@@ -1523,7 +1563,6 @@ export default function WorkflowsAdminPage() {
                         <WorkflowFlowView
                           wfId={wf.id}
                           steps={steps}
-                          agents={agents}
                           getAgent={getAgent}
                           openInsertStep={openInsertStep}
                           openEditStep={openEditStep}
@@ -1534,8 +1573,6 @@ export default function WorkflowsAdminPage() {
                           moving={moving}
                           openAddStep={openAddStep}
                           highlightedStepAgentId={highlightedStepAgentId}
-                          agentsCapped={agentsCapped}
-                          agentsTotalCount={agentsTotalCount}
                           canEditSteps={canTouchWf(wf)}
                           isCustomAdmin={isCustomAdmin}
                         />
@@ -2105,7 +2142,7 @@ export default function WorkflowsAdminPage() {
                       className="w-full h-11 border border-gray-200 rounded-[12px] px-4 text-sm bg-white text-left flex items-center gap-2 hover:border-[#002FA7]/40 focus:outline-none focus:border-[#002FA7] focus:ring-2 focus:ring-[#002FA7]/10 transition-all"
                     >
                       {(() => {
-                        const cur = stepForm.agentId ? agents.find((a) => a.id === stepForm.agentId) : null;
+                        const cur = stepForm.agentId && stepAgent?.id === stepForm.agentId ? stepAgent : null;
                         if (!cur) {
                           return <span className="flex-1 text-gray-400">点击选择智能体</span>;
                         }
@@ -2151,13 +2188,12 @@ export default function WorkflowsAdminPage() {
       {/* 6.5up · 编辑步骤弹窗里的"绑定智能体"picker（叠在编辑弹窗之上，z-[60]） */}
       {showStepFormAgentPicker && (
         <AgentBindPopover
-          agents={agents}
           currentAgentId={stepForm.agentId || null}
+          currentAgent={stepAgent}
           allowClear
-          capped={agentsCapped}
-          totalCount={agentsTotalCount}
-          onPick={(id) => {
+          onPick={(id, agent) => {
             setStepForm({ ...stepForm, agentId: id });
+            setStepAgent(agent ?? null);
             setShowStepFormAgentPicker(false);
           }}
           onClose={() => setShowStepFormAgentPicker(false)}
@@ -2193,29 +2229,25 @@ export default function WorkflowsAdminPage() {
 function WorkflowFlowView(props: {
   wfId: string;
   steps: WorkflowStep[];
-  agents: Agent[];
   getAgent: (agentId: string | null) => Agent | null;
   openInsertStep: (workflowId: string, insertAfterOrder: number) => void;
   openEditStep: (workflowId: string, step: WorkflowStep) => void;
   deleteStep: (step: WorkflowStep) => void;
   toggleStepEnabled: (step: WorkflowStep) => Promise<void> | void;
-  bindAgentToStep: (step: WorkflowStep, agentId: string) => Promise<void>;
+  bindAgentToStep: (step: WorkflowStep, agentId: string, agent?: Agent) => Promise<void>;
   // 4.27up 阶段三（第一轮）：上移/下移
   moveStep: (step: WorkflowStep, direction: "up" | "down") => Promise<void>;
   moving: { stepId: string; direction: "up" | "down" } | null;
   openAddStep: (workflowId: string, defaultOrder: number) => void;
   // 4.29up：从智能体跳过来时高亮使用该 agent 的步骤
   highlightedStepAgentId?: string | null;
-  // 6.5up R1 · picker 接口 capped/totalCount 透传给节点内 AgentBindPopover
-  agentsCapped: boolean;
-  agentsTotalCount: number;
   // 6.6up · 与列表视图同口径：custom admin 仍隐藏启停；删除/编辑/排序按 update 权 + created_by_role 层级判定
   //   canEditSteps：包含权限 key、scope 后端兜底、created_by_role 层级三层语义（外层已合并）
   //   isCustomAdmin：仅用于决定"启停"按钮是否完全隐藏（后端禁止 custom 改 enabled）
   canEditSteps: boolean;
   isCustomAdmin: boolean;
 }) {
-  const { wfId, steps, agents, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId, agentsCapped, agentsTotalCount, canEditSteps, isCustomAdmin } = props;
+  const { wfId, steps, getAgent, openInsertStep, openEditStep, deleteStep, toggleStepEnabled, bindAgentToStep, moveStep, moving, openAddStep, highlightedStepAgentId, canEditSteps, isCustomAdmin } = props;
 
   // 阶段二：当前激活绑定浮层的步骤 id（null = 关闭）。同一时间只允许一个浮层打开。
   const [bindingStepId, setBindingStepId] = useState<string | null>(null);
@@ -2359,13 +2391,11 @@ function WorkflowFlowView(props: {
                         {/* 阶段二：绑定智能体浮层 */}
                         {bindingStepId === step.id && (
                           <AgentBindPopover
-                            agents={agents}
                             currentAgentId={step.agent_id ?? null}
-                            capped={agentsCapped}
-                            totalCount={agentsTotalCount}
-                            onPick={async (agentId) => {
+                            currentAgent={agent}
+                            onPick={async (agentId, pickedAgent) => {
                               setBindingStepId(null);
-                              await bindAgentToStep(step, agentId);
+                              await bindAgentToStep(step, agentId, pickedAgent);
                             }}
                             onClose={() => setBindingStepId(null)}
                           />
@@ -2500,19 +2530,23 @@ function ConnectorWithInsert({ dimmed, onInsert, disabled = false }: { dimmed: b
 //   - 同一时间只允许一个浮层打开（由父组件 bindingStepId 控制）
 // ─────────────────────────────────────────────────────────────────────────
 function AgentBindPopover(props: {
-  agents: Agent[];
   currentAgentId: string | null;
-  onPick: (agentId: string) => void | Promise<void>;
+  currentAgent?: Agent | null;
+  onPick: (agentId: string, agent?: Agent) => void | Promise<void>;
   onClose: () => void;
   // 6.5up · 编辑步骤弹窗里用 allowClear=true 显示"清空当前绑定"按钮；
   //   节点内快捷绑定场景不传 → 不显示（避免 bindAgentToStep 收到空 agentId 走 catch 报错）
   allowClear?: boolean;
-  // 6.5up R1 · picker 接口的截断标记 + 真实总数，capped=true 时顶部显示警告
-  capped?: boolean;
-  totalCount?: number;
 }) {
-  const { agents, currentAgentId, onPick, onClose, allowClear, capped, totalCount } = props;
+  const { currentAgentId, currentAgent, onPick, onClose, allowClear } = props;
   const [q, setQ] = useState("");
+  const [search, setSearch] = useState("");
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const pageSize = 20;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -2522,18 +2556,54 @@ function AgentBindPopover(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // 6.5up R1 · 搜索覆盖 platform，用户可以搜"coze"/"dify"/"zhipu"直接命中外部接入 agent
-  const keyword = q.trim().toLowerCase();
-  const list = keyword
-    ? agents.filter(
-        (a) =>
-          a.name.toLowerCase().includes(keyword) ||
-          a.agent_code.toLowerCase().includes(keyword) ||
-          (a.platform ?? "").toLowerCase().includes(keyword)
-      )
-    : agents;
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const nextSearch = q.trim();
+      if (nextSearch === search) return;
+      setLoading(true);
+      setError("");
+      setSearch(nextSearch);
+      setPage(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [q, search]);
 
-  const currentAgent = currentAgentId ? agents.find((a) => a.id === currentAgentId) : null;
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    if (search) params.set("q", search);
+    fetch(`/api/admin/agents/picker/page?${params.toString()}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.error ?? "智能体加载失败");
+        setAgents(Array.isArray(payload?.data) ? payload.data : []);
+        setTotal(typeof payload?.pagination?.total === "number" ? payload.pagination.total : 0);
+        setError("");
+      })
+      .catch((reason) => {
+        if (controller.signal.aborted) return;
+        setAgents([]);
+        setTotal(0);
+        setError(reason instanceof Error ? reason.message : "智能体加载失败");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [page, search]);
+
+  const selectedAgent = currentAgentId
+    ? (currentAgent?.id === currentAgentId
+      ? currentAgent
+      : agents.find((agent) => agent.id === currentAgentId) ?? null)
+    : null;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div
@@ -2550,9 +2620,9 @@ function AgentBindPopover(props: {
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
             <h3 className="text-[15px] font-semibold text-gray-900">绑定智能体</h3>
-            {currentAgent && (
+            {selectedAgent && (
               <p className="text-[11px] text-gray-500 mt-0.5 flex items-center gap-1">
-                当前：<span className="font-medium text-gray-700 truncate max-w-[280px]">{currentAgent.name}</span>
+                当前：<span className="font-medium text-gray-700 truncate max-w-[280px]">{selectedAgent.name}</span>
               </p>
             )}
           </div>
@@ -2578,15 +2648,8 @@ function AgentBindPopover(props: {
             />
           </div>
           <p className="text-[11px] text-gray-400 mt-1.5 px-0.5">
-            共 {agents.length} 个可用智能体{keyword && `，匹配 ${list.length} 个`}
+            共 {total} 个可用智能体{search && `，当前为搜索结果`}
           </p>
-          {/* 6.5up R1 · 超过 2000 截断时的红色警告：超出部分需升级服务端搜索后才能查 */}
-          {capped && (
-            <div className="mt-2 px-2.5 py-2 rounded-[8px] bg-amber-50 border border-amber-200 text-[11px] text-amber-700 leading-relaxed">
-              当前数据库共 {totalCount ?? agents.length} 个智能体，超出 2000 已截断。
-              <br />超出部分暂时无法在此搜索，请联系开发升级服务端搜索后才能查找。
-            </div>
-          )}
         </div>
 
         {/* 列表 */}
@@ -2601,7 +2664,16 @@ function AgentBindPopover(props: {
               <span>不绑定（清空当前绑定）</span>
             </button>
           )}
-          {list.length === 0 ? (
+          {loading ? (
+            <div className="py-12 text-center">
+              <Loader2 size={22} className="mx-auto text-[#002FA7] mb-2 animate-spin" />
+              <p className="text-[12px] text-gray-400">正在加载智能体…</p>
+            </div>
+          ) : error ? (
+            <div className="py-12 text-center">
+              <p className="text-[12px] text-red-500">{error}</p>
+            </div>
+          ) : agents.length === 0 ? (
             <div className="py-12 text-center">
               <Search size={22} className="mx-auto text-gray-200 mb-2" />
               <p className="text-[12px] text-gray-400">没有匹配的智能体</p>
@@ -2612,7 +2684,7 @@ function AgentBindPopover(props: {
             //   自建无 chip（蓝色 Bot 已自证）；空组自动隐藏小标题。
             <div className="flex flex-col gap-3">
               {SOURCE_ORDER.map((src) => {
-                const items = list.filter((a) => getAgentSource(a) === src);
+                const items = agents.filter((a) => getAgentSource(a) === src);
                 if (items.length === 0) return null;
                 const meta = SOURCE_META[src];
                 return (
@@ -2628,7 +2700,7 @@ function AgentBindPopover(props: {
                         return (
                           <button
                             key={a.id}
-                            onClick={() => !isCurrent && onPick(a.id)}
+                            onClick={() => !isCurrent && onPick(a.id, a)}
                             disabled={isCurrent}
                             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] text-left transition-all ${
                               isCurrent
@@ -2672,13 +2744,37 @@ function AgentBindPopover(props: {
 
         {/* 底部 */}
         <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
-          <p className="text-[11px] text-gray-400">点击列表项即可绑定</p>
-          <button
-            onClick={onClose}
-            className="text-[12px] text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors"
-          >
-            取消
-          </button>
+          <p className="text-[11px] text-gray-400">第 {page} / {totalPages} 页</p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setLoading(true);
+                setError("");
+                setPage((value) => Math.max(1, value - 1));
+              }}
+              disabled={page <= 1 || loading}
+              className="text-[12px] text-gray-500 disabled:text-gray-300 px-2 py-1.5 rounded-[8px] hover:bg-gray-100"
+            >
+              上一页
+            </button>
+            <button
+              onClick={() => {
+                setLoading(true);
+                setError("");
+                setPage((value) => Math.min(totalPages, value + 1));
+              }}
+              disabled={page >= totalPages || loading}
+              className="text-[12px] text-gray-500 disabled:text-gray-300 px-2 py-1.5 rounded-[8px] hover:bg-gray-100"
+            >
+              下一页
+            </button>
+            <button
+              onClick={onClose}
+              className="text-[12px] text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-[8px] hover:bg-gray-100 transition-colors"
+            >
+              取消
+            </button>
+          </div>
         </div>
       </div>
     </div>

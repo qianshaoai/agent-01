@@ -15,6 +15,7 @@ import { PermissionKey } from "@/lib/permission-keys";
 // 6.4up v2 Phase D · D-3 · workflow step builtin 路径 enforce（env "workflow"；空时 no-op；custom 分支不走）
 import { isResourceEnforced, requireAccess } from "@/lib/access-facade";
 import { requireActorCreatorHierarchy, requireCreatorHierarchy } from "@/lib/creator-hierarchy";
+import { requireReadableAgentForBinding } from "@/lib/agent-binding-access";
 
 function pickStepUpdateKey(actor: PermissionActor): PermissionKey | null {
   const order: PermissionKey[] = [
@@ -73,6 +74,7 @@ export async function PATCH(
   const { id } = await params;
 
   let admin: { adminId: string; username: string; role: string; tenantCode?: string | null };
+  let permissionActor: PermissionActor | null = null;
 
   if (isCustomAdminPayload(access)) {
     // 反查 step 所属 workflow + scopes
@@ -85,6 +87,7 @@ export async function PATCH(
     const workflowId = (step as { workflow_id: string }).workflow_id;
     const wf = (step.workflows as unknown) as { created_by_role: string | null } | null;
     const actor = await buildPermissionActor(access);
+    permissionActor = actor;
     const updateKey = pickStepUpdateKey(actor);
     if (!updateKey) return apiError("无修改工作流权限", "FORBIDDEN");
     const scopes = await getWorkflowScopesForStep(workflowId);
@@ -107,6 +110,7 @@ export async function PATCH(
       const { data: st } = await db.from("workflow_steps").select("workflow_id").eq("id", id).maybeSingle();
       if (!st) return apiError("步骤不存在", "NOT_FOUND");
       const actorV2 = await buildPermissionActor(access);
+      permissionActor = actorV2;
       const e = await requireAccess(actorV2, "workflow", "update", {
         id: (st as { workflow_id: string }).workflow_id,
       });
@@ -131,8 +135,28 @@ export async function PATCH(
   if (body.title !== undefined) updates.title = body.title;
   if (body.description !== undefined) updates.description = body.description;
   const validExecTypes = ["agent", "manual", "review", "external"];
-  if (body.execType !== undefined) updates.exec_type = validExecTypes.includes(body.execType) ? body.execType : "agent";
-  if (body.agentId !== undefined) updates.agent_id = updates.exec_type === "agent" ? (body.agentId || null) : null;
+  const nextExecType =
+    body.execType !== undefined
+      ? (validExecTypes.includes(body.execType) ? body.execType : "agent")
+      : undefined;
+  if (nextExecType !== undefined) updates.exec_type = nextExecType;
+  if (body.agentId !== undefined) {
+    if (body.agentId !== null && body.agentId !== "" && typeof body.agentId !== "string") {
+      return apiError("智能体 ID 格式无效", "VALIDATION_ERROR");
+    }
+    const nextAgentId =
+      nextExecType !== undefined && nextExecType !== "agent"
+        ? null
+        : (body.agentId || null);
+    if (nextAgentId) {
+      const actor = permissionActor ?? await buildPermissionActor(access);
+      const readableAgent = await requireReadableAgentForBinding(actor, nextAgentId);
+      if (readableAgent instanceof Response) return readableAgent;
+    }
+    updates.agent_id = nextAgentId;
+  } else if (nextExecType !== undefined && nextExecType !== "agent") {
+    updates.agent_id = null;
+  }
   if (body.buttonText !== undefined) updates.button_text = body.buttonText;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
 
